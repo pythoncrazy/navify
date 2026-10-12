@@ -391,6 +391,7 @@ pub fn route<'a>(app: &'a App) -> El<'a> {
 
 fn home<'a>(app: &'a App) -> El<'a> {
     let Some(h) = app.data::<Home>("home") else { return Space::new().into() };
+    let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
     let w = app.main_w() - 2.0 * PAD;
     let n = if w >= 720.0 { 4 } else { 2 };
     let tw = (w - 8.0 * (n - 1) as f32) / n as f32;
@@ -419,7 +420,7 @@ fn home<'a>(app: &'a App) -> El<'a> {
         "liked".into(),
         Message::PlayCtx("liked".into(), false),
     ))
-    .chain(h.playlists.iter().take(3).map(|p| {
+    .chain(pls.iter().take(3).map(|p| {
         let r = format!("playlist:{}", p.id);
         tile(cover(app, &p.cover, 128, 56.0, false), &p.name, r.clone(), Message::PlayCtx(r, false))
     }))
@@ -460,8 +461,7 @@ fn home<'a>(app: &'a App) -> El<'a> {
             .push(shelf(
                 "Your playlists",
                 None,
-                h.playlists
-                    .iter()
+                pls.iter()
                     .take(k)
                     .map(|p| {
                         let r = format!("playlist:{}", p.id);

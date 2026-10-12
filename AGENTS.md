@@ -51,10 +51,14 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 ## Status (2026-10-12)
 
 - `main`: project base, API client (`src/api.rs`), and configuration (`src/config.rs`). CI passes on Linux, macOS, and Windows.
-- `wip/ui`: work in progress. It does not compile yet.
-  - `src/app.rs`, `src/pages.rs`, `src/view.rs`, `src/theme.rs`: the iced UI (Phase B, partly done).
-  - `crates/audio`: the playback engine (partly done). It has one compile error (`Vec::new()` type annotation).
+- `wip/ui`: the app compiles and runs. Clippy and tests pass on Linux.
+  - `src/app.rs`, `src/pages.rs`, `src/view.rs`, `src/theme.rs`: the iced UI (Phase B done).
+  - `crates/audio`: the playback engine. It uses the app runtime. It closes the device after 30 s of pause. `crates/audio/tests` test gapless, seek, crossfade, gain, and events on an ALSA null device.
+  - OS: souvlaki media controls. Discord Rich Presence needs a Discord application ID in `DISCORD_ID` (`src/app.rs`).
   - `examples/shots.rs`: renders screenshots of the routes with `iced_test`.
+- Do not enable the iced `tester` feature. It stops the boot tasks of the app.
+- Test the running app only on a virtual display: `env -u WAYLAND_DISPLAY dbus-run-session -- xvfb-run -a <command>`. Never open windows on the desktop of the user. wgpu fails on Xvfb (no DRI3), so use `ICED_BACKEND=tiny-skia` there.
+- Measurements (tiny-skia, Xvfb, home page loaded): RSS 62 MB, idle CPU 0 ticks in 30 s, 6 threads. Playback: about 1% CPU. Requests: cold start 12, album open 4 (2 data, 2 covers), album reopen 0 in the stale time (`tests/cache.rs`). The souvlaki D-Bus thread wakes one time each second (library limit).
 - Local test server for tests that change data: `tests/` read `NAVIFY_TEST_LOCAL_URL` and related variables. A Navidrome release binary with generated test tracks works well (see Phase A tests). Never change data on the `.env` server; it is the real library of the user.
 
 ## Roadmap

@@ -28,8 +28,6 @@ pub struct Home {
     pub added: Vec<Album>,
     pub frequent: Vec<Album>,
     pub random: Vec<Album>,
-    pub playlists: Vec<Playlist>,
-    pub starred: (Vec<Artist>, Vec<Album>, Vec<Song>),
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +154,8 @@ pub enum Message {
     SeekPreview(f32),
     SeekRelease,
     Audio(navify_audio::Event),
+    Media(souvlaki::MediaControlEvent),
+    MediaInit(isize),
 }
 
 #[derive(Debug, Default)]
@@ -216,6 +216,10 @@ pub struct App {
     pub covers: Covers,
     pub cover_tasks: usize,
     pub player: Option<navify_audio::Player>,
+    media: Option<souvlaki::MediaControls>,
+    discord: Option<std::sync::mpsc::Sender<Option<(String, String, i64)>>>,
+    os: (String, bool),
+    tx: tokio::sync::mpsc::UnboundedSender<Message>,
     pub queue: Vec<Song>,
     pub index: usize,
     pub shuffle: Option<Vec<usize>>,
@@ -278,8 +282,26 @@ impl App {
             },
             |_| Message::Noop,
         );
+        let media = if app.shot.is_some() {
+            Task::none()
+        } else if !cfg!(windows) {
+            app.update(Message::MediaInit(0))
+        } else {
+            iced::window::latest()
+                .and_then(|id| {
+                    iced::window::run(id, |w| {
+                        use iced::window::raw_window_handle::RawWindowHandle;
+                        match w.window_handle().map(|h| h.as_raw()) {
+                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+                            _ => 0,
+                        }
+                    })
+                })
+                .map(Message::MediaInit)
+        };
         let t = Task::batch([
             prune,
+            media,
             if app.session.is_none()
                 && !app.shot.as_deref().is_some_and(|s| s.starts_with("login"))
                 && let Some((u, n, p)) = creds
@@ -463,6 +485,8 @@ impl App {
         if let Some(k) = shot_key(shot.as_deref()) {
             route = if k == "login" { "login".into() } else { k };
         }
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(rx);
         let mut app = Self {
             session,
             volume: cfg.settings.volume,
@@ -477,10 +501,19 @@ impl App {
             covers: Covers::default(),
             cover_tasks: 0,
             player: tokio::runtime::Handle::try_current().ok().map(|h| {
-                let (p, rx) = navify_audio::Player::new(h);
-                *AUDIO_RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(rx);
+                let (p, mut rx) = navify_audio::Player::new(h.clone());
+                let tx = tx.clone();
+                h.spawn(async move {
+                    while let Some(e) = rx.recv().await {
+                        let _ = tx.send(Message::Audio(e));
+                    }
+                });
                 p
             }),
+            media: None,
+            discord: None,
+            os: Default::default(),
+            tx,
             queue: Vec::new(),
             index: 0,
             shuffle: None,
@@ -782,22 +815,13 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             let (kind, arg) = k.split_once(':').unwrap_or((k, ""));
             let v: AnyData = match kind {
                 "home" => {
-                    let (r, a, f, x, p, st) = tokio::try_join!(
+                    let (r, a, f, x) = tokio::try_join!(
                         s.albums("recent", &[], 0, 12),
                         s.albums("newest", &[], 0, 12),
                         s.albums("frequent", &[], 0, 12),
                         s.albums("random", &[], 0, 12),
-                        s.playlists(),
-                        s.starred(),
                     )?;
-                    Arc::new(Home {
-                        recent: r.0,
-                        added: a.0,
-                        frequent: f.0,
-                        random: x.0,
-                        playlists: p,
-                        starred: st,
-                    })
+                    Arc::new(Home { recent: r.0, added: a.0, frequent: f.0, random: x.0 })
                 }
                 "lib" => {
                     let (p, st) = tokio::try_join!(s.playlists(), s.starred())?;
@@ -895,6 +919,81 @@ impl App {
     }
 
     pub fn update(&mut self, m: Message) -> Task<Message> {
+        let seek = matches!(m, Message::Seek(_));
+        let t = self.handle(m);
+        if self.cfg.settings.discord != self.discord.is_some() {
+            self.discord = self.cfg.settings.discord.then(|| {
+                let (tx, rx) = std::sync::mpsc::channel::<Option<(String, String, i64)>>();
+                std::thread::spawn(move || {
+                    use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
+                    let mut c: Option<DiscordIpcClient> = None;
+                    for msg in rx {
+                        if c.is_none() {
+                            let mut n = DiscordIpcClient::new(DISCORD_ID);
+                            c = n.connect().ok().map(|_| n);
+                        }
+                        let Some(cl) = &mut c else { continue };
+                        let r = match msg {
+                            Some((title, artist, start)) => cl.set_activity(
+                                activity::Activity::new()
+                                    .activity_type(activity::ActivityType::Listening)
+                                    .details(title)
+                                    .state(artist)
+                                    .timestamps(activity::Timestamps::new().start(start)),
+                            ),
+                            None => cl.clear_activity(),
+                        };
+                        if r.is_err() {
+                            c = None;
+                        }
+                    }
+                    if let Some(mut c) = c {
+                        let _ = c.close();
+                    }
+                });
+                tx
+            });
+            self.os = Default::default();
+        }
+        let key = (self.current_song().map_or(String::new(), |s| s.id.clone()), self.playing);
+        if key == self.os && !seek {
+            return t;
+        }
+        self.os = key;
+        let song = self.current_song().cloned();
+        let pos = self.pos();
+        if let Some(m) = &mut self.media {
+            let art = song
+                .as_ref()
+                .zip(self.session.as_ref())
+                .map(|(s, x)| x.cover_file(&s.cover, 300))
+                .filter(|f| f.exists())
+                .map(|f| format!("file://{}", f.display()));
+            let _ = m.set_metadata(souvlaki::MediaMetadata {
+                title: song.as_ref().map(|s| s.title.as_str()),
+                album: song.as_ref().map(|s| s.album.as_str()),
+                artist: song.as_ref().map(|s| s.artist.as_str()),
+                cover_url: art.as_deref(),
+                duration: song.as_ref().map(|s| Duration::from_secs_f32(s.duration.max(0.0))),
+            });
+            let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f32(pos.max(0.0))));
+            let _ = m.set_playback(match (&song, self.playing) {
+                (None, _) => souvlaki::MediaPlayback::Stopped,
+                (_, true) => souvlaki::MediaPlayback::Playing { progress },
+                _ => souvlaki::MediaPlayback::Paused { progress },
+            });
+        }
+        if let Some(d) = &self.discord {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64);
+            let _ = d
+                .send(song.filter(|_| self.playing).map(|s| (s.title, s.artist, now - pos as i64)));
+        }
+        t
+    }
+
+    fn handle(&mut self, m: Message) -> Task<Message> {
         match m {
             Message::Loaded(key, r) => {
                 self.pending.retain(|p| p != &key && !p.starts_with(&format!("{key}#")));
@@ -1599,6 +1698,46 @@ impl App {
                     "Could not change the playlist.",
                 )
             }
+            Message::MediaInit(hwnd) => {
+                let tx = self.tx.clone();
+                self.media = souvlaki::MediaControls::new(souvlaki::PlatformConfig {
+                    display_name: "navify",
+                    dbus_name: "navify",
+                    hwnd: (hwnd != 0).then_some(hwnd as *mut std::ffi::c_void),
+                })
+                .ok()
+                .and_then(|mut m| {
+                    m.attach(move |e| drop(tx.send(Message::Media(e)))).ok().map(|_| m)
+                });
+                self.os = Default::default();
+                Task::none()
+            }
+            Message::Media(e) => {
+                use souvlaki::{MediaControlEvent as E, SeekDirection};
+                let by = |d: SeekDirection, t: f32| {
+                    Message::Seek(match d {
+                        SeekDirection::Forward => self.pos() + t,
+                        SeekDirection::Backward => (self.pos() - t).max(0.0),
+                    })
+                };
+                let m = match e {
+                    E::Toggle => Message::Toggle,
+                    E::Play if !self.playing => Message::Toggle,
+                    E::Pause | E::Stop if self.playing => Message::Toggle,
+                    E::Next => Message::Next(true),
+                    E::Previous => Message::Prev,
+                    E::Seek(d) => by(d, 10.0),
+                    E::SeekBy(d, t) => by(d, t.as_secs_f32()),
+                    E::SetPosition(p) => Message::Seek(p.0.as_secs_f32()),
+                    E::SetVolume(v) => Message::Vol(v.clamp(0.0, 1.0) as f32),
+                    E::Quit => Message::Close,
+                    E::Raise => {
+                        return iced::window::latest().and_then(iced::window::gain_focus);
+                    }
+                    _ => return Task::none(),
+                };
+                self.update(m)
+            }
             Message::PlCreated(p) => {
                 let r = format!("playlist:{}", p.id);
                 self.edit::<Lib>("lib", |l| l.playlists.insert(0, p));
@@ -1745,12 +1884,13 @@ impl App {
             out.extend(r.albums.iter().take(cols).map(|a| (a.cover.as_str(), 300)));
             out.extend(r.songs.iter().take(4).map(|s| (s.cover.as_str(), 128)));
         } else if let Some(h) = self.data::<Home>(key) {
-            out.extend(h.playlists.iter().take(3).map(|p| (p.cover.as_str(), 128)));
+            let pls = self.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
+            out.extend(pls.iter().take(3).map(|p| (p.cover.as_str(), 128)));
             out.extend(h.recent.iter().take(7).map(|a| (a.cover.as_str(), 128)));
             for l in [&h.recent, &h.added, &h.frequent, &h.random] {
                 out.extend(l.iter().take(cols).map(|a| (a.cover.as_str(), 300)));
             }
-            out.extend(h.playlists.iter().take(cols).map(|p| (p.cover.as_str(), 300)));
+            out.extend(pls.iter().take(cols).map(|p| (p.cover.as_str(), 300)));
         }
         if let Some(s) = self.current_song() {
             out.extend([(s.cover.as_str(), 128), (s.cover.as_str(), 300)]);
@@ -1810,9 +1950,10 @@ fn shuffle(order: &mut [usize], keep_first: usize) {
 
 static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-static AUDIO_RX: std::sync::Mutex<
-    Option<tokio::sync::mpsc::UnboundedReceiver<navify_audio::Event>>,
-> = std::sync::Mutex::new(None);
+static RX: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Message>>> =
+    std::sync::Mutex::new(None);
+
+const DISCORD_ID: &str = "0";
 
 impl App {
     pub fn view(&self) -> iced::Element<'_, Message> {
@@ -1888,11 +2029,11 @@ impl App {
                 iced::stream::channel(
                     8,
                     |mut tx: iced::futures::channel::mpsc::Sender<_>| async move {
-                        let Some(mut rx) = AUDIO_RX.lock().ok().and_then(|mut r| r.take()) else {
+                        let Some(mut rx) = RX.lock().ok().and_then(|mut r| r.take()) else {
                             return;
                         };
-                        while let Some(e) = rx.recv().await {
-                            let _ = iced::futures::SinkExt::send(&mut tx, Message::Audio(e)).await;
+                        while let Some(m) = rx.recv().await {
+                            let _ = iced::futures::SinkExt::send(&mut tx, m).await;
                         }
                     },
                 )

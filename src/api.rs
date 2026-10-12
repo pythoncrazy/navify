@@ -575,12 +575,16 @@ impl Session {
         (self.url("stream", &p), transcode)
     }
 
-    pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
-        let file = dirs::cache_dir()
+    pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
+        dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("navify/covers")
             .join(&self.server.id)
-            .join(format!("{id}-{size}"));
+            .join(format!("{id}-{size}"))
+    }
+
+    pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
+        let file = self.cover_file(id, size);
         if let Ok(b) = fs::read(&file).await {
             return Ok(Bytes::from(b));
         }
