@@ -557,7 +557,16 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         side(icon::PR, app.panel == 1, Message::Panel(1)),
         side(icon::LYRICS, app.route == "lyrics", Message::Nav("lyrics".into())),
         side(icon::QUEUE, app.panel == 2, Message::Panel(2)),
-        side(icon::SPEED, false, Message::Menu(Box::new(MenuKind::Speed))),
+        button(theme::bold(format!("{}x", app.cfg.settings.speed), 12.0).center())
+            .width(40)
+            .height(32)
+            .padding(0)
+            .style(theme::link(if app.cfg.settings.speed == 1.0 {
+                theme::SUB
+            } else {
+                theme::ACCENT
+            }))
+            .on_press(Message::Menu(Box::new(MenuKind::Speed))),
         side(vol_icon, false, Message::Mute),
         slider(0.0..=1.0, if app.muted { 0.0 } else { app.volume }, Message::Vol)
             .width(93)
@@ -703,7 +712,14 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
     if let Some(m) = &app.menu {
         let (el, w, h) = pages::menu(app, m);
         let (ww, wh) = app.cfg.settings.window;
-        let (x, y) = (m.x.min(ww - w - 8.0).max(0.0), m.y.min(wh - h - 8.0).max(0.0));
+        let (x, y) = match m.kind {
+            MenuKind::Speed => (m.x - w / 2.0, wh - 64.0 - h),
+            _ => (
+                if m.x + w + 8.0 > ww { m.x - w } else { m.x },
+                if m.y + h + 8.0 > wh { m.y - h } else { m.y },
+            ),
+        };
+        let (x, y) = (x.clamp(8.0, ww - w - 8.0), y.clamp(8.0, wh - h - 8.0));
         layers.push(
             stack![
                 scrim(Color::TRANSPARENT),

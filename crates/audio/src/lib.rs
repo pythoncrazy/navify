@@ -134,7 +134,8 @@ impl Player {
     }
 
     pub fn set_speed(&self, s: f32) {
-        self.sh.speed.store(s.clamp(0.5, 2.0).to_bits(), Relaxed);
+        assert!((0.5..=3.5).contains(&s), "speed {s} is out of range");
+        self.sh.speed.store(s.to_bits(), Relaxed);
     }
 
     pub fn set_crossfade(&self, secs: f32) {
@@ -271,7 +272,7 @@ impl Source {
                 .interpolation(SincInterpolationType::Linear);
             let rs = Async::<f32>::new_sinc(
                 rate as f64 / sr as f64,
-                2.0,
+                3.5,
                 &params,
                 CHUNK,
                 2,
@@ -526,6 +527,7 @@ pub fn render(
     rate: u32,
     seek: f32,
     crossfade: f32,
+    speed: f32,
 ) -> Result<Vec<f32>, String> {
     let mut mix = Mixer::new(rt.clone(), rate);
     let mut it = tracks.into_iter();
@@ -536,7 +538,7 @@ pub fn render(
         while mix.pre.as_ref().is_some_and(|p| !p.1.is_finished()) {
             thread::sleep(Duration::from_millis(1));
         }
-        let (n, ev) = mix.step(&mut buf, 1.0, crossfade).map_err(|e| e.to_string())?;
+        let (n, ev) = mix.step(&mut buf, speed, crossfade).map_err(|e| e.to_string())?;
         match ev {
             Some(Event::Error(e)) => return Err(e),
             Some(Event::Started(_)) => mix.next = it.next(),

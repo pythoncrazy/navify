@@ -69,7 +69,19 @@ fn main() {
                 "enter" => emu.update(&app, Message::Enter),
                 "escape" => emu.update(&app, Message::MenuClose),
                 "select-all" => emu.update(&app, Message::SelectAll),
-                _ => emu.run(&app, iced_test::Instruction::parse(s).expect("step")),
+                _ => {
+                    if let Some((x, y)) = s
+                        .split_once('(')
+                        .and_then(|(_, r)| r.trim_end_matches(')').split_once(','))
+                        .and_then(|(x, y)| {
+                            Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                        })
+                    {
+                        let bits = (u64::from(x.to_bits()) << 32) | u64::from(y.to_bits());
+                        navify::app::CURSOR.store(bits, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    emu.run(&app, iced_test::Instruction::parse(s).expect("step"))
+                }
             }
             next = Instant::now() + Duration::from_millis(700);
         }

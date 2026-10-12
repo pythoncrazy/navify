@@ -56,35 +56,44 @@ fn near(got: f32, want: f32, tol: f32) {
 #[ignore = "needs the local test server"]
 fn gapless_across_sample_rates() {
     let t = tracks(&["One", "Two"], None);
-    near(secs(&render(rt(), t, RATE, 0.0, 0.0).expect("render")), 5.0, 0.005);
+    near(secs(&render(rt(), t, RATE, 0.0, 0.0, 1.0).expect("render")), 5.0, 0.005);
 }
 
 #[test]
 #[ignore = "needs the local test server"]
 fn seek_in_raw_stream() {
     let t = tracks(&["One"], None);
-    near(secs(&render(rt(), t, RATE, 1.0, 0.0).expect("render")), 2.0, 0.005);
+    near(secs(&render(rt(), t, RATE, 1.0, 0.0, 1.0).expect("render")), 2.0, 0.005);
+}
+
+#[test]
+#[ignore = "needs the local test server"]
+fn speed_changes_length() {
+    for v in [0.5, 3.5] {
+        let t = tracks(&["One"], None);
+        near(secs(&render(rt(), t, RATE, 0.0, 0.0, v).expect("render")), 3.0 / v, 0.01);
+    }
 }
 
 #[test]
 #[ignore = "needs the local test server"]
 fn crossfade_overlaps_tracks() {
     let t = tracks(&["One", "Two"], None);
-    near(secs(&render(rt(), t, RATE, 0.0, 1.0).expect("render")), 4.0, 0.02);
+    near(secs(&render(rt(), t, RATE, 0.0, 1.0, 1.0).expect("render")), 4.0, 0.02);
 }
 
 #[test]
 #[ignore = "needs the local test server"]
 fn mp3_and_opus_trim_padding() {
     let t = tracks(&["Three", "Four"], None);
-    near(secs(&render(rt(), t, RATE, 0.0, 0.0).expect("render")), 5.0, 0.03);
+    near(secs(&render(rt(), t, RATE, 0.0, 0.0, 1.0).expect("render")), 5.0, 0.03);
 }
 
 #[test]
 #[ignore = "needs the local test server"]
 fn seek_in_transcoded_stream() {
     let t = tracks(&["One"], Some("mp3"));
-    near(secs(&render(rt(), t, RATE, 1.0, 0.0).expect("render")), 2.0, 0.08);
+    near(secs(&render(rt(), t, RATE, 1.0, 0.0, 1.0).expect("render")), 2.0, 0.08);
 }
 
 #[cfg(target_os = "linux")]
@@ -120,7 +129,10 @@ fn gain_scales_samples() {
     let t = tracks(&["One"], None);
     let peak = |g: f32| {
         let t = vec![Track { gain: g, ..t[0].clone() }];
-        render(rt(), t, RATE, 0.0, 0.0).expect("render").iter().fold(0f32, |m, s| m.max(s.abs()))
+        render(rt(), t, RATE, 0.0, 0.0, 1.0)
+            .expect("render")
+            .iter()
+            .fold(0f32, |m, s| m.max(s.abs()))
     };
     near(peak(0.25) / peak(1.0), 0.25, 0.001);
 }

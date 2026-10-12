@@ -1262,15 +1262,6 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                     format!("{:.0} s", st.crossfade_secs)
                 )
             ),
-            line(
-                "Speed",
-                num(
-                    st.speed,
-                    0.5..=2.0,
-                    |v| Message::Set(Set::Speed(v)),
-                    format!("{:.2}x", st.speed)
-                )
-            ),
             section("Streaming"),
             line(
                 "Transcode format",
@@ -1498,6 +1489,8 @@ pub fn queue_panel<'a>(app: &'a App) -> El<'a> {
     .into()
 }
 
+pub const SPEEDS: [f32; 10] = [0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0, 3.5];
+
 pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     const W: f32 = 260.0;
     let entry = |r: El<'a>, msg: Message| -> El<'a> {
@@ -1547,19 +1540,31 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         ]
     };
     let (items, seps): (Vec<El>, usize) = match &m.kind {
-        MenuKind::Speed => (
-            [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-                .map(|v| {
-                    let on = (app.cfg.settings.speed - v).abs() < 0.01;
-                    item(
-                        if on { icon::CHECK } else { icon::SPEED },
-                        format!("{v:.2}x"),
-                        Message::Set(Set::Speed(v)),
-                    )
-                })
-                .into(),
-            0,
-        ),
+        MenuKind::Speed => {
+            let head = container(theme::bold("Playback speed", 12.0).color(theme::SUB))
+                .padding([0, 12])
+                .center_y(40);
+            let v = std::iter::once(head.into()).chain(SPEEDS.map(|v| {
+                let on = app.cfg.settings.speed == v;
+                entry(
+                    row![
+                        theme::txt(format!("{v}x"), 14.0, Weight::Normal)
+                            .color(if on { theme::ACCENT } else { theme::TEXT })
+                            .width(Fill)
+                    ]
+                    .push(on.then(|| i(icon::CHECK, 16.0).color(theme::ACCENT)))
+                    .align_y(Alignment::Center)
+                    .into(),
+                    Message::Set(Set::Speed(v)),
+                )
+            }));
+            let h = (SPEEDS.len() + 1) as f32 * 40.0 + 8.0;
+            return (
+                container(Column::with_children(v)).padding(4).width(160).style(theme::menu).into(),
+                160.0,
+                h,
+            );
+        }
         MenuKind::User => {
             let s = app.session.as_ref();
             let head: El = container(
@@ -1575,8 +1580,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 ]
                 .spacing(2),
             )
-            .padding([8, 12])
-            .height(48)
+            .padding([0, 12])
+            .center_y(40)
             .into();
             let v: Vec<El> = std::iter::once(head)
                 .chain(

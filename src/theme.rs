@@ -136,7 +136,6 @@ pub mod icon {
     pub const TRASH: char = '\u{e18e}';
     pub const PR: char = '\u{e431}';
     pub const SERVER: char = '\u{e153}';
-    pub const SPEED: char = '\u{e29a}';
     pub const MINUS: char = '\u{e11c}';
 }
 

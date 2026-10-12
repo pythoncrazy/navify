@@ -2179,7 +2179,7 @@ fn shuffle(order: &mut [usize], keep_first: usize) {
     }
 }
 
-static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static MODS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 static RX: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Message>>> =
