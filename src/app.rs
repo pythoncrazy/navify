@@ -111,7 +111,7 @@ pub enum Message {
     MenuSub(u8),
     MenuClose,
     PlAdd(String, Vec<String>),
-    PlNew(String),
+    PlNew(String, Vec<String>),
     PlDel(String),
     PlRemove(Vec<usize>),
     Radio(String),
@@ -143,9 +143,8 @@ pub enum Message {
     PlCreated(Playlist),
     RestoreQueue(Vec<Song>, String, u64),
     NativeFailed,
-    PlayCtx(String, bool),
-    PlayCtxDone(Vec<Song>, String, bool),
-    AlbumQueue(String),
+    PlayCtx(String, u8),
+    PlayCtxDone(Vec<Song>, String, u8),
     Select(String, usize),
     RowMenu(String, usize),
     SelectAll,
@@ -260,7 +259,6 @@ pub struct App {
     pub new_pl_desc: String,
     pub shot: Option<String>,
     pub new_pl: String,
-    pub new_pl_ids: Vec<String>,
     pub sel: Option<(String, usize)>,
     pub picked: BTreeSet<usize>,
     anchor: usize,
@@ -591,7 +589,6 @@ impl App {
             lib_collapsed: shot.as_deref().is_some_and(|s| s.contains("collapsed")),
             shot,
             new_pl: String::new(),
-            new_pl_ids: Vec::new(),
             sel: None,
             picked: BTreeSet::new(),
             anchor: 0,
@@ -1327,13 +1324,9 @@ impl App {
                     self.toast(&format!("Added to {name}.")),
                 ])
             }
-            Message::PlNew(name) => {
+            Message::PlNew(name, ids) => {
                 self.menu = None;
-                self.modal = None;
-                let ids = std::mem::take(&mut self.new_pl_ids);
                 let Some(s) = self.session.clone() else { return Task::none() };
-                let name = name.trim().to_string();
-                assert!(!name.is_empty(), "the dialog blocks an empty name");
                 Task::perform(async move { s.playlist_create(&name, &ids).await }, |r| match r {
                     Ok(p) => Message::PlCreated(p),
                     Err(e) => Message::Toast(0, format!("Could not make the playlist. {e}")),
@@ -1415,8 +1408,7 @@ impl App {
             }
             Message::NewPlaylist => {
                 let n = self.data::<Lib>("lib").map_or(0, |l| l.playlists.len()) + 1;
-                self.new_pl_ids.clear();
-                self.update(Message::PlNew(format!("My Playlist #{n}")))
+                self.update(Message::PlNew(format!("My Playlist #{n}"), Vec::new()))
             }
             Message::LField(i, v) => {
                 match i {
@@ -1649,11 +1641,13 @@ impl App {
                     },
                 )
             }
-            Message::PlayCtx(route, shuf) => {
+            Message::PlayCtx(route, mode) => {
                 self.menu = None;
-                self.ctx = route.clone();
+                if mode < 2 {
+                    self.ctx = route.clone();
+                }
                 if let Some((v, src)) = self.songs_of(&route).filter(|(v, _)| !v.is_empty()) {
-                    return self.update(Message::PlayCtxDone(v, src, shuf));
+                    return self.update(Message::PlayCtxDone(v, src, mode));
                 }
                 let Some(s) = self.session.clone() else { return Task::none() };
                 let (kind, id) = route.split_once(':').unwrap_or((route.as_str(), ""));
@@ -1688,16 +1682,17 @@ impl App {
                         Ok::<_, anyhow::Error>((songs, src))
                     },
                     move |r: Result<(Vec<Song>, String), anyhow::Error>| match r {
-                        Ok((v, src)) if !v.is_empty() => Message::PlayCtxDone(v, src, shuf),
+                        Ok((v, src)) if !v.is_empty() => Message::PlayCtxDone(v, src, mode),
                         Ok(_) => Message::Toast(0, "Nothing to play.".into()),
                         Err(e) => Message::Toast(0, format!("Could not play. {e}")),
                     },
                 )
             }
-            Message::PlayCtxDone(songs, src, shuf) => {
+            Message::PlayCtxDone(songs, _, 2) => self.update(Message::QEnd(songs)),
+            Message::PlayCtxDone(songs, src, mode) => {
                 self.queue = songs;
                 self.source = src;
-                self.shuffle = if shuf {
+                self.shuffle = if mode == 1 {
                     let mut o: Vec<usize> = (0..self.queue.len()).collect();
                     shuffle(&mut o, 0);
                     Some(o)
@@ -1705,17 +1700,6 @@ impl App {
                     None
                 };
                 self.play_index(0, 0.0)
-            }
-            Message::AlbumQueue(id) => {
-                self.menu = None;
-                let Some(s) = self.session.clone() else { return Task::none() };
-                Task::perform(
-                    async move { s.album(&id).await.map(|(_, v)| v).map_err(|e| e.to_string()) },
-                    |r| match r {
-                        Ok(v) => Message::QEnd(v),
-                        Err(e) => Message::Toast(0, format!("Could not add the album. {e}")),
-                    },
-                )
             }
             Message::Select(key, n) => {
                 self.pick(key, n);
@@ -1763,7 +1747,7 @@ impl App {
                     self.ctx = key;
                     t
                 }
-                None => self.update(Message::PlayCtx(key, false)),
+                None => self.update(Message::PlayCtx(key, 0)),
             },
             Message::Retry => {
                 let key = match (self.route.as_str(), self.current_song()) {
@@ -1853,18 +1837,13 @@ impl App {
             Message::Heard(n) if n == self.listen_seq => self.listen(self.since.is_some()),
             Message::Heard(_) => Task::none(),
             Message::Modal(id, kind) => {
-                self.new_pl_ids = match self.menu.take().map(|m| m.kind) {
-                    Some(MenuKind::Song(s) | MenuKind::SongIn(s, _)) => {
-                        s.into_iter().map(|s| s.id).collect()
-                    }
-                    _ => Vec::new(),
-                };
-                let lib = self.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
-                let (name, desc, cover) = lib.iter().find(|p| p.id == id).map_or_else(
-                    || (format!("My Playlist #{}", lib.len() + 1), String::new(), String::new()),
-                    |p| (p.name.clone(), p.comment.clone(), p.cover.clone()),
-                );
-                (self.new_pl, self.new_pl_desc) = (name, desc);
+                self.menu = None;
+                let p = self
+                    .data::<Lib>("lib")
+                    .and_then(|l| l.playlists.iter().find(|p| p.id == id))
+                    .expect("dialogs open only for playlists in the library");
+                let cover = p.cover.clone();
+                (self.new_pl, self.new_pl_desc) = (p.name.clone(), p.comment.clone());
                 let art = self.want_covers([(cover, 300)]);
                 self.modal = Some((id, kind));
                 Task::batch([

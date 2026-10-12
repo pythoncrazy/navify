@@ -7,7 +7,7 @@ use iced::{Alignment, Color, Element, Fill, color};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Song};
 use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, Set};
-use crate::theme::{self, icon, icon as i};
+use crate::theme::{self, fill, icon, icon as i};
 use crate::view::{
     SONGS_BG, artists_line, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, icon_btn, liked_art,
     pin_art,
@@ -40,14 +40,23 @@ fn cols(app: &App, album: bool, date: bool) -> Cols {
     (w - a - d, a, d)
 }
 
-fn round_btn<'a>(c: char, px: f32, m: Message) -> El<'a> {
-    button(i(c, px * 0.4).color(theme::BG).center())
-        .width(px)
-        .height(px)
-        .padding(0)
-        .style(theme::accent)
-        .on_press(m)
-        .into()
+fn play_btn<'a>(app: &App, px: f32, ctx: &str, m: Message) -> El<'a> {
+    let on = app.playing && app.ctx == ctx;
+    button(
+        theme::filled(if on { fill::PAUSE } else { fill::PLAY }, px * 0.4)
+            .color(theme::BG)
+            .center(),
+    )
+    .width(px)
+    .height(px)
+    .padding(0)
+    .style(theme::accent)
+    .on_press(if on { Message::Toggle } else { m })
+    .into()
+}
+
+fn play_over<'a>(app: &App, base: El<'a>, top: El<'a>, ctx: &str) -> El<'a> {
+    if app.playing && app.ctx == ctx { stack![base, top].into() } else { hover(base, top) }
 }
 
 fn heading<'a>(t: &str, all: Option<String>) -> El<'a> {
@@ -97,9 +106,13 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'
     let starred = app.is_starred(&s.id, s.starred);
     let art = !key.starts_with("album:");
     let idx: El = match (hot, cur && app.playing) {
-        (true, true) => btn(i(icon::PAUSE, 16.0).center(), Message::Toggle).width(16).into(),
+        (true, true) => {
+            btn(theme::filled(fill::PAUSE, 16.0).center(), Message::Toggle).width(16).into()
+        }
         (true, false) => {
-            btn(i(icon::PLAY, 16.0).center(), Message::PlayAt(key.into(), n)).width(16).into()
+            btn(theme::filled(fill::PLAY, 16.0).center(), Message::PlayAt(key.into(), n))
+                .width(16)
+                .into()
         }
         (false, true) => i(icon::EQ, 16.0).color(theme::ACCENT).width(16).center().into(),
         _ => theme::txt(n + 1, 16.0, Weight::Normal)
@@ -129,7 +142,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'
         }
     };
     let heart = (hot || starred).then(|| {
-        button(i(icon::HEART, 16.0).center())
+        button(theme::heart(starred, 16.0).center())
             .width(32)
             .height(32)
             .padding(0)
@@ -232,12 +245,15 @@ fn card<'a>(
     let img = cw - 24.0;
     let art = cover(app, cid, 300, img, round);
     let art: El = match play {
-        Some(m) => hover(
+        Some(m) => play_over(
+            app,
             art,
-            container(round_btn(icon::PLAY, 48.0, m))
+            container(play_btn(app, 48.0, &route, m))
                 .align_right(Fill)
                 .align_bottom(Fill)
-                .padding(8),
+                .padding(8)
+                .into(),
+            &route,
         ),
         None => art,
     };
@@ -262,7 +278,7 @@ fn card<'a>(
 
 fn album_card<'a>(app: &App, a: &Album, sub: String) -> El<'a> {
     let r = format!("album:{}", a.id);
-    card(app, &a.cover, &a.name, sub, r.clone(), false, Some(Message::PlayCtx(r, false)))
+    card(app, &a.cover, &a.name, sub, r.clone(), false, Some(Message::PlayCtx(r, 0)))
 }
 
 fn artist_card<'a>(app: &App, a: &Artist) -> El<'a> {
@@ -393,7 +409,8 @@ fn home<'a>(app: &'a App) -> El<'a> {
     let n = if w >= 720.0 { 4 } else { 2 };
     let tw = (w - 8.0 * (n - 1) as f32) / n as f32;
     let tile = |art: El<'a>, name: &str, route: String, play: Message| -> El<'a> {
-        hover(
+        play_over(
+            app,
             button(
                 row![art, theme::ell(name, tw - 56.0 - 24.0, 14.0, Weight::Bold)]
                     .spacing(12)
@@ -404,26 +421,29 @@ fn home<'a>(app: &'a App) -> El<'a> {
             .height(56)
             .clip(true)
             .style(theme::tile)
-            .on_press(Message::Nav(route)),
-            container(round_btn(icon::PLAY, 32.0, play))
+            .on_press(Message::Nav(route.clone()))
+            .into(),
+            container(play_btn(app, 32.0, &route, play))
                 .align_right(Fill)
                 .center_y(56)
-                .padding([0, 8]),
+                .padding([0, 8])
+                .into(),
+            &route,
         )
     };
     let tiles: Vec<El> = std::iter::once(tile(
         liked_art(56.0),
         "Liked Songs",
         "liked".into(),
-        Message::PlayCtx("liked".into(), false),
+        Message::PlayCtx("liked".into(), 0),
     ))
     .chain(pls.iter().take(3).map(|p| {
         let r = format!("playlist:{}", p.id);
-        tile(cover(app, &p.cover, 128, 56.0, false), &p.name, r.clone(), Message::PlayCtx(r, false))
+        tile(cover(app, &p.cover, 128, 56.0, false), &p.name, r.clone(), Message::PlayCtx(r, 0))
     }))
     .chain(h.recent.iter().map(|a| {
         let r = format!("album:{}", a.id);
-        tile(cover(app, &a.cover, 128, 56.0, false), &a.name, r.clone(), Message::PlayCtx(r, false))
+        tile(cover(app, &a.cover, 128, 56.0, false), &a.name, r.clone(), Message::PlayCtx(r, 0))
     }))
     .take(8)
     .collect();
@@ -469,7 +489,7 @@ fn home<'a>(app: &'a App) -> El<'a> {
                             format!("By {}", p.owner),
                             r.clone(),
                             false,
-                            Some(Message::PlayCtx(r, false)),
+                            Some(Message::PlayCtx(r, 0)),
                         )
                     })
                     .collect(),
@@ -516,9 +536,9 @@ fn hero<'a>(app: &App, art: El<'a>, kind: &str, title: &str, meta: El<'a>, c: Co
     .into()
 }
 
-fn actions<'a>(play: Message, shuffle: Message, extra: Vec<El<'a>>) -> El<'a> {
+fn actions<'a>(app: &App, play: Message, shuffle: Message, extra: Vec<El<'a>>) -> El<'a> {
     container(
-        row![round_btn(icon::PLAY, 56.0, play), icon_btn(icon::SHUFFLE, 16.0, shuffle)]
+        row![play_btn(app, 56.0, &app.route, play), icon_btn(icon::SHUFFLE, 16.0, shuffle)]
             .extend(extra)
             .spacing(PAD)
             .align_y(Alignment::Center),
@@ -548,7 +568,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
     let px = art_px(app);
     let star = |id: &str, on: bool| -> El<'a> {
         let on = app.is_starred(id, on);
-        button(i(icon::HEART, 32.0).center())
+        button(theme::heart(on, 32.0).center())
             .padding(0)
             .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
             .on_press(Message::Star(vec![id.into()], !on))
@@ -668,7 +688,7 @@ fn detail<'a>(app: &'a App) -> El<'a> {
     column![
         hero(app, d.art, d.kind, d.title, d.meta, d.color),
         container(column![
-            actions(Message::PlayAt(key.into(), 0), Message::PlayCtx(key.into(), true), d.extra),
+            actions(app, Message::PlayAt(key.into(), 0), Message::PlayCtx(key.into(), 1), d.extra),
             table_head(d.cols),
             vlist(app, d.songs, key, d.cols, y0),
         ])
@@ -686,7 +706,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         column![
             container(
                 row![
-                    round_btn(icon::PLAY, 48.0, Message::PlayAt(app.route.clone(), 0)),
+                    play_btn(app, 48.0, &app.route, Message::PlayAt(app.route.clone(), 0)),
                     theme::ell(d.title, app.main_w() - 120.0, 24.0, Weight::Bold)
                 ]
                 .spacing(8)
@@ -764,8 +784,9 @@ fn artist<'a>(app: &'a App) -> El<'a> {
         container(
             column![
                 actions(
-                    Message::PlayCtx(key.into(), false),
-                    Message::PlayCtx(key.into(), true),
+                    app,
+                    Message::PlayCtx(key.into(), 0),
+                    Message::PlayCtx(key.into(), 1),
                     vec![
                         button(theme::bold(if on { "Following" } else { "Follow" }, 14.0))
                             .style(theme::pill)
@@ -978,7 +999,7 @@ fn search<'a>(app: &'a App, q: &str) -> El<'a> {
                         format!("By {}", p.owner),
                         r.clone(),
                         false,
-                        Some(Message::PlayCtx(r, false)),
+                        Some(Message::PlayCtx(r, 0)),
                     )
                 })
                 .collect()
@@ -1354,7 +1375,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
                     ]
                     .spacing(4)
                     .width(Fill),
-                    button(i(icon::HEART, 20.0).center())
+                    button(theme::heart(starred, 20.0).center())
                         .padding(0)
                         .width(32)
                         .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
@@ -1532,11 +1553,13 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         let on = app.is_starred(id, on);
         item(icon::HEART, if on { yes } else { no }.into(), Message::Star(vec![id.into()], !on))
     };
+    let mine = |p: &Playlist| app.session.as_ref().is_some_and(|s| s.server.user == p.owner);
     let ctx = |kind: &str, id: &str| {
         let r = format!("{kind}:{id}");
         [
-            item(icon::PLAY, "Play".into(), Message::PlayCtx(r.clone(), false)),
-            item(icon::SHUFFLE, "Shuffle".into(), Message::PlayCtx(r, true)),
+            item(icon::PLAY, "Play".into(), Message::PlayCtx(r.clone(), 0)),
+            item(icon::SHUFFLE, "Shuffle".into(), Message::PlayCtx(r.clone(), 1)),
+            item(icon::LISTPLUS, "Add to queue".into(), Message::PlayCtx(r, 2)),
         ]
     };
     let (items, seps): (Vec<El>, usize) = match &m.kind {
@@ -1604,14 +1627,16 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             (v, 1)
         }
         MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
+            let n = app.data::<Lib>("lib").map_or(0, |l| l.playlists.len()) + 1;
+            let name = if let [x] = &s[..] { x.title.clone() } else { format!("My Playlist #{n}") };
             let pl: Vec<El> = std::iter::once(item(
                 icon::PLUS,
                 "New playlist".into(),
-                Message::Modal(String::new(), 0),
+                Message::PlNew(name, s.iter().map(|s| s.id.clone()).collect()),
             ))
             .chain([sep()])
             .chain(app.data::<Lib>("lib").into_iter().flat_map(|l| {
-                l.playlists.iter().map(|p| {
+                l.playlists.iter().filter(|p| mine(p)).map(|p| {
                     item(
                         icon::MUSIC,
                         p.name.clone(),
@@ -1661,7 +1686,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             ];
             if let MenuKind::SongIn(_, n) = &m.kind {
                 v.push(item(
-                    icon::MINUS,
+                    icon::TRASH,
                     "Remove from this playlist".into(),
                     Message::PlRemove(n.clone()),
                 ));
@@ -1699,7 +1724,6 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             ctx("album", &a.id)
                 .into_iter()
                 .chain([
-                    item(icon::LISTPLUS, "Add to queue".into(), Message::AlbumQueue(a.id.clone())),
                     star(&a.id, a.starred, "Remove from Your Library", "Save to Your Library"),
                     item(
                         icon::USER,
@@ -1720,7 +1744,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 .collect(),
             0,
         ),
-        MenuKind::Playlist(p) => (
+        MenuKind::Playlist(p) if mine(p) => (
             ctx("playlist", &p.id)
                 .into_iter()
                 .chain([
@@ -1731,6 +1755,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 .collect(),
             1,
         ),
+        MenuKind::Playlist(p) => (ctx("playlist", &p.id).into(), 0),
     };
     let h = (items.len() - seps) as f32 * 40.0 + seps as f32 + 8.0;
     (container(Column::with_children(items)).padding(4).width(W).style(theme::menu).into(), W, h)

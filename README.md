@@ -52,4 +52,5 @@ The tests skip when these values are absent.
 GPL-3.0-or-later. See LICENSE.
 
 Bundled fonts: Figtree under the SIL OFL 1.1 (assets/fonts/OFL.txt),
-Lucide under the ISC license (assets/fonts/LUCIDE-LICENSE.txt).
+Lucide under the ISC license (assets/fonts/LUCIDE-LICENSE.txt),
+Phosphor under the MIT license (assets/fonts/PHOSPHOR-LICENSE.txt).

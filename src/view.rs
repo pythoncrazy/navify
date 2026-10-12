@@ -191,7 +191,7 @@ pub fn pin_art<'a>(px: f32, c: char, bg: Color, fg: Color) -> Element<'a, Messag
 }
 
 pub fn liked_art<'a>(px: f32) -> Element<'a, Message> {
-    container(i(icon::HEART, px * 0.38).color(theme::TEXT).center())
+    container(theme::filled(theme::fill::HEART, px * 0.38).color(theme::TEXT).center())
         .center(px)
         .style(theme::diagonal(if px < 100.0 { 4.0 } else { 6.0 }))
         .into()
@@ -272,9 +272,12 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .width(Fill),
         row![
             round(
-                i(icon::HOME, 24.0)
-                    .color(if app.route == "home" { theme::TEXT } else { theme::SUB })
-                    .into(),
+                if app.route == "home" {
+                    theme::filled(theme::fill::HOME, 24.0).color(theme::TEXT)
+                } else {
+                    i(icon::HOME, 24.0).color(theme::SUB)
+                }
+                .into(),
                 Message::Nav("home".into())
             ),
             text_input("What do you want to play?", &app.search_q)
@@ -466,8 +469,8 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .on_press(m)
         .into()
     };
-    let side = |c: char, on: bool, m: Message| -> Element<'a, Message> {
-        button(i(c, 16.0).center())
+    let side = |t: theme::Txt<'a>, on: bool, m: Message| -> Element<'a, Message> {
+        button(t.center())
             .width(32)
             .height(32)
             .padding(0)
@@ -489,7 +492,11 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
                     artists_line(&s.artists, 12.0, 200.0),
                 ]
                 .spacing(2),
-                side(icon::HEART, starred, Message::Star(vec![s.id.clone()], !starred)),
+                side(
+                    theme::heart(starred, 16.0),
+                    starred,
+                    Message::Star(vec![s.id.clone()], !starred)
+                ),
             ]
             .spacing(12)
             .align_y(Alignment::Center)
@@ -517,7 +524,9 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .into(),
     };
     let play = button(
-        i(if app.playing { icon::PAUSE } else { icon::PLAY }, 16.0).color(theme::BG).center(),
+        theme::filled(if app.playing { theme::fill::PAUSE } else { theme::fill::PLAY }, 16.0)
+            .color(theme::BG)
+            .center(),
     )
     .width(32)
     .height(32)
@@ -531,9 +540,9 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
     let center = column![
         row![
             ctl(icon::SHUFFLE, app.shuffle.is_some(), Message::Shuffle),
-            side(icon::PREV, false, Message::Prev),
+            side(theme::filled(theme::fill::PREV, 16.0), false, Message::Prev),
             play,
-            side(icon::NEXT, false, Message::Next(true)),
+            side(theme::filled(theme::fill::NEXT, 16.0), false, Message::Next(true)),
             ctl(
                 if app.repeat == 2 { icon::REPEAT1 } else { icon::REPEAT },
                 app.repeat > 0,
@@ -554,9 +563,9 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         _ => icon::VOL2,
     };
     let right = row![
-        side(icon::PR, app.panel == 1, Message::Panel(1)),
-        side(icon::LYRICS, app.route == "lyrics", Message::Nav("lyrics".into())),
-        side(icon::QUEUE, app.panel == 2, Message::Panel(2)),
+        side(i(icon::PR, 16.0), app.panel == 1, Message::Panel(1)),
+        side(i(icon::LYRICS, 16.0), app.route == "lyrics", Message::Nav("lyrics".into())),
+        side(i(icon::QUEUE, 16.0), app.panel == 2, Message::Panel(2)),
         button(theme::bold(format!("{}x", app.cfg.settings.speed), 12.0).center())
             .width(40)
             .height(32)
@@ -567,7 +576,7 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
                 theme::ACCENT
             }))
             .on_press(Message::Menu(Box::new(MenuKind::Speed))),
-        side(vol_icon, false, Message::Mute),
+        side(i(vol_icon, 16.0), false, Message::Mute),
         slider(0.0..=1.0, if app.muted { 0.0 } else { app.volume }, Message::Vol)
             .width(93)
             .style(theme::seek),
@@ -618,10 +627,6 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
             .and_then(|l| l.playlists.iter().find(|p| &p.id == id));
         let (title, ok, label, body): (&str, Option<Message>, &str, Element<'a, Message>) =
             match kind {
-                0 => {
-                    let ok = Message::PlNew(app.new_pl.clone());
-                    ("Make a playlist", named.then(|| ok.clone()), "Save", name(&ok))
-                }
                 1 => {
                     let ok = Message::Edit(id.clone(), app.new_pl.clone(), app.new_pl_desc.clone());
                     let body = row![

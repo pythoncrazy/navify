@@ -12,6 +12,7 @@ fn main() {
         include_bytes!("../assets/fonts/Figtree-Bold.ttf"),
         include_bytes!("../assets/fonts/Figtree-Black.ttf"),
         include_bytes!("../assets/fonts/lucide.ttf"),
+        include_bytes!("../assets/fonts/phosphor-fill.ttf"),
     ];
     unsafe {
         std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
@@ -26,6 +27,7 @@ fn main() {
         .font(fonts[2])
         .font(fonts[3])
         .font(fonts[4])
+        .font(fonts[5])
         .window(window::Settings {
             size: Size::new(1280.0, 800.0),
             min_size: Some(Size::new(800.0, 600.0)),

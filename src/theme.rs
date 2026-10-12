@@ -21,8 +21,9 @@ pub const ERR: Color = color!(0xf15e6c);
 pub const GRAD_A: Color = color!(0x450af5);
 pub const GRAD_B: Color = color!(0xc4efd9);
 pub const LUCIDE: Font = Font::with_name("lucide");
+pub const FILL: Font = Font::with_name("Phosphor-Fill");
 
-type Txt<'a> = text::Text<'a, Theme, iced::Renderer>;
+pub type Txt<'a> = text::Text<'a, Theme, iced::Renderer>;
 
 pub fn tint(alpha: f32) -> Color {
     Color { a: alpha, ..Color::WHITE }
@@ -58,6 +59,23 @@ pub fn sub<'a>(t: impl ToString, size: f32) -> Txt<'a> {
 
 pub fn icon<'a>(c: char, size: f32) -> Txt<'a> {
     text(c).font(LUCIDE).size(size)
+}
+
+pub fn filled<'a>(c: char, size: f32) -> Txt<'a> {
+    text(c).font(FILL).size(size)
+}
+
+pub fn heart<'a>(on: bool, size: f32) -> Txt<'a> {
+    if on { filled(fill::HEART, size) } else { icon(icon::HEART, size) }
+}
+
+pub mod fill {
+    pub const PLAY: char = '\u{e3d0}';
+    pub const PAUSE: char = '\u{e39e}';
+    pub const PREV: char = '\u{e5a4}';
+    pub const NEXT: char = '\u{e5a6}';
+    pub const HEART: char = '\u{e2a8}';
+    pub const HOME: char = '\u{e2c2}';
 }
 
 fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
@@ -98,9 +116,6 @@ pub fn ell<'a>(s: &str, px: f32, size: f32, w: Weight) -> Txt<'a> {
 
 pub mod icon {
     pub const PLAY: char = '\u{e13c}';
-    pub const PAUSE: char = '\u{e12e}';
-    pub const NEXT: char = '\u{e160}';
-    pub const PREV: char = '\u{e15f}';
     pub const SHUFFLE: char = '\u{e15e}';
     pub const REPEAT: char = '\u{e146}';
     pub const REPEAT1: char = '\u{e1fd}';
@@ -136,7 +151,6 @@ pub mod icon {
     pub const TRASH: char = '\u{e18e}';
     pub const PR: char = '\u{e431}';
     pub const SERVER: char = '\u{e153}';
-    pub const MINUS: char = '\u{e11c}';
 }
 
 fn bg(color: impl Into<iced::Background>, radius: f32) -> container::Style {

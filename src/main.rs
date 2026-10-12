@@ -38,6 +38,7 @@ fn main() -> iced::Result {
         .font(include_bytes!("../assets/fonts/Figtree-Bold.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/Figtree-Black.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/lucide.ttf").as_slice())
+        .font(include_bytes!("../assets/fonts/phosphor-fill.ttf").as_slice())
         .title(App::title)
         .window(window::Settings {
             size: Size::new(w.max(800.0), h.max(600.0)),
