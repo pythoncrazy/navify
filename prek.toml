@@ -1,0 +1,47 @@
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v6.0.0"
+[[repos.hooks]]
+id = "trailing-whitespace"
+[[repos.hooks]]
+id = "end-of-file-fixer"
+[[repos.hooks]]
+id = "mixed-line-ending"
+[[repos.hooks]]
+id = "check-toml"
+[[repos.hooks]]
+id = "check-yaml"
+[[repos.hooks]]
+id = "check-merge-conflict"
+[[repos.hooks]]
+id = "check-added-large-files"
+args = ["--maxkb=1024"]
+[[repos.hooks]]
+id = "detect-private-key"
+[[repos.hooks]]
+id = "check-case-conflict"
+[[repos.hooks]]
+id = "check-illegal-windows-names"
+
+[[repos]]
+repo = "https://github.com/gitleaks/gitleaks"
+rev = "v8.30.1"
+[[repos.hooks]]
+id = "gitleaks"
+
+[[repos]]
+repo = "local"
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+entry = "cargo fmt --all"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "cargo clippy"
+entry = "cargo clippy --workspace --all-targets -- -D warnings"
+language = "system"
+types = ["rust"]
+pass_filenames = false
