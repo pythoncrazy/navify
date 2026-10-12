@@ -51,7 +51,10 @@ async fn local() -> Option<Session> {
                 std::env::var("NAVIFY_TEST_LOCAL_USERNAME"),
                 std::env::var("NAVIFY_TEST_LOCAL_PASSWORD"),
             ) {
-                (Ok(h), Ok(u), Ok(p)) => Session::login(&h, &u, &p).await.ok(),
+                (Ok(h), Ok(u), Ok(p)) => match Session::login(&h, &u, &p).await {
+                    Ok(s) => Some(s),
+                    Err(e) => panic!("local login failed: {e}"),
+                },
                 _ => None,
             }
         })

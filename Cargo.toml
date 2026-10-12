@@ -51,7 +51,7 @@ iced = { version = "0.14.0", default-features = false, features = [
     "tester",
 ] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-navify-audio = { path = "crates/audio", optional = true }
+navify-audio = { path = "crates/audio" }
 
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))'.dependencies.dbus-secret-service-keyring-store]
 version = "1.0.1"
@@ -64,9 +64,6 @@ features = ["keychain"]
 [target.'cfg(target_os = "windows")'.dependencies.windows-native-keyring-store]
 version = "1.1.0"
 default-features = false
-
-[features]
-audio = ["dep:navify-audio"]
 
 [dev-dependencies]
 dotenvy = "0.15.7"

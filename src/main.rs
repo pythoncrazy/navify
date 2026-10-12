@@ -3,11 +3,33 @@ use iced::{Font, Size, Theme, application, window};
 use navify::app::App;
 use navify::config::Config;
 
+struct Rt(tokio::runtime::Runtime);
+
+impl iced::Executor for Rt {
+    fn new() -> std::io::Result<Self> {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map(Rt)
+    }
+
+    fn spawn(&self, f: impl Future<Output = ()> + Send + 'static) {
+        drop(self.0.spawn(f));
+    }
+
+    fn block_on<T>(&self, f: impl Future<Output = T>) -> T {
+        self.0.block_on(f)
+    }
+
+    fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _g = self.0.enter();
+        f()
+    }
+}
+
 fn main() -> iced::Result {
     let cfg = Config::load();
     let (w, h) = cfg.settings.window;
     application(App::boot, App::update, App::view)
         .subscription(App::subscription)
+        .executor::<Rt>()
         .theme(|_: &App| Theme::Dark)
         .default_font(Font::with_name("Figtree"))
         .font(include_bytes!("../assets/fonts/Figtree-Regular.ttf").as_slice())

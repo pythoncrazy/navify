@@ -155,7 +155,6 @@ pub enum Message {
     Resize(f32, f32),
     SeekPreview(f32),
     SeekRelease,
-    #[cfg(feature = "audio")]
     Audio(navify_audio::Event),
 }
 
@@ -216,7 +215,6 @@ pub struct App {
     pub scrolls: HashMap<String, (f32, f32)>,
     pub covers: Covers,
     pub cover_tasks: usize,
-    #[cfg(feature = "audio")]
     pub player: Option<navify_audio::Player>,
     pub queue: Vec<Song>,
     pub index: usize,
@@ -226,6 +224,7 @@ pub struct App {
     pub playing: bool,
     pub position: f32,
     pub scrobbled: bool,
+    pub loaded: bool,
     pub starred: HashMap<String, bool>,
     pub ratings: HashMap<String, u8>,
     pub search_q: String,
@@ -292,7 +291,7 @@ impl App {
             } else if app.session.is_some() || app.route != "login" {
                 let r = app.route.clone();
                 app.route = String::new();
-                app.nav(r)
+                Task::batch([app.nav(r), app.restore()])
             } else {
                 Task::none()
             },
@@ -477,12 +476,11 @@ impl App {
             scrolls: HashMap::new(),
             covers: Covers::default(),
             cover_tasks: 0,
-            #[cfg(feature = "audio")]
-            player: {
-                let (p, rx) = navify_audio::Player::new();
+            player: tokio::runtime::Handle::try_current().ok().map(|h| {
+                let (p, rx) = navify_audio::Player::new(h);
                 *AUDIO_RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(rx);
-                Some(p)
-            },
+                p
+            }),
             queue: Vec::new(),
             index: 0,
             shuffle: None,
@@ -490,6 +488,7 @@ impl App {
             playing: false,
             position: 0.0,
             scrobbled: false,
+            loaded: false,
             starred: HashMap::new(),
             ratings: HashMap::new(),
             search_q: String::new(),
@@ -629,51 +628,69 @@ impl App {
         }
     }
 
-    fn play_index(&mut self, i: usize) -> Task<Message> {
+    fn play_index(&mut self, i: usize, at: f32) -> Task<Message> {
         if self.queue.is_empty() {
             return Task::none();
         }
+        let done = if self.loaded { self.scrobble_due(self.pos()) } else { Task::none() };
         self.index = i.min(self.queue.len() - 1);
-        let song = self.queue[self.real_index()].clone();
-        self.position = 0.0;
-        self.scrobbled = false;
         self.playing = true;
-        let t = self.track(&song);
-        let next = self.next_index().map(|n| self.track(&self.queue[self.real_at(n)].clone()));
-        #[cfg(feature = "audio")]
-        {
-            let p = self.player.get_or_insert_with(|| navify_audio::Player::new().0);
+        let t = self.track(&self.queue[self.real_index()]);
+        if let Some(p) = &self.player {
             p.set_volume(if self.muted { 0.0 } else { self.volume });
             p.set_speed(self.cfg.settings.speed);
-            p.set_crossfade(self.cfg.settings.crossfade);
-            p.play(t);
-            p.queue_next(next);
+            p.set_crossfade(self.cfg.settings.crossfade_secs);
+            p.play(t, at);
         }
-        #[cfg(not(feature = "audio"))]
-        {
-            let _ = t;
-            let _ = next;
-        }
+        let began = self.began();
+        self.position = at;
+        Task::batch([done, began])
+    }
+
+    fn began(&mut self) -> Task<Message> {
+        (self.position, self.scrobbled, self.loaded) = (0.0, false, true);
+        self.queue_next_refresh();
+        let Some(song) = self.current_song().cloned() else { return Task::none() };
         let lyr = if self.route == "lyrics" {
             self.request(&format!("lyrics:{}", song.id))
         } else {
             Task::none()
         };
-        if let Some(s) = self.session.clone() {
-            let id = song.id.clone();
-            Task::batch([
-                lyr,
-                Task::perform(
-                    async move {
-                        let _ = s.scrobble(&id, false).await;
-                    },
-                    |_| Message::Noop,
-                ),
-                self.debounce_save_queue(),
-            ])
-        } else {
-            Task::none()
+        let Some(s) = self.session.clone() else { return lyr };
+        Task::batch([
+            lyr,
+            Task::perform(async move { s.scrobble(&song.id, false).await }, |_| Message::Noop),
+            self.debounce_save_queue(),
+        ])
+    }
+
+    fn pos(&self) -> f32 {
+        self.player.as_ref().filter(|_| self.loaded).map_or(self.position, |p| p.position())
+    }
+
+    fn scrobble_due(&mut self, pos: f32) -> Task<Message> {
+        let dur = self.current_dur();
+        if self.scrobbled || dur <= 0.0 || (pos < dur * 0.5 && pos < 240.0) {
+            return Task::none();
         }
+        self.scrobbled = true;
+        match (self.session.clone(), self.current_song().map(|s| s.id.clone())) {
+            (Some(s), Some(id)) => {
+                Task::perform(async move { s.scrobble(&id, true).await }, |_| Message::Noop)
+            }
+            _ => Task::none(),
+        }
+    }
+
+    fn restore(&self) -> Task<Message> {
+        let Some(s) =
+            self.session.clone().filter(|_| self.cfg.settings.queue_sync && self.shot.is_none())
+        else {
+            return Task::none();
+        };
+        Task::perform(async move { s.play_queue().await.ok() }, |r| {
+            r.map_or(Message::Noop, |(songs, cur, pos)| Message::RestoreQueue(songs, cur, pos))
+        })
     }
 
     pub(crate) fn real_at(&self, i: usize) -> usize {
@@ -706,19 +723,7 @@ impl App {
     }
 }
 
-#[cfg(feature = "audio")]
 use navify_audio::Track;
-#[cfg(not(feature = "audio"))]
-#[derive(Clone, Debug, Default)]
-#[allow(dead_code)]
-struct Track {
-    #[allow(dead_code)]
-    id: String,
-    url: String,
-    gain: f32,
-    transcoded: bool,
-    duration: f32,
-}
 
 async fn decode(b: &[u8], size: u32) -> Option<(u32, u32, Color, Vec<u8>)> {
     let img = ::image::load_from_memory(b).ok()?;
@@ -972,35 +977,41 @@ impl App {
                     shuffle(&mut o, i);
                     o
                 });
-                self.play_index(i)
+                self.play_index(i, 0.0)
             }
-            Message::PlayQueue(i) => self.play_index(i),
+            Message::PlayQueue(i) => self.play_index(i, 0.0),
             Message::Toggle => {
+                if !self.loaded {
+                    return self.play_index(self.index, self.position);
+                }
                 self.playing = !self.playing;
-                #[cfg(feature = "audio")]
                 if let Some(p) = &self.player {
                     p.set_paused(!self.playing);
                 }
-                self.debounce_save_queue()
+                if self.playing {
+                    return Task::none();
+                }
+                self.position = self.pos();
+                self.save_seq += 1;
+                self.update(Message::SaveQ(self.save_seq))
             }
             Message::Prev => {
-                if self.position > 3.0 {
+                if self.pos() > 3.0 {
                     return self.update(Message::Seek(0.0));
                 }
                 if self.index > 0 {
-                    return self.play_index(self.index - 1);
+                    return self.play_index(self.index - 1, 0.0);
                 }
                 Task::none()
             }
             Message::Next(manual) => {
                 if self.repeat == 2 && !manual {
-                    return self.play_index(self.index);
+                    return self.play_index(self.index, 0.0);
                 }
                 match self.next_index() {
-                    Some(n) => self.play_index(n),
+                    Some(n) => self.play_index(n, 0.0),
                     None => {
-                        self.playing = false;
-                        #[cfg(feature = "audio")]
+                        (self.playing, self.loaded) = (false, false);
                         if let Some(p) = &self.player {
                             p.stop();
                         }
@@ -1011,7 +1022,6 @@ impl App {
             Message::Ended => self.update(Message::Next(false)),
             Message::Seek(pos) => {
                 self.position = pos;
-                #[cfg(feature = "audio")]
                 if let Some(p) = &self.player {
                     p.seek(pos);
                 }
@@ -1036,23 +1046,18 @@ impl App {
                 {
                     self.index = i;
                 }
-                #[cfg(feature = "audio")]
-                if let Some(p) = &self.player {
-                    p.queue_next(
-                        self.next_index().map(|n| self.track(&self.queue[self.real_at(n)].clone())),
-                    );
-                }
+                self.queue_next_refresh();
                 self.debounce_save_queue()
             }
             Message::Repeat => {
                 self.repeat = (self.repeat + 1) % 3;
+                self.queue_next_refresh();
                 Task::none()
             }
             Message::Vol(v) => {
                 self.volume = v;
                 self.cfg.settings.volume = v;
                 self.muted = false;
-                #[cfg(feature = "audio")]
                 if let Some(p) = &self.player {
                     p.set_volume(v);
                 }
@@ -1060,7 +1065,6 @@ impl App {
             }
             Message::Mute => {
                 self.muted = !self.muted;
-                #[cfg(feature = "audio")]
                 if let Some(p) = &self.player {
                     p.set_volume(if self.muted { 0.0 } else { self.volume });
                 }
@@ -1124,8 +1128,7 @@ impl App {
             Message::QClear => {
                 self.queue.clear();
                 self.index = 0;
-                self.playing = false;
-                #[cfg(feature = "audio")]
+                (self.playing, self.loaded) = (false, false);
                 if let Some(p) = &self.player {
                     p.stop();
                 }
@@ -1302,16 +1305,7 @@ impl App {
                         let t = self.persist();
                         let n = self
                             .nav(shot_key(self.shot.as_deref()).unwrap_or_else(|| "home".into()));
-                        let s2 = s.clone();
-                        let q =
-                            Task::perform(async move { s2.play_queue().await.ok() }, move |r| {
-                                match r {
-                                    Some((songs, cur, pos)) => {
-                                        Message::RestoreQueue(songs, cur, pos)
-                                    }
-                                    None => Message::Noop,
-                                }
-                            });
+                        let q = self.restore();
                         Task::batch([t, n, q])
                     }
                     Err(e) => {
@@ -1324,9 +1318,12 @@ impl App {
                 if songs.is_empty() {
                     return Task::none();
                 }
+                if self.loaded {
+                    return Task::none();
+                }
                 self.position = pos as f32 / 1000.0;
                 self.index = songs.iter().position(|s| s.id == cur).unwrap_or(0);
-                self.queue = songs;
+                (self.queue, self.shuffle) = (songs, None);
                 Task::none()
             }
             Message::LogOut => {
@@ -1337,7 +1334,10 @@ impl App {
                 }
                 self.session = None;
                 self.queue.clear();
-                self.playing = false;
+                (self.playing, self.loaded) = (false, false);
+                if let Some(p) = &self.player {
+                    p.stop();
+                }
                 self.cache.clear();
                 let t = self.persist();
                 let n = self.nav("login".into());
@@ -1375,7 +1375,12 @@ impl App {
                 match set {
                     Set::Rg(v) => self.cfg.settings.replaygain = v,
                     Set::Preamp(v) => self.cfg.settings.preamp_db = v,
-                    Set::Xfade(v) => self.cfg.settings.crossfade_secs = v,
+                    Set::Xfade(v) => {
+                        self.cfg.settings.crossfade_secs = v;
+                        if let Some(p) = &self.player {
+                            p.set_crossfade(v);
+                        }
+                    }
                     Set::Trans(v) => {
                         self.cfg.settings.transcode_format =
                             ["original", "mp3", "opus", "aac"][v as usize].into()
@@ -1385,7 +1390,6 @@ impl App {
                     Set::Discord(b) => self.cfg.settings.discord = b,
                     Set::Speed(v) => {
                         self.cfg.settings.speed = v;
-                        #[cfg(feature = "audio")]
                         if let Some(p) = &self.player {
                             p.set_speed(v);
                         }
@@ -1425,7 +1429,7 @@ impl App {
                     (
                         self.queue.iter().map(|x| x.id.clone()).collect::<Vec<_>>(),
                         self.current_song().map(|x| x.id.clone()).unwrap_or_default(),
-                        (self.position * 1000.0) as u64,
+                        (self.pos() * 1000.0) as u64,
                     )
                 });
                 Task::perform(
@@ -1441,13 +1445,13 @@ impl App {
             Message::Quit => iced::exit(),
             Message::Noop => Task::none(),
             Message::SaveQ(n) => {
-                if n != self.save_seq {
+                if n != self.save_seq || !self.cfg.settings.queue_sync {
                     return Task::none();
                 }
                 let Some(s) = self.session.clone() else { return Task::none() };
                 let ids: Vec<String> = self.queue.iter().map(|x| x.id.clone()).collect();
                 let cur = self.current_song().map(|x| x.id.clone()).unwrap_or_default();
-                let pos = (self.position * 1000.0) as u64;
+                let pos = (self.pos() * 1000.0) as u64;
                 Task::perform(
                     async move {
                         let _ = s.save_play_queue(&ids, &cur, pos).await;
@@ -1502,7 +1506,7 @@ impl App {
                 } else {
                     None
                 };
-                self.play_index(0)
+                self.play_index(0, 0.0)
             }
             Message::AlbumQueue(id) => {
                 self.menu = None;
@@ -1566,37 +1570,8 @@ impl App {
                 Task::none()
             }
             Message::Tick => {
-                if self.playing {
-                    #[cfg(not(feature = "audio"))]
-                    {
-                        self.position += 0.25;
-                        if self.position >= self.current_dur() && self.current_dur() > 0.0 {
-                            return self.update(Message::Ended);
-                        }
-                    }
-                    #[cfg(feature = "audio")]
-                    if let Some(p) = &self.player {
-                        self.position = p.position();
-                        self.playing = !p.is_paused();
-                    }
-                    if !self.scrobbled
-                        && self.current_dur() > 0.0
-                        && (self.position > self.current_dur() * 0.5 || self.position > 240.0)
-                    {
-                        self.scrobbled = true;
-                        if let (Some(s), Some(song)) =
-                            (self.session.clone(), self.current_song().cloned())
-                        {
-                            return Task::perform(
-                                async move {
-                                    let _ = s.scrobble(&song.id, true).await;
-                                },
-                                |_| Message::Noop,
-                            );
-                        }
-                    }
-                }
-                Task::none()
+                self.position = self.pos();
+                self.scrobble_due(self.position)
             }
             Message::Modal(id, kind) => {
                 self.new_pl_ids = match self.menu.take().map(|m| m.kind) {
@@ -1629,11 +1604,24 @@ impl App {
                 self.edit::<Lib>("lib", |l| l.playlists.insert(0, p));
                 self.nav(r)
             }
-            #[cfg(feature = "audio")]
             Message::Audio(e) => match e {
-                navify_audio::Event::Started(_) => Task::none(),
+                navify_audio::Event::Started(id) => {
+                    let done = self.scrobble_due(f32::MAX);
+                    let n = if self.repeat == 2 { Some(self.index) } else { self.next_index() };
+                    match n.filter(|&n| self.queue.get(self.real_at(n)).is_some_and(|s| s.id == id))
+                    {
+                        Some(n) => {
+                            self.index = n;
+                            Task::batch([done, self.began()])
+                        }
+                        None => done,
+                    }
+                }
                 navify_audio::Event::Ended => self.update(Message::Ended),
-                navify_audio::Event::Error(e) => self.toast(&format!("Playback failed. {e}")),
+                navify_audio::Event::Error(e) => {
+                    (self.playing, self.loaded) = (false, false);
+                    self.toast(&format!("Playback failed. {e}"))
+                }
             },
         }
     }
@@ -1665,11 +1653,9 @@ impl App {
     }
 
     fn queue_next_refresh(&self) {
-        #[cfg(feature = "audio")]
         if let Some(p) = &self.player {
-            p.queue_next(
-                self.next_index().map(|n| self.track(&self.queue[self.real_at(n)].clone())),
-            );
+            let n = if self.repeat == 2 { Some(self.index) } else { self.next_index() };
+            p.queue_next(n.map(|n| self.track(&self.queue[self.real_at(n)])));
         }
     }
 
@@ -1824,9 +1810,9 @@ fn shuffle(order: &mut [usize], keep_first: usize) {
 
 static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-#[cfg(feature = "audio")]
-static AUDIO_RX: std::sync::Mutex<Option<std::sync::mpsc::Receiver<navify_audio::Event>>> =
-    std::sync::Mutex::new(None);
+static AUDIO_RX: std::sync::Mutex<
+    Option<tokio::sync::mpsc::UnboundedReceiver<navify_audio::Event>>,
+> = std::sync::Mutex::new(None);
 
 impl App {
     pub fn view(&self) -> iced::Element<'_, Message> {
@@ -1897,24 +1883,19 @@ impl App {
                 iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tick),
             );
         }
-        #[cfg(feature = "audio")]
         {
             fn audio_stream() -> impl iced::futures::Stream<Item = Message> {
-                iced::stream::channel(8, |mut tx| async move {
-                    let Some(rx) = AUDIO_RX.lock().ok().and_then(|mut r| r.take()) else {
-                        return;
-                    };
-                    let (ftx, mut frx) = iced::futures::channel::mpsc::unbounded();
-                    std::thread::spawn(move || {
-                        while let Ok(e) = rx.recv() {
-                            let _ = ftx.unbounded_send(e);
+                iced::stream::channel(
+                    8,
+                    |mut tx: iced::futures::channel::mpsc::Sender<_>| async move {
+                        let Some(mut rx) = AUDIO_RX.lock().ok().and_then(|mut r| r.take()) else {
+                            return;
+                        };
+                        while let Some(e) = rx.recv().await {
+                            let _ = iced::futures::SinkExt::send(&mut tx, Message::Audio(e)).await;
                         }
-                    });
-                    use iced::futures::{SinkExt, StreamExt};
-                    while let Some(e) = frx.next().await {
-                        let _ = tx.send(Message::Audio(e)).await;
-                    }
-                })
+                    },
+                )
             }
             subs.push(iced::Subscription::run(audio_stream));
         }

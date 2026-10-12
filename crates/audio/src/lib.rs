@@ -4,13 +4,13 @@ use std::f32::consts::FRAC_PI_2;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::thread::{self, JoinHandle, Thread};
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use opus_decoder::OpusDecoder;
-use rtrb::RingBuffer;
+use rtrb::{Producer, RingBuffer};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
     Adjustable, Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters,
@@ -24,9 +24,11 @@ use symphonia::core::formats::{FormatReader, SeekMode, SeekTo, TrackType, probe:
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::packet::Packet;
 use symphonia::core::units::{Time, TimeBase};
-use tokio::runtime::{Builder, Handle, Runtime};
+use tokio::runtime::Handle;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 const CHUNK: usize = 512;
+const CLOSE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Default)]
 pub struct Track {
@@ -45,11 +47,10 @@ pub enum Event {
 }
 
 enum Cmd {
-    Play(Track),
+    Play(Track, f32),
     Next(Option<Track>),
     Seek(f32),
     Stop,
-    Wake,
 }
 
 #[derive(Default)]
@@ -66,41 +67,48 @@ struct Shared {
 pub struct Player {
     tx: Sender<Cmd>,
     sh: Arc<Shared>,
+    th: Thread,
 }
 
 impl Player {
-    pub fn new() -> (Player, Receiver<Event>) {
+    pub fn new(rt: Handle) -> (Player, UnboundedReceiver<Event>) {
         let (tx, rx) = channel();
-        let (etx, erx) = channel();
+        let (etx, erx) = unbounded_channel();
         let sh = Arc::new(Shared::default());
         sh.volume.store(1f32.to_bits(), Relaxed);
         sh.speed.store(1f32.to_bits(), Relaxed);
         let esh = sh.clone();
-        thread::spawn(move || engine(rx, etx, esh));
-        (Player { tx, sh }, erx)
+        let th = thread::spawn(move || engine(rx, etx, esh, rt)).thread().clone();
+        (Player { tx, sh, th }, erx)
     }
 
-    pub fn play(&self, track: Track) {
+    fn send(&self, cmd: Cmd) {
+        let _ = self.tx.send(cmd);
+        self.th.unpark();
+    }
+
+    pub fn play(&self, track: Track, at: f32) {
         self.sh.paused.store(false, Relaxed);
-        let _ = self.tx.send(Cmd::Play(track));
+        self.sh.pos.store(at.max(0.0).to_bits(), Relaxed);
+        self.send(Cmd::Play(track, at.max(0.0)));
     }
 
     pub fn queue_next(&self, track: Option<Track>) {
-        let _ = self.tx.send(Cmd::Next(track));
+        self.send(Cmd::Next(track));
     }
 
     pub fn set_paused(&self, paused: bool) {
         self.sh.paused.store(paused, Relaxed);
-        let _ = self.tx.send(Cmd::Wake);
+        self.th.unpark();
     }
 
     pub fn seek(&self, secs: f32) {
         self.sh.pos.store(secs.max(0.0).to_bits(), Relaxed);
-        let _ = self.tx.send(Cmd::Seek(secs.max(0.0)));
+        self.send(Cmd::Seek(secs.max(0.0)));
     }
 
     pub fn stop(&self) {
-        let _ = self.tx.send(Cmd::Stop);
+        self.send(Cmd::Stop);
     }
 
     pub fn set_volume(&self, v: f32) {
@@ -358,7 +366,7 @@ impl Source {
 }
 
 struct Mixer {
-    rt: Runtime,
+    rt: Handle,
     rate: u32,
     cur: Option<Source>,
     inc: Option<Source>,
@@ -369,9 +377,8 @@ struct Mixer {
 }
 
 impl Mixer {
-    fn new(rate: u32) -> std::io::Result<Mixer> {
-        let rt = Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
-        Ok(Mixer {
+    fn new(rt: Handle, rate: u32) -> Mixer {
+        Mixer {
             rt,
             rate,
             cur: None,
@@ -380,7 +387,20 @@ impl Mixer {
             next: None,
             pre: None,
             b: vec![0.0; CHUNK * 2],
-        })
+        }
+    }
+
+    fn reopen(&mut self, rate: u32, pos: f32) -> Result<(), String> {
+        self.rate = rate;
+        self.next =
+            self.pre.take().and_then(|h| h.join().ok()?.ok()).map(|s| s.track).or(self.next.take());
+        self.cur = self
+            .inc
+            .take()
+            .or(self.cur.take())
+            .map(|c| Source::open(c.track, &self.rt, rate, pos))
+            .transpose()?;
+        Ok(())
     }
 
     fn seek(&mut self, secs: f32) -> Result<(), String> {
@@ -389,7 +409,7 @@ impl Mixer {
         }
         match self.cur.take() {
             Some(c) if c.track.transcoded => {
-                self.cur = Some(Source::open(c.track, self.rt.handle(), self.rate, secs)?)
+                self.cur = Some(Source::open(c.track, &self.rt, self.rate, secs)?)
             }
             Some(mut c) => {
                 c.seek(secs).map_err(|e| e.to_string())?;
@@ -418,7 +438,7 @@ impl Mixer {
             && rem < 15.0 + cf
             && let Some(t) = self.next.take()
         {
-            let (h, r) = (self.rt.handle().clone(), self.rate);
+            let (h, r) = (self.rt.clone(), self.rate);
             self.pre = Some(thread::spawn(move || Source::open(t, &h, r, 0.0)));
         }
         let mut ev = None;
@@ -466,9 +486,7 @@ impl Mixer {
             .pre
             .take()
             .map(|h| h.join().unwrap_or_else(|_| Err("open failed".into())))
-            .or_else(|| {
-                self.next.take().map(|t| Source::open(t, self.rt.handle(), self.rate, 0.0))
-            });
+            .or_else(|| self.next.take().map(|t| Source::open(t, &self.rt, self.rate, 0.0)));
         self.cur = None;
         match next {
             Some(Ok(mut s)) => {
@@ -486,17 +504,21 @@ impl Mixer {
 
 #[doc(hidden)]
 pub fn render(
+    rt: &Handle,
     tracks: Vec<Track>,
     rate: u32,
     seek: f32,
     crossfade: f32,
 ) -> Result<Vec<f32>, String> {
-    let mut mix = Mixer::new(rate).map_err(|e| e.to_string())?;
+    let mut mix = Mixer::new(rt.clone(), rate);
     let mut it = tracks.into_iter();
-    mix.cur = Some(Source::open(it.next().ok_or("no tracks")?, mix.rt.handle(), rate, seek)?);
+    mix.cur = Some(Source::open(it.next().ok_or("no tracks")?, &mix.rt, rate, seek)?);
     mix.next = it.next();
     let (mut out, mut buf) = (Vec::new(), vec![0.0; CHUNK * 2]);
     while mix.cur.is_some() {
+        while mix.pre.as_ref().is_some_and(|h| !h.is_finished()) {
+            thread::sleep(Duration::from_millis(1));
+        }
         let (n, ev) = mix.step(&mut buf, 1.0, crossfade).map_err(|e| e.to_string())?;
         match ev {
             Some(Event::Error(e)) => return Err(e),
@@ -508,69 +530,70 @@ pub fn render(
     Ok(out)
 }
 
-fn engine(rx: Receiver<Cmd>, tx: Sender<Event>, sh: Arc<Shared>) {
-    let dev = cpal::default_host().default_output_device();
-    let rate = dev
-        .as_ref()
-        .and_then(|d| d.default_output_config().ok())
-        .map_or(48_000, |c| c.sample_rate());
-    let (mut prod, mut cons) = RingBuffer::<f32>::new(rate as usize / 2);
-    let (csh, etx, mut read, mut vol) = (sh.clone(), tx.clone(), 0u64, 0f32);
-    let config = cpal::StreamConfig {
-        channels: 2,
-        sample_rate: rate,
-        buffer_size: cpal::BufferSize::Default,
+fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Handle) {
+    let me = thread::current();
+    let open = || -> Option<(cpal::Stream, Producer<f32>, u32)> {
+        let dev = cpal::default_host().default_output_device()?;
+        let rate = dev.default_output_config().ok()?.sample_rate();
+        let (prod, mut cons) = RingBuffer::<f32>::new(rate as usize / 2);
+        let (csh, etx, me, half) = (sh.clone(), tx.clone(), me.clone(), rate as usize / 4);
+        let (mut read, mut vol) = (0u64, 0f32);
+        let config = cpal::StreamConfig {
+            channels: 2,
+            sample_rate: rate,
+            buffer_size: cpal::BufferSize::Default,
+        };
+        let stream = dev
+            .build_output_stream(
+                config,
+                move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    let stale = csh.flush.load(Relaxed).saturating_sub(read) as usize;
+                    if stale > 0
+                        && let Ok(c) = cons.read_chunk(stale.min(cons.slots()))
+                    {
+                        read += c.len() as u64;
+                        c.commit_all();
+                    }
+                    let n = cons.pop_partial_slice(out).0.len();
+                    out[n..].fill(0.0);
+                    let target = f32::from_bits(csh.volume.load(Relaxed)).powi(3);
+                    out.as_chunks_mut::<2>().0.iter_mut().for_each(|f| {
+                        vol += (target - vol) * 0.002;
+                        f[0] *= vol;
+                        f[1] *= vol;
+                    });
+                    read += n as u64;
+                    csh.read.store(read, Relaxed);
+                    if cons.slots() < half {
+                        me.unpark();
+                    }
+                },
+                move |e| drop(etx.send(Event::Error(e.to_string()))),
+                None,
+            )
+            .ok()?;
+        Some((stream, prod, rate))
     };
-    let stream = dev.and_then(|d| {
-        d.build_output_stream(
-            config,
-            move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let stale = csh.flush.load(Relaxed).saturating_sub(read) as usize;
-                if stale > 0
-                    && let Ok(c) = cons.read_chunk(stale.min(cons.slots()))
-                {
-                    read += c.len() as u64;
-                    c.commit_all();
-                }
-                let n = cons.pop_partial_slice(out).0.len();
-                out[n..].fill(0.0);
-                let target = f32::from_bits(csh.volume.load(Relaxed)).powi(3);
-                out.as_chunks_mut::<2>().0.iter_mut().for_each(|f| {
-                    vol += (target - vol) * 0.002;
-                    f[0] *= vol;
-                    f[1] *= vol;
-                });
-                read += n as u64;
-                csh.read.store(read, Relaxed);
-            },
-            move |e| drop(etx.send(Event::Error(e.to_string()))),
-            None,
-        )
-        .ok()
-    });
-    let Ok(mut mix) = Mixer::new(rate) else { return };
-    let (mut written, mut running, mut buf) = (0u64, true, vec![0f32; CHUNK * 2]);
+    let mut mix = Mixer::new(rt, 0);
+    let mut out: Option<(cpal::Stream, Producer<f32>)> = None;
+    let (mut written, mut running, mut idle) = (0u64, false, None::<Instant>);
+    let mut buf = vec![0f32; CHUNK * 2];
     let (mut marks, mut events) = (VecDeque::<(u64, f32)>::new(), VecDeque::<(u64, Event)>::new());
     loop {
-        let first = match running {
-            true => match rx.recv_timeout(Duration::from_millis(10)) {
-                Err(RecvTimeoutError::Disconnected) => return,
-                r => r.ok(),
-            },
-            false => match rx.recv() {
-                Ok(c) => Some(c),
-                Err(_) => return,
-            },
-        };
         let mut play = None;
-        for cmd in first.into_iter().chain(rx.try_iter()) {
-            if matches!(cmd, Cmd::Play(_) | Cmd::Seek(_) | Cmd::Stop) {
+        loop {
+            let cmd = match rx.try_recv() {
+                Ok(c) => c,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return,
+            };
+            if !matches!(cmd, Cmd::Next(_)) {
                 sh.flush.store(written, Relaxed);
                 marks.clear();
                 events.clear();
             }
             match cmd {
-                Cmd::Play(t) => (mix.cur, mix.inc, play) = (None, None, Some(t)),
+                Cmd::Play(t, at) => (mix.cur, mix.inc, play) = (None, None, Some((t, at))),
                 Cmd::Next(t) => (mix.next, mix.pre) = (t, None),
                 Cmd::Seek(s) => {
                     if let Err(e) = mix.seek(s) {
@@ -582,37 +605,50 @@ fn engine(rx: Receiver<Cmd>, tx: Sender<Event>, sh: Arc<Shared>) {
                     (mix.cur, mix.inc) = (None, None);
                     sh.pos.store(0, Relaxed);
                 }
-                Cmd::Wake => {}
-            }
-        }
-        if let Some(t) = play {
-            sh.pos.store(0, Relaxed);
-            let opened = match stream {
-                Some(_) => Source::open(t, mix.rt.handle(), rate, 0.0),
-                None => Err("no audio output device".into()),
-            };
-            match opened {
-                Ok(s) => {
-                    events.push_back((written, Event::Started(s.track.id.clone())));
-                    mix.cur = Some(s);
-                }
-                Err(e) => drop(tx.send(Event::Error(e))),
             }
         }
         let paused = sh.paused.load(Relaxed);
-        while !paused && mix.cur.is_some() && prod.slots() >= buf.len() {
-            let (speed, cf) = (
-                f32::from_bits(sh.speed.load(Relaxed)),
-                f32::from_bits(sh.crossfade.load(Relaxed)),
-            );
-            let (n, ev) = mix.step(&mut buf, speed, cf).unwrap_or_else(|e| {
-                (mix.cur, mix.inc) = (None, None);
-                (0, Some(Event::Error(e.to_string())))
-            });
-            let _ = prod.push_entire_slice(&buf[..n * 2]);
-            written += n as u64 * 2;
-            marks.extend(mix.inc.as_ref().or(mix.cur.as_ref()).map(|s| (written, s.pos())));
-            events.extend(ev.map(|e| (written, e)));
+        if out.is_none() && !paused && (play.is_some() || mix.cur.is_some()) {
+            let pos = f32::from_bits(sh.pos.load(Relaxed));
+            match open()
+                .ok_or_else(|| "no audio output device".to_string())
+                .and_then(|(s, p, rate)| mix.reopen(rate, pos).map(|_| (s, p)))
+            {
+                Ok(o) => {
+                    (written, running, idle) = (0, false, None);
+                    sh.read.store(0, Relaxed);
+                    sh.flush.store(0, Relaxed);
+                    marks.clear();
+                    events.clear();
+                    out = Some(o);
+                }
+                Err(e) => {
+                    (mix.cur, mix.inc, play) = (None, None, None);
+                    let _ = tx.send(Event::Error(e));
+                }
+            }
+        }
+        if let Some((t, at)) = play {
+            match Source::open(t, &mix.rt, mix.rate, at) {
+                Ok(s) => mix.cur = Some(s),
+                Err(e) => drop(tx.send(Event::Error(e))),
+            }
+        }
+        if let Some((_, prod)) = &mut out {
+            while !paused && mix.cur.is_some() && prod.slots() >= buf.len() {
+                let (speed, cf) = (
+                    f32::from_bits(sh.speed.load(Relaxed)),
+                    f32::from_bits(sh.crossfade.load(Relaxed)),
+                );
+                let (n, ev) = mix.step(&mut buf, speed, cf).unwrap_or_else(|e| {
+                    (mix.cur, mix.inc) = (None, None);
+                    (0, Some(Event::Error(e.to_string())))
+                });
+                let _ = prod.push_entire_slice(&buf[..n * 2]);
+                written += n as u64 * 2;
+                marks.extend(mix.inc.as_ref().or(mix.cur.as_ref()).map(|s| (written, s.pos())));
+                events.extend(ev.map(|e| (written, e)));
+            }
         }
         let read = sh.read.load(Relaxed);
         while let Some((_, p)) = marks.front().filter(|m| m.0 <= read) {
@@ -623,9 +659,23 @@ fn engine(rx: Receiver<Cmd>, tx: Sender<Event>, sh: Arc<Shared>) {
             let _ = events.pop_front().map(|e| tx.send(e.1));
         }
         let want = !paused && (mix.cur.is_some() || !events.is_empty());
-        if want != running {
+        if let Some((s, _)) = &out
+            && want != running
+        {
             running = want;
-            let _ = stream.as_ref().map(|s| if want { s.play() } else { s.pause() });
+            let _ = if want { s.play() } else { s.pause() };
+        }
+        let left = idle.get_or_insert_with(Instant::now).elapsed();
+        match (&out, want) {
+            (Some(_), true) => {
+                idle = None;
+                thread::park();
+            }
+            (Some(_), false) if left < CLOSE => thread::park_timeout(CLOSE - left),
+            _ => {
+                (out, idle) = (None, None);
+                thread::park();
+            }
         }
     }
 }
