@@ -73,7 +73,6 @@ pub enum Set {
     Trans(u8),
     Bitrate(u32),
     Qsync(bool),
-    Discord(bool),
     Speed(f32),
 }
 
@@ -217,7 +216,6 @@ pub struct App {
     pub cover_tasks: usize,
     pub player: Option<navify_audio::Player>,
     media: Option<souvlaki::MediaControls>,
-    discord: Option<std::sync::mpsc::Sender<Option<(String, String, i64)>>>,
     os: (String, bool),
     tx: tokio::sync::mpsc::UnboundedSender<Message>,
     pub queue: Vec<Song>,
@@ -511,7 +509,6 @@ impl App {
                 p
             }),
             media: None,
-            discord: None,
             os: Default::default(),
             tx,
             queue: Vec::new(),
@@ -921,40 +918,6 @@ impl App {
     pub fn update(&mut self, m: Message) -> Task<Message> {
         let seek = matches!(m, Message::Seek(_));
         let t = self.handle(m);
-        if self.cfg.settings.discord != self.discord.is_some() {
-            self.discord = self.cfg.settings.discord.then(|| {
-                let (tx, rx) = std::sync::mpsc::channel::<Option<(String, String, i64)>>();
-                std::thread::spawn(move || {
-                    use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
-                    let mut c: Option<DiscordIpcClient> = None;
-                    for msg in rx {
-                        if c.is_none() {
-                            let mut n = DiscordIpcClient::new(DISCORD_ID);
-                            c = n.connect().ok().map(|_| n);
-                        }
-                        let Some(cl) = &mut c else { continue };
-                        let r = match msg {
-                            Some((title, artist, start)) => cl.set_activity(
-                                activity::Activity::new()
-                                    .activity_type(activity::ActivityType::Listening)
-                                    .details(title)
-                                    .state(artist)
-                                    .timestamps(activity::Timestamps::new().start(start)),
-                            ),
-                            None => cl.clear_activity(),
-                        };
-                        if r.is_err() {
-                            c = None;
-                        }
-                    }
-                    if let Some(mut c) = c {
-                        let _ = c.close();
-                    }
-                });
-                tx
-            });
-            self.os = Default::default();
-        }
         let key = (self.current_song().map_or(String::new(), |s| s.id.clone()), self.playing);
         if key == self.os && !seek {
             return t;
@@ -982,13 +945,6 @@ impl App {
                 (_, true) => souvlaki::MediaPlayback::Playing { progress },
                 _ => souvlaki::MediaPlayback::Paused { progress },
             });
-        }
-        if let Some(d) = &self.discord {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs() as i64);
-            let _ = d
-                .send(song.filter(|_| self.playing).map(|s| (s.title, s.artist, now - pos as i64)));
         }
         t
     }
@@ -1486,7 +1442,6 @@ impl App {
                     }
                     Set::Bitrate(v) => self.cfg.settings.transcode_max_bitrate = v,
                     Set::Qsync(b) => self.cfg.settings.queue_sync = b,
-                    Set::Discord(b) => self.cfg.settings.discord = b,
                     Set::Speed(v) => {
                         self.cfg.settings.speed = v;
                         if let Some(p) = &self.player {
@@ -1952,8 +1907,6 @@ static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 
 static RX: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Message>>> =
     std::sync::Mutex::new(None);
-
-const DISCORD_ID: &str = "0";
 
 impl App {
     pub fn view(&self) -> iced::Element<'_, Message> {

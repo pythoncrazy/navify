@@ -9,7 +9,7 @@ It uses few resources. It runs on Linux, macOS, and Windows.
 - Browse albums, artists, playlists, and folders.
 - Search, lyrics, artist radio, and liked songs.
 - Sync the play queue with the server.
-- Control playback with media keys and Discord Rich Presence.
+- Control playback with media keys and the system media controls.
 
 ## Build
 

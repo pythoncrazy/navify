@@ -1259,11 +1259,6 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 "Sync the play queue with the server",
                 tog(st.queue_sync, |b| Message::Set(Set::Qsync(b)))
             ),
-            section("Integrations"),
-            line(
-                "Show the current song in Discord",
-                tog(st.discord, |b| Message::Set(Set::Discord(b)))
-            ),
             section("Servers"),
         ]
         .extend(servers)

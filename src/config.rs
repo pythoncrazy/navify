@@ -23,7 +23,6 @@ pub struct Settings {
     pub volume: f32,
     pub transcode_format: String,
     pub transcode_max_bitrate: u32,
-    pub discord: bool,
     pub queue_sync: bool,
     pub window: (f32, f32),
 }
@@ -38,7 +37,6 @@ impl Default for Settings {
             volume: 0.8,
             transcode_format: String::new(),
             transcode_max_bitrate: 0,
-            discord: false,
             queue_sync: true,
             window: (1280.0, 800.0),
         }
