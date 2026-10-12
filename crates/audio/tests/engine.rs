@@ -9,6 +9,7 @@ fn rt() -> &'static tokio::runtime::Handle {
 }
 
 fn server() -> (String, String) {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let [host, user, pass] =
         ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"]
             .map(|k| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set")));
