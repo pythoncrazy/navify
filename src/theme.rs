@@ -1,6 +1,8 @@
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
 use iced::font::{Family, Weight};
 use iced::widget::{button, container, scrollable, slider, text, text_input, toggler};
-use iced::{Border, Color, Font, Shadow, Theme, color};
+use iced::{Border, Color, Font, Gradient, Radians, Shadow, Theme, color, gradient};
 
 pub const BG: Color = color!(0x000000);
 pub const PANEL: Color = color!(0x121212);
@@ -10,48 +12,87 @@ pub const MENU_HOVER: Color = color!(0x3e3e3e);
 pub const CHIP: Color = color!(0x2a2a2a);
 pub const TEXT: Color = color!(0xffffff);
 pub const SUB: Color = color!(0xb3b3b3);
+pub const DIM: Color = color!(0x6a6a6a);
 pub const ACCENT: Color = color!(0x1ed760);
 pub const TRACK: Color = color!(0x4d4d4d);
 pub const FIELD: Color = color!(0x727272);
-pub const SUB2: Color = color!(0xa7a7a7);
-pub const ACCENT_H: Color = color!(0x3be477);
 pub const ERR: Color = color!(0xf15e6c);
-pub const SKEL: Color = color!(0x2a2a2a);
 pub const GRAD_A: Color = color!(0x450af5);
 pub const GRAD_B: Color = color!(0xc4efd9);
+pub const LUCIDE: Font = Font::with_name("lucide");
+
+type Txt<'a> = text::Text<'a, Theme, iced::Renderer>;
 
 pub fn tint(alpha: f32) -> Color {
     Color { a: alpha, ..Color::WHITE }
 }
 
-pub fn hover(_c: Color) -> Color {
-    Color { a: 0.1, ..Color::WHITE }
+pub fn shade(c: Color, k: f32) -> Color {
+    Color { r: c.r * k, g: c.g * k, b: c.b * k, a: c.a }
 }
-
-pub const LUCIDE: Font = Font::with_name("lucide");
 
 pub fn fw(w: Weight) -> Font {
     Font { family: Family::Name("Figtree"), weight: w, ..Font::DEFAULT }
 }
 
-pub fn black<'a>(t: impl ToString, size: f32) -> text::Text<'a, Theme, iced::Renderer> {
-    text(t.to_string()).size(size).font(fw(Weight::Black))
+pub fn txt<'a>(t: impl ToString, size: f32, w: Weight) -> Txt<'a> {
+    text(t.to_string()).size(size).font(fw(w))
 }
 
-pub fn bold<'a>(t: impl ToString, size: f32) -> text::Text<'a, Theme, iced::Renderer> {
-    text(t.to_string()).size(size).font(fw(Weight::Bold))
+pub fn black<'a>(t: impl ToString, size: f32) -> Txt<'a> {
+    txt(t, size, Weight::Black)
 }
 
-pub fn med<'a>(t: impl ToString, size: f32) -> text::Text<'a, Theme, iced::Renderer> {
-    text(t.to_string()).size(size).font(fw(Weight::Medium))
+pub fn bold<'a>(t: impl ToString, size: f32) -> Txt<'a> {
+    txt(t, size, Weight::Bold)
 }
 
-pub fn sub2<'a>(t: impl ToString, size: f32) -> text::Text<'a, Theme, iced::Renderer> {
-    text(t.to_string()).size(size).color(SUB2)
+pub fn med<'a>(t: impl ToString, size: f32) -> Txt<'a> {
+    txt(t, size, Weight::Medium)
 }
 
-pub fn ic(c: char) -> char {
-    c
+pub fn sub<'a>(t: impl ToString, size: f32) -> Txt<'a> {
+    txt(t, size, Weight::Normal).color(SUB)
+}
+
+pub fn icon<'a>(c: char, size: f32) -> Txt<'a> {
+    text(c).font(LUCIDE).size(size)
+}
+
+fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
+    use iced::advanced::graphics::text::{cosmic_text as ct, font_system, to_attributes};
+    type Memo = HashMap<(String, u32, Weight), Rc<[(f32, usize)]>>;
+    thread_local!(static MEMO: RefCell<Memo> = RefCell::default());
+    MEMO.with_borrow_mut(|m| {
+        if m.len() > 2048 {
+            m.clear();
+        }
+        m.entry((s.to_string(), size.to_bits(), w))
+            .or_insert_with(|| {
+                let Ok(mut fs) = font_system().write() else { return Rc::new([]) };
+                let fs = fs.raw();
+                let mut b = ct::Buffer::new(fs, ct::Metrics::new(size, size * 1.3));
+                b.set_text(fs, s, &to_attributes(fw(w)), ct::Shaping::Advanced, None);
+                b.layout_runs().flat_map(|r| r.glyphs.iter().map(|g| (g.x + g.w, g.end))).collect()
+            })
+            .clone()
+    })
+}
+
+pub fn width(s: &str, size: f32, w: Weight) -> f32 {
+    glyphs(s, size, w).last().map_or(0.0, |g| g.0)
+}
+
+pub fn ell<'a>(s: &str, px: f32, size: f32, w: Weight) -> Txt<'a> {
+    let g = glyphs(s, size, w);
+    let t = if g.last().is_none_or(|g| g.0 <= px) {
+        s.to_string()
+    } else {
+        let room = px - width("\u{2026}", size, w);
+        let cut = g.iter().take_while(|g| g.0 <= room).last().map_or(0, |g| g.1);
+        format!("{}\u{2026}", s[..cut].trim_end())
+    };
+    txt(t, size, w).wrapping(text::Wrapping::None)
 }
 
 pub mod icon {
@@ -73,14 +114,10 @@ pub mod icon {
     pub const VOL1: char = '\u{e1aa}';
     pub const MUTE: char = '\u{e1ac}';
     pub const PLUS: char = '\u{e13d}';
-    pub const GRID: char = '\u{e0ff}';
-    pub const DOWNLOAD: char = '\u{e0b2}';
     pub const SETTINGS: char = '\u{e154}';
     pub const MUSIC: char = '\u{e122}';
     pub const ALBUM: char = '\u{e494}';
     pub const RADIO: char = '\u{e142}';
-    pub const DOWN: char = '\u{e06d}';
-    pub const UP: char = '\u{e070}';
     pub const LEFT: char = '\u{e06e}';
     pub const RIGHT: char = '\u{e06f}';
     pub const X: char = '\u{e1b2}';
@@ -91,39 +128,18 @@ pub mod icon {
     pub const CLOCK: char = '\u{e087}';
     pub const LISTPLUS: char = '\u{e23f}';
     pub const USER: char = '\u{e19f}';
-    pub const USERS: char = '\u{e1a4}';
     pub const LOGOUT: char = '\u{e10e}';
     pub const STAR: char = '\u{e176}';
     pub const FOLDER: char = '\u{e0d7}';
-    pub const CIRPLAY: char = '\u{e080}';
-    pub const CIRPAUSE: char = '\u{e07f}';
-    pub const REFRESH: char = '\u{e145}';
     pub const PENCIL: char = '\u{e1f9}';
     pub const TRASH: char = '\u{e18e}';
-    pub const INFO: char = '\u{e0f9}';
-    pub const SPIN: char = '\u{e10a}';
-    pub const ALERT: char = '\u{e077}';
-    pub const PL: char = '\u{e12a}';
     pub const PR: char = '\u{e431}';
     pub const SERVER: char = '\u{e153}';
     pub const SPEED: char = '\u{e29a}';
-    pub const FF: char = '\u{e0bd}';
-    pub const RW: char = '\u{e147}';
-    pub const IMAGE: char = '\u{e0f6}';
-    pub const HIST: char = '\u{e1f5}';
-    pub const LISTCHK: char = '\u{e1d0}';
     pub const MINUS: char = '\u{e11c}';
 }
 
-pub fn icon<'a>(c: char, size: f32) -> text::Text<'a, Theme, iced::Renderer> {
-    text(c).font(LUCIDE).size(size)
-}
-
-pub fn sub<'a>(t: impl ToString, size: f32) -> text::Text<'a, Theme, iced::Renderer> {
-    text(t.to_string()).size(size).color(SUB)
-}
-
-fn bg(color: Color, radius: f32) -> container::Style {
+fn bg(color: impl Into<iced::Background>, radius: f32) -> container::Style {
     container::Style::default().background(color).border(Border::default().rounded(radius))
 }
 
@@ -135,41 +151,88 @@ pub fn elevated(_: &Theme) -> container::Style {
     bg(ELEVATED, 8.0)
 }
 
-pub fn card(_: &Theme) -> container::Style {
-    container::Style::default().border(Border::default().rounded(6.0))
+pub fn skel(_: &Theme) -> container::Style {
+    bg(CHIP, 4.0)
+}
+
+pub fn fill(c: Color, radius: f32) -> impl Fn(&Theme) -> container::Style {
+    move |_| bg(c, radius)
 }
 
 pub fn menu(_: &Theme) -> container::Style {
     container::Style {
-        background: Some(MENU.into()),
-        border: Border::default().rounded(4.0),
-        shadow: Shadow { color: Color { a: 0.6, ..BG }, blur_radius: 16.0, ..Shadow::default() },
-        ..container::Style::default()
+        shadow: Shadow { color: Color { a: 0.5, ..BG }, blur_radius: 24.0, ..Shadow::default() },
+        ..bg(MENU, 4.0)
     }
 }
 
-pub fn toast(_: &Theme) -> container::Style {
-    bg(MENU, 500.0)
-}
-
-pub fn header(color: Color) -> impl Fn(&Theme) -> container::Style {
+pub fn grad(top: Color, bottom: Color) -> impl Fn(&Theme) -> container::Style {
     move |_| {
-        container::Style::default().background(iced::Gradient::Linear(
-            iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI * 1.5))
-                .add_stop(0.0, color)
-                .add_stop(1.0, PANEL),
-        ))
+        bg(
+            Gradient::Linear(
+                gradient::Linear::new(Radians::PI).add_stop(0.0, top).add_stop(1.0, bottom),
+            ),
+            0.0,
+        )
     }
 }
 
-pub fn search_field(_: &Theme, _s: text_input::Status) -> text_input::Style {
+pub fn fade(top: Color, stop: f32) -> impl Fn(&Theme) -> container::Style {
+    move |_| {
+        bg(
+            Gradient::Linear(
+                gradient::Linear::new(Radians::PI)
+                    .add_stop(0.0, top)
+                    .add_stop(stop.clamp(0.0, 1.0), PANEL)
+                    .add_stop(1.0, PANEL),
+            ),
+            0.0,
+        )
+    }
+}
+
+pub fn color_of(s: &str) -> Color {
+    const P: [Color; 12] = [
+        color!(0xdc148c),
+        color!(0x006450),
+        color!(0x8400e7),
+        color!(0x1e3264),
+        color!(0xe8115b),
+        color!(0x27856a),
+        color!(0x477d95),
+        color!(0xe13300),
+        color!(0xba5d07),
+        color!(0x8d67ab),
+        color!(0x509bf5),
+        color!(0x148a08),
+    ];
+    P[s.bytes().fold(7usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize)) % P.len()]
+}
+
+pub fn diagonal(radius: f32) -> impl Fn(&Theme) -> container::Style {
+    move |_| {
+        bg(
+            Gradient::Linear(
+                gradient::Linear::new(Radians(2.4)).add_stop(0.0, GRAD_A).add_stop(1.0, GRAD_B),
+            ),
+            radius,
+        )
+    }
+}
+
+pub fn search_field(_: &Theme, s: text_input::Status) -> text_input::Style {
+    let hot = matches!(s, text_input::Status::Hovered | text_input::Status::Focused { .. });
     text_input::Style {
-        background: ELEVATED.into(),
-        border: Border::default().rounded(500.0),
+        background: if hot { color!(0x2a2a2a) } else { ELEVATED }.into(),
+        border: Border {
+            color: if matches!(s, text_input::Status::Focused { .. }) { TEXT } else { BG },
+            width: if matches!(s, text_input::Status::Focused { .. }) { 2.0 } else { 0.0 },
+            radius: 500.0.into(),
+        },
         icon: SUB,
         placeholder: SUB,
         value: TEXT,
-        selection: ACCENT,
+        selection: tint(0.3),
     }
 }
 
@@ -181,104 +244,118 @@ pub fn field(_: &Theme, s: text_input::Status) -> text_input::Style {
                 text_input::Status::Focused { .. } | text_input::Status::Hovered => TEXT,
                 _ => FIELD,
             },
-            width: match s {
-                text_input::Status::Focused { .. } => 2.0,
-                _ => 1.0,
-            },
+            width: if matches!(s, text_input::Status::Focused { .. }) { 2.0 } else { 1.0 },
             radius: 4.0.into(),
         },
         icon: SUB,
         placeholder: SUB,
         value: TEXT,
-        selection: ACCENT,
+        selection: tint(0.3),
     }
 }
 
-pub fn ghost(_: &Theme, s: button::Status) -> button::Style {
+fn btn_style(bg: Color, fg: Color, radius: f32) -> button::Style {
     button::Style {
-        background: Some(match s {
-            button::Status::Hovered | button::Status::Pressed => tint(0.1).into(),
-            _ => Color::TRANSPARENT.into(),
-        }),
-        text_color: TEXT,
+        background: Some(bg.into()),
+        text_color: fg,
+        border: Border::default().rounded(radius),
         ..button::Style::default()
     }
 }
 
-pub fn row(_: &Theme, s: button::Status) -> button::Style {
-    button::Style {
-        background: Some(match s {
-            button::Status::Hovered => tint(0.1).into(),
-            button::Status::Pressed => tint(0.3).into(),
-            _ => Color::TRANSPARENT.into(),
-        }),
-        text_color: TEXT,
-        ..button::Style::default()
+pub fn link(base: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, s| {
+        let hot = matches!(s, button::Status::Hovered | button::Status::Pressed);
+        btn_style(Color::TRANSPARENT, if hot { TEXT } else { base }, 0.0)
+    }
+}
+
+pub fn ghost(t: &Theme, s: button::Status) -> button::Style {
+    link(TEXT)(t, s)
+}
+
+pub fn track(sel: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, s| {
+        let a = match s {
+            button::Status::Pressed => 0.3,
+            _ if sel => 0.3,
+            button::Status::Hovered => 0.1,
+            _ => 0.0,
+        };
+        btn_style(tint(a), TEXT, 4.0)
     }
 }
 
 pub fn chip(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_, _| button::Style {
-        background: Some(if on { TEXT.into() } else { CHIP.into() }),
-        text_color: if on { BG } else { TEXT },
-        border: Border::default().rounded(500.0),
-        ..button::Style::default()
+    move |_, s| match (on, s) {
+        (true, _) => btn_style(TEXT, BG, 500.0),
+        (false, button::Status::Hovered) => btn_style(color!(0x333333), TEXT, 500.0),
+        _ => btn_style(CHIP, TEXT, 500.0),
     }
 }
 
 pub fn accent(_: &Theme, s: button::Status) -> button::Style {
+    let c = match s {
+        button::Status::Hovered => color!(0x3be477),
+        button::Status::Pressed => color!(0x1abc54),
+        _ => ACCENT,
+    };
+    btn_style(c, BG, 500.0)
+}
+
+pub fn pill(_: &Theme, s: button::Status) -> button::Style {
+    let hot = matches!(s, button::Status::Hovered | button::Status::Pressed);
     button::Style {
-        background: Some(match s {
-            button::Status::Hovered => ACCENT_H.into(),
-            button::Status::Pressed => color!(0x1abc54).into(),
-            _ => ACCENT.into(),
-        }),
-        text_color: BG,
-        border: Border::default().rounded(500.0),
-        ..button::Style::default()
+        border: Border { color: if hot { TEXT } else { FIELD }, width: 1.0, radius: 500.0.into() },
+        ..btn_style(Color::TRANSPARENT, TEXT, 500.0)
     }
 }
 
-pub fn circle(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_, _| button::Style {
-        background: Some(if on { ELEVATED.into() } else { Color::TRANSPARENT.into() }),
-        text_color: TEXT,
-        border: Border::default().rounded(500.0),
-        ..button::Style::default()
+pub fn round(c: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, s| {
+        let hot = matches!(s, button::Status::Hovered | button::Status::Pressed);
+        btn_style(if hot { color!(0x2a2a2a) } else { c }, if hot { TEXT } else { SUB }, 500.0)
     }
 }
 
-pub fn scroll(_: &Theme, _: scrollable::Status) -> scrollable::Style {
-    scrollable::Style {
-        container: container::Style::default(),
-        vertical_rail: scrollable::Rail {
-            background: None,
-            border: Border::default(),
-            scroller: scrollable::Scroller {
-                background: TRACK.into(),
-                border: Border::default().rounded(4.0),
-            },
-        },
-        horizontal_rail: scrollable::Rail {
-            background: None,
-            border: Border::default(),
-            scroller: scrollable::Scroller {
-                background: TRACK.into(),
-                border: Border::default().rounded(4.0),
-            },
-        },
-        gap: None,
-        auto_scroll: scrollable::AutoScroll {
-            background: iced::Color::TRANSPARENT.into(),
-            border: Border::default(),
-            shadow: Shadow::default(),
-            icon: iced::Color::TRANSPARENT,
-        },
-    }
+pub fn menu_item(_: &Theme, s: button::Status) -> button::Style {
+    let hot = matches!(s, button::Status::Hovered | button::Status::Pressed);
+    btn_style(if hot { MENU_HOVER } else { Color::TRANSPARENT }, TEXT, 2.0)
 }
 
-pub fn pad(top: f32, right: f32, bottom: f32, left: f32) -> iced::Padding {
-    iced::Padding::new(0.0).top(top).right(right).bottom(bottom).left(left)
+pub fn card(_: &Theme, s: button::Status) -> button::Style {
+    let c = match s {
+        button::Status::Hovered => ELEVATED,
+        button::Status::Pressed => BG,
+        _ => Color::TRANSPARENT,
+    };
+    btn_style(c, TEXT, 6.0)
+}
+
+pub fn tile(_: &Theme, s: button::Status) -> button::Style {
+    let a = match s {
+        button::Status::Hovered => 0.2,
+        button::Status::Pressed => 0.3,
+        _ => 0.1,
+    };
+    btn_style(tint(a), TEXT, 4.0)
+}
+
+pub fn seek(_: &Theme, s: slider::Status) -> slider::Style {
+    let hot = matches!(s, slider::Status::Hovered | slider::Status::Dragged);
+    slider::Style {
+        rail: slider::Rail {
+            backgrounds: (if hot { ACCENT } else { TEXT }.into(), TRACK.into()),
+            width: 4.0,
+            border: Border::default().rounded(2.0),
+        },
+        handle: slider::Handle {
+            shape: slider::HandleShape::Circle { radius: 6.0 },
+            background: if hot { TEXT } else { Color::TRANSPARENT }.into(),
+            border_color: Color::TRANSPARENT,
+            border_width: 0.0,
+        },
+    }
 }
 
 pub fn tog(_: &Theme, s: toggler::Status) -> toggler::Style {
@@ -300,97 +377,30 @@ pub fn tog(_: &Theme, s: toggler::Status) -> toggler::Style {
     }
 }
 
-pub fn skel(_: &Theme) -> container::Style {
-    container::Style::default().background(SKEL).border(Border::default().rounded(4.0))
-}
-
-pub fn navbtn(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_, _| button::Style {
-        background: Some(BG.into()),
-        text_color: if on { TEXT } else { color!(0x6a6a6a) },
-        border: Border::default().rounded(500.0),
-        ..button::Style::default()
-    }
-}
-
-pub fn menu_item(_: &Theme, s: button::Status) -> button::Style {
-    button::Style {
-        background: Some(match s {
-            button::Status::Hovered => MENU_HOVER.into(),
-            _ => Color::TRANSPARENT.into(),
-        }),
-        text_color: TEXT,
-        ..button::Style::default()
-    }
-}
-
-pub fn card_hover(_: &Theme, s: button::Status) -> button::Style {
-    button::Style {
-        background: Some(match s {
-            button::Status::Hovered => ELEVATED.into(),
-            button::Status::Pressed => color!(0x2a2a2a).into(),
-            _ => Color::TRANSPARENT.into(),
-        }),
-        text_color: TEXT,
-        border: Border::default().rounded(6.0),
-        ..button::Style::default()
-    }
-}
-
-pub fn track(sel: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_, s| button::Style {
-        background: Some(match s {
-            button::Status::Pressed => tint(0.3).into(),
-            button::Status::Hovered => tint(0.1).into(),
-            _ if sel => tint(0.3).into(),
-            _ => Color::TRANSPARENT.into(),
-        }),
-        text_color: TEXT,
-        border: Border::default().rounded(4.0),
-        ..button::Style::default()
-    }
-}
-
-pub fn seek(_: &Theme, s: slider::Status) -> slider::Style {
-    let hot = matches!(s, slider::Status::Hovered | slider::Status::Dragged);
-    slider::Style {
-        rail: slider::Rail {
-            backgrounds: (TRACK.into(), if hot { ACCENT } else { TEXT }.into()),
-            width: 4.0,
-            border: Border::default().rounded(2.0),
+pub fn scroll(_: &Theme, s: scrollable::Status) -> scrollable::Style {
+    let hot = !matches!(s, scrollable::Status::Active { .. });
+    let rail = scrollable::Rail {
+        background: None,
+        border: Border::default(),
+        scroller: scrollable::Scroller {
+            background: tint(if hot { 0.3 } else { 0.15 }).into(),
+            border: Border::default(),
         },
-        handle: slider::Handle {
-            shape: slider::HandleShape::Circle { radius: 6.0 },
-            background: if hot { TEXT } else { Color::TRANSPARENT }.into(),
-            border_color: Color::TRANSPARENT,
-            border_width: 0.0,
+    };
+    scrollable::Style {
+        container: container::Style::default(),
+        vertical_rail: rail,
+        horizontal_rail: rail,
+        gap: None,
+        auto_scroll: scrollable::AutoScroll {
+            background: Color::TRANSPARENT.into(),
+            border: Border::default(),
+            shadow: Shadow::default(),
+            icon: Color::TRANSPARENT,
         },
     }
 }
 
-pub fn tile(_: &Theme, s: button::Status) -> button::Style {
-    button::Style {
-        background: Some(match s {
-            button::Status::Hovered => tint(0.2).into(),
-            button::Status::Pressed => tint(0.3).into(),
-            _ => tint(0.07).into(),
-        }),
-        text_color: TEXT,
-        border: Border::default().rounded(4.0),
-        ..button::Style::default()
-    }
-}
-
-pub fn ell(s: &str, px: f32, size: f32) -> String {
-    let max = (px / (size * 0.52)).floor() as usize;
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        while t.ends_with(' ') {
-            t.pop();
-        }
-        t.push('\u{2026}');
-        t
-    }
+pub fn pad(top: f32, right: f32, bottom: f32, left: f32) -> iced::Padding {
+    iced::Padding { top, right, bottom, left }
 }

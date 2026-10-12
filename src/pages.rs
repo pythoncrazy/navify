@@ -1,1579 +1,1759 @@
-use iced::widget::text::Wrapping;
+use iced::font::Weight;
 use iced::widget::{
-    Column, Row, Space, button, column, container, mouse_area, pick_list, row, scrollable, slider,
-    text, text_input, toggler,
+    Column, Row, Space, button, column, container, hover, image, mouse_area, pick_list, row,
+    scrollable, slider, stack, text, text_input, toggler,
 };
-use iced::{Alignment, Color, Element, Fill, Font, Length, color};
+use iced::{Alignment, Color, Element, Fill, color};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Song};
 use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, Set};
 use crate::theme::{self, icon, icon as i};
-use crate::view::{artists_line, btn, cover, fmt_long, icon_btn};
+use crate::view::{artists_line, btn, cover, fmt_dur, fmt_long, icon_btn, liked_art};
 
-fn bold(t: impl ToString, s: f32) -> text::Text<'static> {
-    theme::bold(t.to_string(), s)
-}
+type El<'a> = Element<'a, Message>;
+type Cols = (f32, f32, f32);
 
-fn med(t: impl ToString, s: f32) -> text::Text<'static> {
-    theme::med(t.to_string(), s)
-}
+pub const PAD: f32 = 24.0;
+pub const ROW: f32 = 56.0;
+pub const GRID_Y: f32 = 136.0;
+const BAR: f32 = 104.0;
+const HEAD: f32 = 45.0;
+const GREY: Color = color!(0x535353);
 
 pub fn head_color(app: &App, id: &str) -> Color {
-    app.covers.color.get(id).copied().unwrap_or(color!(0x503a55))
+    app.covers.color.get(id).copied().unwrap_or(GREY)
 }
 
-fn menu_item<'a>(ic: char, label: &str, msg: Message) -> Element<'a, Message> {
-    btn(
-        row![i(ic, 15.0).color(theme::SUB), text(label.to_string()).size(13)]
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .padding([6, 12])
-            .width(210),
-        msg,
-    )
+pub fn art_px(app: &App) -> f32 {
+    (128.0 + (app.main_w() - 600.0) * 104.0 / 424.0).clamp(128.0, 232.0)
+}
+
+fn cols(app: &App, album: bool, date: bool) -> Cols {
+    let w = app.main_w() - 2.0 * PAD - 32.0 - 16.0 - 16.0 - 120.0 - 16.0;
+    let (album, date) = (album && w > 480.0, date && w > 640.0);
+    let w = w - 16.0 * (album as u8 + date as u8) as f32;
+    let fr = w / (6.0 + if album { 4.0 } else { 0.0 } + if date { 3.0 } else { 0.0 });
+    let (a, d) = (if album { fr * 4.0 } else { 0.0 }, if date { fr * 3.0 } else { 0.0 });
+    (w - a - d, a, d)
+}
+
+fn round_btn<'a>(c: char, px: f32, m: Message) -> El<'a> {
+    button(i(c, px * 0.4).color(theme::BG).center())
+        .width(px)
+        .height(px)
+        .padding(0)
+        .style(theme::accent)
+        .on_press(m)
+        .into()
+}
+
+fn heading<'a>(t: &str, all: Option<String>) -> El<'a> {
+    let r = row![theme::bold(t, 24.0), Space::new().width(Fill)].align_y(Alignment::Center);
+    container(r.push(all.map(|r| {
+        button(theme::bold("Show all", 14.0))
+            .padding(0)
+            .style(theme::link(theme::SUB))
+            .on_press(Message::Nav(r))
+    })))
+    .padding([0.0, PAD])
     .into()
 }
 
-fn menu_sub<'a>(ic: char, label: &str, sub: u8) -> Element<'a, Message> {
-    btn(
-        row![
-            i(ic, 15.0).color(theme::SUB),
-            text(label.to_string()).size(13),
-            Space::new().width(Fill),
-            i(icon::RIGHT, 12.0).color(theme::SUB),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center)
-        .padding([6, 12])
-        .width(210),
-        Message::MenuSub(sub),
-    )
+fn sep<'a>() -> El<'a> {
+    container(Space::new()).width(Fill).height(1).style(theme::fill(theme::tint(0.1), 0.0)).into()
+}
+
+fn table_head<'a>(c: Cols) -> El<'a> {
+    let h = |t: &'static str, w: f32| (w > 0.0).then(|| theme::sub(t, 14.0).width(w));
+    container(column![
+        row![theme::sub("#", 16.0).width(16).center()]
+            .push(h("Title", c.0))
+            .push(h("Album", c.1))
+            .push(h("Date added", c.2))
+            .push(
+                container(i(icon::CLOCK, 16.0).color(theme::SUB))
+                    .width(120)
+                    .align_x(Alignment::End)
+                    .padding(theme::pad(0.0, 52.0, 0.0, 0.0))
+            )
+            .spacing(16)
+            .padding([0, 16])
+            .height(36)
+            .align_y(Alignment::Center),
+        sep(),
+    ])
+    .padding(theme::pad(0.0, PAD, 8.0, PAD))
     .into()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn track_row<'a>(
-    app: &'a App,
-    s: &'a Song,
-    n: usize,
-    songs: &'a [Song],
-    source: &'a str,
-    show_album: bool,
-    show_date: bool,
-    context_idx: Option<usize>,
-) -> Element<'a, Message> {
-    let cur = app.current_song().is_some_and(|c| c.id == s.id);
-    let starred = app.starred.get(&s.id).copied().unwrap_or(s.starred);
-    let sel = app.sel.as_deref() == Some(s.id.as_str());
-    let idx: Element<Message> = if cur && app.playing {
-        i(icon::EQ, 14.0).color(theme::ACCENT).center().width(24).into()
-    } else {
-        text(n + 1)
-            .size(13)
+fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'a> {
+    let hk = format!("{key}#{n}");
+    let hot = app.hover.as_deref() == Some(hk.as_str());
+    let sel = app.sel.as_deref() == Some(hk.as_str());
+    let cur = app.current_song().is_some_and(|x| x.id == s.id);
+    let starred = app.is_starred(&s.id, s.starred);
+    let art = !key.starts_with("album:");
+    let kind = || {
+        Box::new(match key.strip_prefix("playlist:") {
+            Some(_) => MenuKind::SongIn(s.clone(), n),
+            None => MenuKind::Song(s.clone()),
+        })
+    };
+    let idx: El = match (hot, cur && app.playing) {
+        (true, true) => btn(i(icon::PAUSE, 16.0).center(), Message::Toggle).width(16).into(),
+        (true, false) => {
+            btn(i(icon::PLAY, 16.0).center(), Message::PlayAt(key.into(), n)).width(16).into()
+        }
+        (false, true) => i(icon::EQ, 16.0).color(theme::ACCENT).width(16).center().into(),
+        _ => theme::txt(n + 1, 16.0, Weight::Normal)
             .color(if cur { theme::ACCENT } else { theme::SUB })
+            .width(16)
             .center()
-            .width(24)
-            .into()
-    };
-    let mut r = Row::new().spacing(8).align_y(Alignment::Center).padding([0, 8]);
-    r = r.push(idx);
-    r = r.push(
-        column![
-            text(s.title.clone()).size(14).wrapping(Wrapping::None).color(if cur {
-                theme::ACCENT
-            } else {
-                theme::TEXT
-            }),
-            artists_line(&s.artists, 12.0),
-        ]
-        .spacing(2)
-        .width(Length::FillPortion(4)),
-    );
-    if show_album {
-        r = r.push(
-            container(btn(
-                theme::sub(theme::ell(&s.album, 280.0, 13.0), 13.0),
-                Message::Nav(format!("album:{}", s.album_id)),
-            ))
-            .width(Length::FillPortion(3)),
-        );
-    }
-    if show_date {
-        r = r.push(container(theme::sub(&s.created[..s.created.len().min(10)], 13.0)).width(90));
-    }
-    r = r.push(btn(
-        i(icon::HEART, 15.0)
-            .color(if starred { theme::ACCENT } else { theme::SUB })
-            .center()
-            .width(24),
-        Message::Star(s.id.clone(), !starred),
-    ));
-    r = r.push(theme::sub(crate::view::fmt_dur(s.duration), 13.0).width(48));
-    r = r.push(icon_btn(
-        icon::DOTS,
-        14.0,
-        Message::Menu(Box::new(
-            context_idx.map_or(MenuKind::Song(s.clone()), |i| MenuKind::SongIn(s.clone(), i)),
-        )),
-    ));
-    let row_el: Element<Message> = mouse_area(
-        button(container(r).height(56).width(Fill).center_y(56))
-            .width(Fill)
-            .style(theme::track(sel))
-            .on_press(Message::Select(s.id.clone())),
-    )
-    .on_double_click(Message::Play(songs.to_vec(), n, source.to_string()))
-    .on_right_press(Message::Menu(Box::new(
-        context_idx.map_or(MenuKind::Song(s.clone()), |i| MenuKind::SongIn(s.clone(), i)),
-    )))
-    .into();
-    row_el
-}
-
-pub fn sticky_track_header<'a>(app: &'a App) -> Option<Element<'a, Message>> {
-    let off = app.scrolls.get(&app.route).map(|(o, _)| *o).unwrap_or(0.0);
-    if off < 395.0 {
-        return None;
-    }
-    let (show_album, show_date) = match app.route.split(':').next().unwrap_or("") {
-        "album" => (false, false),
-        "liked" => (true, false),
-        "playlist" => (true, true),
-        _ => return None,
-    };
-    Some(
-        container(track_header(show_album, show_date))
-            .width(Fill)
-            .padding(theme::pad(0.0, 16.0, 0.0, 16.0))
-            .style(|_| container::Style::default().background(theme::PANEL))
             .into(),
-    )
-}
-
-fn track_header<'a>(show_album: bool, show_date: bool) -> Element<'a, Message> {
-    let mut r = Row::new().spacing(8).align_y(Alignment::Center).padding([0, 8]);
-    r = r.push(text("#").size(12).color(theme::SUB).center().width(24));
-    r = r.push(container(theme::sub("Title", 12.0)).width(Length::FillPortion(4)));
-    if show_album {
-        r = r.push(container(theme::sub("Album", 12.0)).width(Length::FillPortion(3)));
-    }
-    if show_date {
-        r = r.push(container(theme::sub("Date added", 12.0)).width(90));
-    }
-    r = r.push(Space::new().width(24));
-    r = r.push(container(i(icon::CLOCK, 13.0).color(theme::SUB).center()).width(48));
-    r = r.push(Space::new().width(32));
-    column![
-        r.height(32),
-        container(Space::new())
-            .height(1)
-            .style(|_| { container::Style::default().background(theme::tint(0.15)) })
+    };
+    let tw = c.0 - if art { 52.0 } else { 0.0 };
+    let title = column![
+        theme::ell(&s.title, tw, 16.0, Weight::Normal).color(if cur {
+            theme::ACCENT
+        } else {
+            theme::TEXT
+        }),
+        artists_line(&s.artists, 14.0, tw),
     ]
-    .into()
+    .spacing(2);
+    let date = || {
+        const M: [&str; 12] =
+            ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let d: Vec<usize> =
+            s.created.get(..10).unwrap_or("").split('-').filter_map(|x| x.parse().ok()).collect();
+        match d[..] {
+            [y, m @ 1..=12, day] => format!("{} {day}, {y}", M[m - 1]),
+            _ => String::new(),
+        }
+    };
+    let heart = (hot || starred).then(|| {
+        button(i(icon::HEART, 16.0).center())
+            .width(32)
+            .height(32)
+            .padding(0)
+            .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
+            .on_press(Message::Star(s.id.clone(), !starred))
+    });
+    let last = row![
+        container(heart).width(32),
+        theme::sub(fmt_dur(s.duration), 14.0).width(56).align_x(Alignment::End),
+        container(hot.then(|| icon_btn(icon::DOTS, 16.0, Message::Menu(kind())))).width(32),
+    ]
+    .align_y(Alignment::Center);
+    let r = row![
+        idx,
+        row![art.then(|| cover(app, &s.cover, 128, 40.0, false)), title]
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .width(c.0)
+    ]
+    .push((c.1 > 0.0).then(|| {
+        container(
+            button(theme::ell(&s.album, c.1, 14.0, Weight::Normal))
+                .padding(0)
+                .style(theme::link(theme::SUB))
+                .on_press(Message::Nav(format!("album:{}", s.album_id))),
+        )
+        .width(c.1)
+    }))
+    .push((c.2 > 0.0).then(|| theme::sub(date(), 14.0).width(c.2)))
+    .push(last)
+    .spacing(16)
+    .padding([0, 16])
+    .height(ROW)
+    .align_y(Alignment::Center);
+    let a = if sel {
+        0.3
+    } else if hot {
+        0.1
+    } else {
+        0.0
+    };
+    mouse_area(container(r).style(theme::fill(theme::tint(a), 4.0)))
+        .on_press(Message::Select(hk.clone()))
+        .on_double_click(Message::PlayAt(key.into(), n))
+        .on_right_press(Message::Menu(kind()))
+        .on_enter(Message::Hover(hk.clone(), true))
+        .on_exit(Message::Hover(hk, false))
+        .into()
 }
 
-fn vlist<'a>(
-    app: &'a App,
-    songs: &'a [Song],
-    source: &'a str,
-    show_album: bool,
-    show_date: bool,
-    header_y: f32,
-) -> Element<'a, Message> {
-    let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 900.0));
-    let rel = (off - header_y).max(0.0);
-    let lo = ((rel / 56.0) as usize).saturating_sub(6).min(songs.len());
-    let hi = (((rel + view) / 56.0) as usize + 12).min(songs.len());
-    let mut col = Column::new();
-    col = col.push(Space::new().height(lo as f32 * 56.0));
-    for i in lo..hi {
-        let ctx = if app.route.starts_with("playlist:") { Some(i) } else { None };
-        col = col.push(track_row(app, &songs[i], i, songs, source, show_album, show_date, ctx));
-    }
-    col = col.push(Space::new().height((songs.len() - hi) as f32 * 56.0));
-    col.into()
+fn vlist<'a>(app: &'a App, songs: &'a [Song], key: &'a str, c: Cols, y0: f32) -> El<'a> {
+    let discs = key.starts_with("album:") && songs.iter().any(|s| s.disc != songs[0].disc);
+    let rows: Vec<Result<usize, u32>> = songs
+        .iter()
+        .enumerate()
+        .flat_map(|(n, s)| {
+            (discs && (n == 0 || songs[n - 1].disc != s.disc))
+                .then_some(Err(s.disc))
+                .into_iter()
+                .chain([Ok(n)])
+        })
+        .collect();
+    let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 800.0));
+    let lo = (((off - y0) / ROW).max(0.0) as usize).saturating_sub(6).min(rows.len());
+    let hi = (lo + (view / ROW) as usize + 13).min(rows.len());
+    container(
+        Column::new()
+            .push(Space::new().height(lo as f32 * ROW))
+            .extend(rows[lo..hi].iter().map(|r| {
+                match *r {
+                    Ok(n) => track(app, &songs[n], n, key, c),
+                    Err(d) => row![
+                        i(icon::ALBUM, 16.0).color(theme::SUB).width(16).center(),
+                        theme::bold(format!("Disc {d}"), 16.0).color(theme::SUB)
+                    ]
+                    .spacing(16)
+                    .padding([0, 16])
+                    .height(ROW)
+                    .align_y(Alignment::Center)
+                    .into(),
+                }
+            }))
+            .push(Space::new().height((rows.len() - hi) as f32 * ROW)),
+    )
+    .padding(theme::pad(0.0, PAD, PAD, PAD))
+    .into()
 }
 
 fn card<'a>(
     app: &App,
-    cover_id: &str,
+    cid: &str,
     title: &str,
-    sub: &str,
+    sub: String,
     route: String,
-    circle: bool,
+    round: bool,
     play: Option<Message>,
-) -> Element<'a, Message> {
-    let cover_el = cover(app, cover_id, 300, 156.0, circle);
-    let cover_el: Element<Message> = match play {
-        Some(msg) => iced::widget::hover(
-            cover_el,
-            container(btn(
-                container(i(icon::PLAY, 18.0).color(theme::BG).center())
-                    .width(48)
-                    .height(48)
-                    .center_x(48)
-                    .center_y(48)
-                    .style(|_| {
-                        container::Style::default()
-                            .background(theme::ACCENT)
-                            .border(iced::Border::default().rounded(500.0))
-                    }),
-                msg,
-            ))
-            .align_x(iced::alignment::Horizontal::Right)
-            .align_y(iced::alignment::Vertical::Bottom)
-            .padding(8)
-            .width(Fill)
-            .height(Fill),
+) -> El<'a> {
+    let cw = app.grid().1;
+    let img = cw - 24.0;
+    let art = cover(app, cid, 300, img, round);
+    let art: El = match play {
+        Some(m) => hover(
+            art,
+            container(round_btn(icon::PLAY, 48.0, m))
+                .align_right(Fill)
+                .align_bottom(Fill)
+                .padding(8),
         ),
-        None => cover_el,
+        None => art,
     };
     button(
         column![
-            cover_el,
-            med(theme::ell(title, 156.0, 15.0), 15.0).width(Fill).wrapping(Wrapping::None),
-            theme::sub(theme::ell(sub, 156.0, 13.0), 13.0).width(Fill).wrapping(Wrapping::None),
+            art,
+            column![
+                theme::ell(title, img, 16.0, Weight::Normal),
+                theme::ell(&sub, img, 14.0, Weight::Normal).color(theme::SUB)
+            ]
+            .spacing(4)
         ]
-        .spacing(8)
-        .padding(12)
-        .width(180),
+        .spacing(8),
     )
+    .padding(12)
+    .width(cw)
+    .height(cw + 52.0)
+    .style(theme::card)
     .on_press(Message::Nav(route))
-    .style(theme::card_hover)
     .into()
 }
 
-fn shelf<'a, T, I>(
-    app: &'a App,
-    title: &str,
-    items: I,
-    show_all: Option<String>,
-    f: impl Fn(&'a App, &'a T) -> Element<'a, Message> + 'a,
-) -> Element<'a, Message>
-where
-    I: Iterator<Item = &'a T> + Clone + 'a,
-    T: 'a,
-{
-    if items.clone().next().is_none() {
-        return Space::new().height(0).into();
+fn album_card<'a>(app: &App, a: &Album, sub: String) -> El<'a> {
+    let r = format!("album:{}", a.id);
+    card(app, &a.cover, &a.name, sub, r.clone(), false, Some(Message::PlayCtx(r, false)))
+}
+
+fn artist_card<'a>(app: &App, a: &Artist) -> El<'a> {
+    card(app, &a.cover, &a.name, "Artist".into(), format!("artist:{}", a.id), true, None)
+}
+
+fn shelf<'a>(title: &str, all: Option<String>, cards: Vec<El<'a>>) -> El<'a> {
+    if cards.is_empty() {
+        return Space::new().into();
     }
-    let mut t = row![bold(title, 24.0), Space::new().width(Fill)].align_y(Alignment::Center);
-    if let Some(r) = show_all {
-        t = t.push(btn(theme::sub("Show all", 13.0), Message::Nav(r)));
-    }
-    column![
-        t.padding([0, 12]),
-        iced::widget::responsive(move |size| {
-            let n = ((size.width / 196.0).floor() as usize).max(1);
-            row(items.clone().take(n).map(|i| f(app, i)).collect::<Vec<Element<Message>>>()).into()
-        }),
-    ]
-    .spacing(8)
+    column![heading(title, all), container(Row::with_children(cards)).padding([0, 12])]
+        .spacing(8)
+        .into()
+}
+
+fn grid<'a>(app: &App, n: usize, row_h: f32, y0: f32, f: impl Fn(usize) -> El<'a>) -> El<'a> {
+    let cols = app.grid().0;
+    let rows = n.div_ceil(cols);
+    let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 800.0));
+    let lo = (((off - y0) / row_h).max(0.0) as usize).saturating_sub(1).min(rows);
+    let hi = (lo + (view / row_h) as usize + 3).min(rows);
+    container(
+        Column::new()
+            .push(Space::new().height(lo as f32 * row_h))
+            .extend(
+                (lo..hi).map(|r| {
+                    Row::with_children((r * cols..(r * cols + cols).min(n)).map(&f)).into()
+                }),
+            )
+            .push(Space::new().height((rows - hi) as f32 * row_h)),
+    )
+    .padding(theme::pad(0.0, 12.0, PAD, 12.0))
     .into()
 }
 
-pub fn route<'a>(app: &'a App) -> Element<'a, Message> {
+fn grid_head<'a>(title: &str, chips: Option<El<'a>>) -> El<'a> {
+    container(column![theme::bold(title, 32.0)].push(chips).spacing(16))
+        .padding(theme::pad(PAD, PAD, 0.0, PAD))
+        .height(GRID_Y)
+        .into()
+}
+
+fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
+    if let Some(e) = app.data::<String>(key) {
+        return Some(
+            container(
+                column![
+                    theme::bold("Could not load this page.", 24.0),
+                    theme::sub(e, 14.0),
+                    button(theme::bold("Try again", 14.0))
+                        .style(theme::pill)
+                        .padding([8, 16])
+                        .on_press(Message::Retry),
+                ]
+                .spacing(16)
+                .align_x(Alignment::Center),
+            )
+            .center_x(Fill)
+            .padding(80)
+            .into(),
+        );
+    }
+    if app.cache.contains_key(key) {
+        return None;
+    }
+    let blk = |w: f32, h: f32, r: f32| {
+        container(Space::new()).width(w).height(h).style(theme::fill(theme::CHIP, r))
+    };
+    let px = art_px(app);
+    Some(
+        column![
+            row![
+                blk(px, px, 6.0),
+                column![blk(80.0, 14.0, 4.0), blk(360.0, 56.0, 4.0), blk(220.0, 14.0, 4.0)]
+                    .spacing(12)
+            ]
+            .spacing(PAD)
+            .align_y(Alignment::End),
+            blk(56.0, 56.0, 28.0),
+        ]
+        .extend((0..6).map(|_| {
+            row![
+                blk(40.0, 40.0, 4.0),
+                column![blk(240.0, 14.0, 4.0), blk(140.0, 12.0, 4.0)].spacing(8)
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .into()
+        }))
+        .spacing(PAD)
+        .padding(PAD)
+        .into(),
+    )
+}
+
+pub fn route<'a>(app: &'a App) -> El<'a> {
     let (kind, arg) = app.route.split_once(':').unwrap_or((app.route.as_str(), ""));
+    if (!matches!(kind, "settings" | "lyrics" | "search" | "genres" | "login")
+        || (kind == "search" && !arg.is_empty()))
+        && let Some(s) = state(app, &app.route)
+    {
+        return s;
+    }
     match kind {
         "home" => home(app),
-        "album" => album_page(app, arg),
-        "artist" => artist_page(app, arg),
-        "playlist" => playlist_page(app, arg),
-        "liked" => liked_page(app),
-        "search" => search_page(app, arg),
-        "albums" => albums_grid(app, arg),
-        "artists" => artists_grid(app),
-        "songs" => songs_page(app, arg),
-        "genres" => genres_page(app),
-        "genre" => genre_page(app, arg),
-        "folders" => folders_page(app),
-        "folder" => folder_page(app, arg),
-        "lyrics" => lyrics_page(app),
-        "settings" => settings_page(app),
-        "login" => login(app),
+        "album" | "playlist" | "liked" => detail(app),
+        "artist" => artist(app),
+        "search" | "genres" => search(app, arg),
+        "albums" | "genre" => albums(app, kind, arg),
+        "artists" => artists(app),
+        "songs" => songs(app),
+        "folders" | "folder" => folders(app),
+        "lyrics" => lyrics(app),
+        "settings" => settings(app),
         _ => container(theme::sub("This page does not exist.", 14.0)).padding(40).into(),
     }
 }
 
-fn loading<'a>(app: &'a App, key: &str) -> Option<Element<'a, Message>> {
-    if app.cache.contains_key(key) {
-        return None;
-    }
-    let blk = |w: Length, h: f32| container(Space::new()).width(w).height(h).style(theme::skel);
-    Some(
-        column![
-            blk(280.0.into(), 32.0),
-            blk(Fill, 220.0),
-            row![
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-            ]
-            .spacing(24),
-            row![
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-                blk(168.0.into(), 240.0),
-            ]
-            .spacing(24),
-        ]
-        .spacing(24)
-        .padding(24)
-        .into(),
-    )
-}
-
-fn home<'a>(app: &'a App) -> Element<'a, Message> {
-    if let Some(l) = loading(app, "home") {
-        return l;
-    }
-    let Some((_, v)) = app.cache.get("home") else { return Space::new().into() };
-    let Some(h) = v.downcast_ref::<Home>() else { return Space::new().into() };
-    let gc = h.recent.first().map(|a| head_color(app, &a.cover)).unwrap_or(color!(0x503a55));
-    let hour = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_secs() / 3600 + 16) % 24)
-        .unwrap_or(18);
-    let greet = match hour {
-        5..=11 => "Good morning",
-        12..=17 => "Good afternoon",
-        _ => "Good evening",
-    };
-    let mut tiles = Column::new().spacing(8);
-    let mut rows = Vec::new();
-    let mut row_items: Vec<Element<Message>> = Vec::new();
-    for (n, a) in h.recent.iter().take(8).enumerate() {
-        if n == 4 {
-            rows.push(row(std::mem::take(&mut row_items)).spacing(8));
-        }
-        row_items.push(
+fn home<'a>(app: &'a App) -> El<'a> {
+    let Some(h) = app.data::<Home>("home") else { return Space::new().into() };
+    let w = app.main_w() - 2.0 * PAD;
+    let n = if w >= 720.0 { 4 } else { 2 };
+    let tw = (w - 8.0 * (n - 1) as f32) / n as f32;
+    let tile = |art: El<'a>, name: &str, route: String, play: Message| -> El<'a> {
+        hover(
             button(
-                row![
-                    cover(app, &a.cover, 300, 64.0, false),
-                    container(med(a.name.clone(), 14.0).wrapping(Wrapping::None),)
-                        .center_y(64)
-                        .padding([0, 12]),
-                ]
-                .width(Length::FillPortion(1)),
+                row![art, theme::ell(name, tw - 56.0 - 24.0, 14.0, Weight::Bold)]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
             )
-            .on_press(Message::Nav(format!("album:{}", a.id)))
-            .style(theme::tile)
+            .padding(0)
+            .width(tw)
+            .height(56)
             .clip(true)
-            .width(Length::FillPortion(1))
-            .into(),
-        );
-    }
-    rows.push(row(row_items).spacing(8));
-    for r in rows {
-        tiles = tiles.push(r);
-    }
-    let mut col = column![
-        container(column![bold(greet, 30.0), tiles,])
-            .padding(theme::pad(16.0, 12.0, 24.0, 12.0))
-            .width(Fill)
-            .style(theme::header(gc)),
-    ]
-    .spacing(24);
-    let mk = |l: &'a Vec<Album>, title: &'a str| {
-        shelf(app, title, l.iter(), Some("albums:newest".into()), |app, a| {
-            card(
-                app,
-                &a.cover,
-                &a.name,
-                &a.artist,
-                format!("album:{}", a.id),
-                false,
-                Some(Message::PlayCtx(format!("album:{}", a.id), false)),
-            )
-        })
-    };
-    col = col.push(mk(&h.recent, "Recently played"));
-    col = col.push(mk(&h.added, "Recently added"));
-    col = col.push(mk(&h.frequent, "Most played"));
-    col = col.push(mk(&h.random, "Random picks"));
-    col = col.push(shelf(app, "Your playlists", h.playlists.iter(), None, |app, p| {
-        card(
-            app,
-            &p.cover,
-            &p.name,
-            "Playlist",
-            format!("playlist:{}", p.id),
-            false,
-            Some(Message::PlayCtx(format!("playlist:{}", p.id), false)),
-        )
-    }));
-    col.into()
-}
-
-fn action_bar<'a>(
-    _app: &'a App,
-    play: Message,
-    shuffle_msg: Message,
-    extra: Vec<Element<'a, Message>>,
-) -> Element<'a, Message> {
-    let mut r = row![
-        btn(
-            container(i(icon::PLAY, 22.0).color(theme::BG).center())
-                .width(56)
-                .height(56)
-                .center_x(56)
+            .style(theme::tile)
+            .on_press(Message::Nav(route)),
+            container(round_btn(icon::PLAY, 32.0, play))
+                .align_right(Fill)
                 .center_y(56)
-                .style(|_| container::Style::default()
-                    .background(theme::ACCENT)
-                    .border(iced::Border::default().rounded(500.0))),
-            play,
-        ),
-        icon_btn(icon::SHUFFLE, 22.0, shuffle_msg),
-    ]
-    .spacing(18)
-    .align_y(Alignment::Center);
-    for e in extra {
-        r = r.push(e);
-    }
-    container(r.padding([16, 12])).into()
+                .padding([0, 8]),
+        )
+    };
+    let tiles: Vec<El> = std::iter::once(tile(
+        liked_art(56.0),
+        "Liked Songs",
+        "liked".into(),
+        Message::PlayCtx("liked".into(), false),
+    ))
+    .chain(h.playlists.iter().take(3).map(|p| {
+        let r = format!("playlist:{}", p.id);
+        tile(cover(app, &p.cover, 128, 56.0, false), &p.name, r.clone(), Message::PlayCtx(r, false))
+    }))
+    .chain(h.recent.iter().map(|a| {
+        let r = format!("album:{}", a.id);
+        tile(cover(app, &a.cover, 128, 56.0, false), &a.name, r.clone(), Message::PlayCtx(r, false))
+    }))
+    .take(8)
+    .collect();
+    let mut tiles = tiles.into_iter();
+    let grid = Column::with_children(
+        std::iter::from_fn(|| {
+            let r: Vec<El> = tiles.by_ref().take(n).collect();
+            (!r.is_empty()).then(|| Row::with_children(r).spacing(8).into())
+        })
+        .collect::<Vec<El>>(),
+    )
+    .spacing(8);
+    let k = app.grid().0;
+    let albums = |l: &'a [Album]| -> Vec<El<'a>> {
+        l.iter().take(k).map(|a| album_card(app, a, a.artist.clone())).collect()
+    };
+    let shelves = [
+        ("Recently played", "recent", &h.recent),
+        ("Recently added", "newest", &h.added),
+        ("Most played", "frequent", &h.frequent),
+        ("Random picks", "random", &h.random),
+    ];
+    let c = h.recent.first().map_or(GREY, |a| head_color(app, &a.cover));
+    let height = 200.0 + 5.0 * (app.grid().1 + 100.0);
+    container(
+        column![container(grid).padding([0.0, PAD])]
+            .extend(
+                shelves
+                    .into_iter()
+                    .map(|(t, s, l)| shelf(t, Some(format!("albums:{s}")), albums(l))),
+            )
+            .push(shelf(
+                "Your playlists",
+                None,
+                h.playlists
+                    .iter()
+                    .take(k)
+                    .map(|p| {
+                        let r = format!("playlist:{}", p.id);
+                        card(
+                            app,
+                            &p.cover,
+                            &p.name,
+                            format!("By {}", p.owner),
+                            r.clone(),
+                            false,
+                            Some(Message::PlayCtx(r, false)),
+                        )
+                    })
+                    .collect(),
+            ))
+            .spacing(40)
+            .padding(theme::pad(PAD, 0.0, PAD, 0.0)),
+    )
+    .width(Fill)
+    .style(theme::fade(theme::shade(c, 0.7), 332.0 / height))
+    .into()
 }
 
-fn detail_head<'a>(
-    app: &App,
-    label: &str,
-    cover_id: &str,
-    title: &str,
-    meta: Vec<Element<'a, Message>>,
-) -> Element<'a, Message> {
-    let size = [96.0_f32, 72.0, 48.0, 32.0]
+fn hero<'a>(app: &App, art: El<'a>, kind: &str, title: &str, meta: El<'a>, c: Color) -> El<'a> {
+    let px = art_px(app);
+    let tw = app.main_w() - 3.0 * PAD - px;
+    let size = [96.0, 72.0, 48.0, 32.0]
         .into_iter()
-        .find(|s| title.chars().count() as f32 * s * 0.55 <= 620.0)
+        .find(|s| theme::width(title, *s, Weight::Black) <= tw)
         .unwrap_or(32.0);
     container(
         row![
-            container(cover(app, cover_id, 640, 232.0, false)).style(|_| container::Style {
+            container(art).style(|_| container::Style {
                 shadow: iced::Shadow {
-                    color: iced::Color { a: 0.6, ..theme::BG },
-                    blur_radius: 24.0,
-                    offset: iced::Vector::new(0.0, 8.0),
+                    color: Color { a: 0.5, ..theme::BG },
+                    blur_radius: 60.0,
+                    offset: iced::Vector::new(0.0, 4.0),
                 },
                 ..container::Style::default()
             }),
             column![
-                Space::new().height(Fill),
-                theme::sub(label, 13.0),
-                theme::black(theme::ell(title, 620.0, size), size).wrapping(Wrapping::None),
-                row(meta).spacing(4).align_y(Alignment::Center),
+                theme::med(kind, 14.0),
+                theme::ell(title, tw, size, Weight::Black).line_height(1.1),
+                meta
             ]
             .spacing(8),
         ]
-        .spacing(20)
-        .align_y(Alignment::End)
-        .padding([24, 12])
-        .height(300),
+        .spacing(PAD)
+        .align_y(Alignment::End),
     )
+    .padding(PAD)
     .width(Fill)
-    .style(theme::header(head_color(app, cover_id)))
+    .height(px + 2.0 * PAD)
+    .style(theme::grad(c, theme::shade(c, 0.5)))
     .into()
 }
 
-fn album_page<'a>(app: &'a App, _id: &str) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let Some((_, v)) = app.cache.get(&app.route) else { return Space::new().into() };
-    let Some((a, songs)) = v.downcast_ref::<(Album, Vec<Song>)>() else {
-        return Space::new().into();
-    };
-    let label = if a.song_count <= 6 { "EP" } else { "Album" };
-    let mut meta: Vec<Element<Message>> = Vec::new();
-    meta.push(artists_line(&a.artists, 14.0));
-    if a.year > 0 {
-        meta.push(theme::sub(format!(" \u{2022} {}", a.year), 14.0).into());
-    }
-    meta.push(
-        theme::sub(format!(" \u{2022} {} songs, {}", a.song_count, fmt_long(a.duration)), 14.0)
-            .into(),
-    );
-    let head = detail_head(app, label, &a.cover, &a.name, meta);
-    let bar = action_bar(
-        app,
-        Message::Play(songs.clone(), 0, a.name.clone()),
-        Message::PlayCtx(app.route.clone(), true),
-        vec![
-            icon_btn(
-                icon::HEART,
-                22.0,
-                Message::Star(a.id.clone(), !app.starred.get(&a.id).copied().unwrap_or(a.starred)),
-            )
-            .into(),
-            icon_btn(icon::DOTS, 22.0, Message::Menu(Box::new(MenuKind::Album(a.clone())))).into(),
-        ],
-    );
-    let discs = songs.iter().map(|s| s.disc).collect::<std::collections::BTreeSet<_>>();
-    let multi_disc = discs.len() > 1;
-    let mut list = Column::new();
-    if !multi_disc {
-        list = list.push(vlist(app, songs, &a.name, false, false, 430.0));
-    } else {
-        let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 900.0));
-        let mut y = 430.0f32;
-        for d in discs {
-            let ds: Vec<usize> =
-                songs.iter().enumerate().filter(|(_, s)| s.disc == d).map(|(i, _)| i).collect();
-            list = list.push(
-                container(theme::sub(format!("Disc {d}"), 14.0))
-                    .padding(theme::pad(16.0, 8.0, 8.0, 8.0)),
-            );
-            for &i in &ds {
-                list = list.push(track_row(app, &songs[i], i, songs, &a.name, false, false, None));
-            }
-            y += (ds.len() as f32 + 1.0) * 56.0;
-            let _ = (off, view, y);
-        }
-    }
-    column![head, bar, track_header(false, false), list].into()
-}
-
-fn playlist_page<'a>(app: &'a App, _id: &str) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let Some((_, v)) = app.cache.get(&app.route) else { return Space::new().into() };
-    let Some((p, songs)) = v.downcast_ref::<(Playlist, Vec<Song>)>() else {
-        return Space::new().into();
-    };
-    let meta: Vec<Element<Message>> = vec![
-        theme::sub(p.owner.clone(), 14.0).into(),
-        theme::sub(
-            format!(
-                " \u{2022} {} songs, {}",
-                p.song_count.max(songs.len() as u32),
-                fmt_long(p.duration.max(songs.iter().map(|s| s.duration).sum()))
-            ),
-            14.0,
-        )
-        .into(),
-    ];
-    let head = detail_head(app, "Playlist", &p.cover, &p.name, meta);
-    let bar = action_bar(
-        app,
-        Message::Play(songs.clone(), 0, p.name.clone()),
-        Message::PlayCtx(app.route.clone(), true),
-        vec![
-            icon_btn(icon::DOTS, 22.0, Message::Menu(Box::new(MenuKind::Playlist(p.clone()))))
-                .into(),
-        ],
-    );
-    column![head, bar, track_header(true, true), vlist(app, songs, &p.name, true, true, 430.0)]
-        .into()
-}
-
-fn liked_page<'a>(app: &'a App) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let Some((_, v)) = app.cache.get(&app.route) else { return Space::new().into() };
-    let Some(p) = v.downcast_ref::<Pager<Song>>() else { return Space::new().into() };
-    let songs = &p.items;
-    let meta: Vec<Element<Message>> =
-        vec![theme::sub(format!("{} songs", p.total.max(songs.len())), 14.0).into()];
-    let head = container(
-        row![
-            container(i(icon::HEART, 90.0).color(iced::Color::WHITE).center())
-                .width(232)
-                .height(232)
-                .center_x(232)
-                .center_y(232)
-                .style(|_| container::Style::default()
-                    .background(iced::Gradient::Linear(
-                        iced::gradient::Linear::new(iced::Radians(2.35))
-                            .add_stop(0.0, theme::GRAD_A)
-                            .add_stop(1.0, theme::GRAD_B)
-                    ))
-                    .border(iced::Border::default().rounded(6.0))),
-            column![
-                Space::new().height(Fill),
-                theme::sub("Playlist", 13.0),
-                text("Liked Songs")
-                    .size(84.0)
-                    .font(Font { weight: iced::font::Weight::Bold, ..Font::DEFAULT }),
-                row(meta).spacing(4),
-            ]
-            .spacing(8),
-        ]
-        .spacing(20)
-        .align_y(Alignment::End)
-        .padding([24, 12])
-        .height(300),
+fn actions<'a>(play: Message, shuffle: Message, extra: Vec<El<'a>>) -> El<'a> {
+    container(
+        row![round_btn(icon::PLAY, 56.0, play), icon_btn(icon::SHUFFLE, 16.0, shuffle)]
+            .extend(extra)
+            .spacing(PAD)
+            .align_y(Alignment::Center),
     )
-    .width(Fill)
-    .style(theme::header(color!(0x503a55)));
-    let bar = action_bar(
-        app,
-        Message::Play(songs.clone(), 0, "Liked Songs".into()),
-        Message::Noop,
-        vec![],
-    );
+    .padding(PAD)
+    .height(BAR)
+    .into()
+}
+
+fn meta_line<'a>(lead: El<'a>, rest: String) -> El<'a> {
+    row![lead, theme::sub(rest, 14.0)].align_y(Alignment::Center).into()
+}
+
+struct Detail<'a> {
+    art: El<'a>,
+    kind: &'static str,
+    title: &'a str,
+    meta: El<'a>,
+    color: Color,
+    songs: &'a [Song],
+    extra: Vec<El<'a>>,
+    cols: Cols,
+}
+
+fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
+    let key = app.route.as_str();
+    let px = art_px(app);
+    let star = |id: &str, on: bool| -> El<'a> {
+        let on = app.is_starred(id, on);
+        button(i(icon::HEART, 32.0).center())
+            .padding(0)
+            .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
+            .on_press(Message::Star(id.into(), !on))
+            .into()
+    };
+    let dots =
+        |k: MenuKind| -> El<'a> { icon_btn(icon::DOTS, 16.0, Message::Menu(Box::new(k))).into() };
+    if let Some((a, songs)) = app.data::<(Album, Vec<Song>)>(key) {
+        let artists: Vec<Artist> = if a.artists.is_empty() {
+            vec![Artist { id: a.artist_id.clone(), name: a.artist.clone(), ..Artist::default() }]
+        } else {
+            a.artists.clone()
+        };
+        let lead = Row::with_children(artists.iter().enumerate().map(|(n, x)| {
+            button(theme::bold(if n > 0 { format!(", {}", x.name) } else { x.name.clone() }, 14.0))
+                .padding(0)
+                .style(theme::link(theme::TEXT))
+                .on_press(Message::Nav(format!("artist:{}", x.id)))
+                .into()
+        }));
+        let year = if a.year > 0 { format!(" \u{2022} {}", a.year) } else { String::new() };
+        return Some(Detail {
+            art: cover(app, &a.cover, 300, px, false),
+            kind: if a.song_count <= 6 && a.duration < 1800.0 { "EP" } else { "Album" },
+            title: &a.name,
+            meta: meta_line(
+                lead.into(),
+                format!("{year} \u{2022} {} songs, {}", songs.len(), fmt_long(a.duration)),
+            ),
+            color: head_color(app, &a.cover),
+            songs,
+            extra: vec![star(&a.id, a.starred), dots(MenuKind::Album(a.clone()))],
+            cols: cols(app, false, false),
+        });
+    }
+    if let Some((p, songs)) = app.data::<(Playlist, Vec<Song>)>(key) {
+        return Some(Detail {
+            art: cover(app, &p.cover, 300, px, false),
+            kind: if p.public { "Public Playlist" } else { "Playlist" },
+            title: &p.name,
+            meta: column![]
+                .push((!p.comment.is_empty()).then(|| theme::sub(&p.comment, 14.0)))
+                .push(meta_line(
+                    theme::bold(&p.owner, 14.0).into(),
+                    format!(
+                        " \u{2022} {} songs, {}",
+                        songs.len(),
+                        fmt_long(songs.iter().map(|s| s.duration).sum())
+                    ),
+                ))
+                .spacing(8)
+                .into(),
+            color: head_color(app, &p.cover),
+            songs,
+            extra: vec![dots(MenuKind::Playlist(p.clone()))],
+            cols: cols(app, true, true),
+        });
+    }
+    let p = app.data::<Pager<Song>>("liked").filter(|_| key == "liked")?;
+    let user = app.session.as_ref().map_or(String::new(), |s| s.server.user.clone());
+    Some(Detail {
+        art: liked_art(px),
+        kind: "Playlist",
+        title: "Liked Songs",
+        meta: meta_line(
+            theme::bold(user, 14.0).into(),
+            format!(" \u{2022} {} songs", p.total.max(p.items.len())),
+        ),
+        color: color!(0x5038a0),
+        songs: &p.items,
+        extra: Vec::new(),
+        cols: cols(app, true, true),
+    })
+}
+
+fn detail<'a>(app: &'a App) -> El<'a> {
+    let Some(d) = detail_of(app) else { return Space::new().into() };
+    let key = app.route.as_str();
+    let h = BAR + HEAD + d.songs.len() as f32 * ROW + PAD;
+    let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
     column![
-        head,
-        bar,
-        track_header(true, false),
-        vlist(app, songs, "Liked Songs", true, false, 430.0)
+        hero(app, d.art, d.kind, d.title, d.meta, d.color),
+        container(column![
+            actions(Message::PlayAt(key.into(), 0), Message::PlayCtx(key.into(), true), d.extra),
+            table_head(d.cols),
+            vlist(app, d.songs, key, d.cols, y0),
+        ])
+        .width(Fill)
+        .style(theme::fade(theme::shade(d.color, 0.4), 232.0 / h)),
     ]
     .into()
 }
 
-fn artist_page<'a>(app: &'a App, _id: &str) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let Some((_, v)) = app.cache.get(&app.route) else { return Space::new().into() };
-    let Some((a, albums, top, info)) = v.downcast_ref::<(Artist, Vec<Album>, Vec<Song>, Info)>()
+pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
+    let off = app.scrolls.get(&app.route).map_or(0.0, |s| s.0);
+    let d = detail_of(app)?;
+    let top = art_px(app) + 2.0 * PAD;
+    (off > top - 64.0).then(|| {
+        column![
+            container(
+                row![
+                    round_btn(icon::PLAY, 48.0, Message::PlayAt(app.route.clone(), 0)),
+                    theme::ell(d.title, app.main_w() - 120.0, 24.0, Weight::Bold)
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+            )
+            .padding([0.0, PAD])
+            .center_y(64)
+            .width(Fill)
+            .style(theme::fill(theme::shade(d.color, 0.5), 0.0)),
+        ]
+        .push(
+            (off > top + BAR - 64.0)
+                .then(|| container(table_head(d.cols)).style(theme::fill(color!(0x1a1a1a), 0.0))),
+        )
+        .into()
+    })
+}
+
+fn artist<'a>(app: &'a App) -> El<'a> {
+    let Some((a, albums, top, info)) =
+        app.data::<(Artist, Vec<Album>, Vec<Song>, Info)>(&app.route)
     else {
         return Space::new().into();
     };
-    let meta: Vec<Element<Message>> = vec![
-        theme::sub(format!("{} albums \u{2022} {} songs", a.album_count, a.song_count), 14.0)
-            .into(),
-    ];
-    let head = container(
-        column![
-            Space::new().height(Fill),
-            theme::sub("Artist", 14.0),
-            theme::black(a.name.clone(), 84.0).wrapping(Wrapping::None),
-            row(meta).spacing(4),
+    let hh = (app.cfg.settings.window.1 * 0.4).clamp(240.0, 400.0);
+    let c = head_color(app, &a.cover);
+    let name = theme::ell(&a.name, app.main_w() - 2.0 * PAD, 96.0, Weight::Black).line_height(1.1);
+    let label =
+        theme::sub(format!("{} albums \u{2022} {} songs", a.album_count, a.song_count), 16.0)
+            .color(theme::TEXT);
+    let hero: El = match app.covers.get(&(a.cover.clone(), 640)) {
+        Some(img) => stack![
+            image(img).width(Fill).height(hh).content_fit(iced::ContentFit::Cover),
+            container(Space::new())
+                .width(Fill)
+                .height(hh)
+                .style(theme::grad(Color::TRANSPARENT, Color { a: 0.6, ..theme::BG })),
+            container(column![name, label].spacing(8)).align_bottom(hh).padding(PAD),
         ]
-        .spacing(8)
-        .padding([24, 12])
-        .height(340),
-    )
-    .width(Fill)
-    .style(theme::header(head_color(app, &a.cover)));
-    let bar = action_bar(
-        app,
-        Message::PlayCtx(app.route.clone(), false),
-        Message::PlayCtx(app.route.clone(), true),
-        vec![
-            icon_btn(
-                icon::HEART,
-                22.0,
-                Message::Star(a.id.clone(), !app.starred.get(&a.id).copied().unwrap_or(a.starred)),
-            )
+        .into(),
+        None => container(column![name, label].spacing(8))
+            .align_bottom(hh)
+            .width(Fill)
+            .padding(PAD)
+            .style(theme::grad(c, theme::shade(c, 0.5)))
             .into(),
-            icon_btn(icon::DOTS, 22.0, Message::Menu(Box::new(MenuKind::Artist(a.clone())))).into(),
-        ],
-    );
-    let mut col = column![head, bar].spacing(24);
-    if !top.is_empty() {
-        let n = if app.popular_all { 10.min(top.len()) } else { 5.min(top.len()) };
-        let mut rows = Column::new();
-        for (i, s) in top.iter().take(n).enumerate() {
-            rows = rows.push(track_row(app, s, i, top, &a.name, true, false, None));
-        }
-        let mut t = column![container(bold("Popular", 24.0)).padding([0, 12]), rows];
-        if !app.popular_all && top.len() > 5 {
-            t = t.push(btn(theme::sub("See more", 13.0), Message::Popular).padding([8, 12]));
-        }
-        col = col.push(t);
-    }
-    col = col.push(shelf(app, "Discography", albums.iter(), None, |app, al| {
-        card(
-            app,
-            &al.cover,
-            &al.name,
-            &al.year.to_string(),
-            format!("album:{}", al.id),
-            false,
-            Some(Message::PlayCtx(format!("album:{}", al.id), false)),
+    };
+    let key = app.route.as_str();
+    let on = app.is_starred(&a.id, a.starred);
+    let n = if app.popular_all { 10 } else { 5 }.min(top.len());
+    let c3 = cols(app, false, false);
+    let popular = column![heading("Popular", None)]
+        .extend(
+            top.iter()
+                .take(n)
+                .enumerate()
+                .map(|(k, s)| container(track(app, s, k, key, c3)).padding([0.0, PAD]).into()),
         )
-    }));
-    if !info.similar.is_empty() {
-        col = col.push(shelf(app, "Fans also like", info.similar.iter(), None, |app, s| {
-            card(app, &s.cover, &s.name, "Artist", format!("artist:{}", s.id), true, None)
-        }));
-    }
-    if !info.biography.is_empty() {
-        col = col.push(
+        .push((top.len() > 5).then(|| {
             container(
-                column![bold("About", 20.0), theme::sub(strip_html(&info.biography), 14.0),]
-                    .spacing(8),
+                button(theme::bold(if app.popular_all { "Show less" } else { "See more" }, 14.0))
+                    .padding(16)
+                    .style(theme::link(theme::SUB))
+                    .on_press(Message::Popular),
             )
-            .padding(theme::pad(0.0, 12.0, 24.0, 12.0)),
-        );
-    }
-    col.into()
-}
-
-fn strip_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut tag = false;
-    for c in s.chars() {
-        match c {
-            '<' => tag = true,
-            '>' => tag = false,
-            _ if !tag => out.push(c),
-            _ => {}
-        }
-    }
-    out
-}
-
-fn search_page<'a>(app: &'a App, q: &str) -> Element<'a, Message> {
-    if q.is_empty() {
-        let mut col = column![container(bold("Browse all", 24.0)).padding([16, 12])].spacing(0);
-        if let Some((_, v)) = app.cache.get("genres")
-            && let Some(gs) = v.downcast_ref::<Vec<Genre>>()
-        {
-            let mut grid = Column::new().spacing(12).padding(12);
-            let mut r = Row::new().spacing(12);
-            let mut n = 0;
-            for g in gs.iter() {
-                let c = genre_color(&g.name);
-                r = r.push(btn(
-                    container(bold(g.name.clone(), 18.0))
-                        .width(176)
-                        .height(96)
-                        .padding(12)
-                        .clip(true)
-                        .style(move |_| {
-                            container::Style::default()
-                                .background(c)
-                                .border(iced::Border::default().rounded(8.0))
-                        }),
-                    Message::Nav(format!("genre:{}", g.name)),
-                ));
-                n += 1;
-                if n == 6 {
-                    grid = grid.push(r);
-                    r = Row::new().spacing(12);
-                    n = 0;
-                }
-            }
-            if n > 0 {
-                grid = grid.push(r);
-            }
-            col = col.push(grid);
-        }
-        return col.into();
-    }
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let Some((_, v)) = app.cache.get(&app.route) else { return Space::new().into() };
-    let Some(r) = v.downcast_ref::<SearchRes>() else { return Space::new().into() };
-    let mut col = Column::new().spacing(24).padding([16, 12]);
-    let mut top = Column::new().spacing(16);
-    if let Some(best) = r.albums.first() {
-        top = top.push(column![
-            bold("Top result", 24.0),
-            container(
+            .padding([0.0, PAD])
+        }))
+        .spacing(8);
+    let k = app.grid().0;
+    let mut disc: Vec<&Album> = albums.iter().collect();
+    disc.sort_by_key(|x| std::cmp::Reverse(x.year));
+    let h = BAR + 600.0 + 2.0 * (app.grid().1 + 100.0);
+    column![
+        hero,
+        container(
+            column![
+                actions(
+                    Message::PlayCtx(key.into(), false),
+                    Message::PlayCtx(key.into(), true),
+                    vec![
+                        button(theme::bold(if on { "Following" } else { "Follow" }, 14.0))
+                            .style(theme::pill)
+                            .padding([7, 15])
+                            .on_press(Message::Star(a.id.clone(), !on))
+                            .into(),
+                        icon_btn(
+                            icon::DOTS,
+                            16.0,
+                            Message::Menu(Box::new(MenuKind::Artist(a.clone())))
+                        )
+                        .into(),
+                    ],
+                ),
                 column![
-                    cover(app, &best.cover, 300, 100.0, false),
-                    bold(best.name.clone(), 28.0),
-                    theme::sub(format!("Album \u{2022} {}", best.artist), 14.0),
+                    popular,
+                    shelf(
+                        "Discography",
+                        None,
+                        disc.iter()
+                            .take(k)
+                            .map(|x| {
+                                let kind = if x.song_count <= 6 && x.duration < 1800.0 {
+                                    "EP"
+                                } else {
+                                    "Album"
+                                };
+                                let year = if x.year > 0 {
+                                    format!("{} \u{2022} ", x.year)
+                                } else {
+                                    String::new()
+                                };
+                                album_card(app, x, format!("{year}{kind}"))
+                            })
+                            .collect()
+                    ),
+                    shelf(
+                        "Fans also like",
+                        None,
+                        info.similar.iter().take(k).map(|x| artist_card(app, x)).collect()
+                    ),
                 ]
-                .spacing(10)
-                .padding(20)
-                .width(380),
-            )
-            .style(theme::elevated),
-        ]);
-    }
-    let mut songs_col = column![bold("Songs", 24.0)].spacing(0);
-    for (i, s) in r.songs.iter().take(4).enumerate() {
-        songs_col = songs_col.push(track_row(app, s, i, &r.songs, "Search", false, false, None));
-    }
-    col = col.push(row![top.width(Fill), songs_col.width(Length::FillPortion(2))].spacing(24));
-    if !r.artists.is_empty() {
-        col = col.push(shelf(app, "Artists", r.artists.iter(), None, |app, a| {
-            card(app, &a.cover, &a.name, "Artist", format!("artist:{}", a.id), true, None)
-        }));
-    }
-    if !r.albums.is_empty() {
-        col = col.push(shelf(app, "Albums", r.albums.iter(), None, |app, a| {
-            card(
-                app,
-                &a.cover,
-                &a.name,
-                &a.artist,
-                format!("album:{}", a.id),
-                false,
-                Some(Message::PlayCtx(format!("album:{}", a.id), false)),
-            )
-        }));
-    }
-    if let Some((_, lv)) = app.cache.get("lib")
-        && let Some(l) = lv.downcast_ref::<Lib>()
-    {
-        let ql = q.to_lowercase();
-        let pls = l.playlists.iter().filter(move |p| p.name.to_lowercase().contains(&ql));
-        if pls.clone().next().is_some() {
-            col = col.push(shelf(app, "Playlists", pls, None, |app, p| {
-                card(
-                    app,
-                    &p.cover,
-                    &p.name,
-                    "Playlist",
-                    format!("playlist:{}", p.id),
-                    false,
-                    Some(Message::PlayCtx(format!("playlist:{}", p.id), false)),
-                )
-            }));
-        }
-    }
-    col.into()
-}
-
-fn genre_color(name: &str) -> Color {
-    use std::hash::{BuildHasher, Hasher};
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write(name.as_bytes());
-    let x = h.finish();
-    const P: [u32; 10] = [
-        0xe13300, 0x8d67ab, 0x1e3264, 0xe8115b, 0x477d95, 0xba5d07, 0x148a08, 0xd84000, 0x8d67ab,
-        0x777777,
-    ];
-    let c = P[(x % P.len() as u64) as usize];
-    Color::from_rgb(
-        ((c >> 16) & 0xff) as f32 / 255.0,
-        ((c >> 8) & 0xff) as f32 / 255.0,
-        (c & 0xff) as f32 / 255.0,
-    )
-}
-
-fn sort_bar<'a>(
-    current: &str,
-    opts: &'a [(&'a str, &'a str)],
-    route: &str,
-) -> Element<'a, Message> {
-    let mut r = Row::new().spacing(6).align_y(Alignment::Center);
-    for (k, name) in opts {
-        r = r.push(
-            button(text(name.to_string()).size(12))
-                .on_press(Message::Nav(format!("{route}:{k}")))
-                .style(theme::chip(current == *k))
-                .padding([5, 10]),
-        );
-    }
-    row![Space::new().width(Fill), r].padding([8, 12]).into()
-}
-
-fn grid<'a, T>(
-    app: &'a App,
-    items: &'a [T],
-    card_h: f32,
-    card_w: f32,
-    f: impl Fn(&'a App, &'a T) -> Element<'a, Message> + 'a,
-) -> Element<'a, Message> {
-    let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 900.0));
-    iced::widget::responsive(move |size| {
-        let cols = ((size.width / card_w).floor() as usize).max(1);
-        let rows_total = items.len().div_ceil(cols);
-        let first = ((off / card_h) as usize).saturating_sub(1);
-        let last = (((off + view) / card_h) as usize + 2).min(rows_total);
-        let mut col = Column::new();
-        col = col.push(Space::new().height(first as f32 * card_h));
-        for r in first..last {
-            col = col.push(row(items[r * cols..(r * cols + cols).min(items.len())]
-                .iter()
-                .map(|x| f(app, x))
-                .collect::<Vec<Element<Message>>>()));
-        }
-        col = col.push(Space::new().height((rows_total - last) as f32 * card_h));
-        col.into()
-    })
+                .push((!info.biography.is_empty()).then(|| {
+                    column![
+                        heading("About", None),
+                        container(
+                            container(
+                                theme::txt(strip_html(&info.biography), 16.0, Weight::Normal)
+                                    .color(theme::SUB)
+                            )
+                            .padding(PAD)
+                            .max_width(672)
+                            .style(theme::fill(theme::ELEVATED, 8.0))
+                        )
+                        .padding([0.0, PAD])
+                    ]
+                    .spacing(8)
+                }))
+                .spacing(40),
+            ]
+            .padding(theme::pad(0.0, 0.0, PAD * 2.0, 0.0)),
+        )
+        .width(Fill)
+        .style(theme::fade(theme::shade(c, 0.4), 232.0 / h)),
+    ]
     .into()
 }
 
-fn albums_grid<'a>(app: &'a App, sort: &str) -> Element<'a, Message> {
-    let cur = if sort.is_empty() { "newest" } else { sort };
-    let mut col = column![
-        container(bold("Albums", 24.0)).padding([16, 12]),
-        sort_bar(
-            cur,
-            &[
-                ("newest", "Recently added"),
-                ("name", "Name"),
-                ("artist", "Artist"),
-                ("year", "Year"),
-                ("frequent", "Most played"),
-                ("recent", "Recently played"),
-                ("random", "Random"),
-                ("rating", "Rating"),
-            ],
-            "albums",
-        ),
-    ];
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    if let Some((_, v)) = app.cache.get(&app.route)
-        && let Some(p) = v.downcast_ref::<Pager<Album>>()
-    {
-        col = col.push(grid(app, &p.items, 246.0, 196.0, |app, a| {
-            card(
-                app,
-                &a.cover,
-                &a.name,
-                &a.artist,
-                format!("album:{}", a.id),
-                false,
-                Some(Message::PlayCtx(format!("album:{}", a.id), false)),
+fn strip_html(s: &str) -> String {
+    s.split('<')
+        .enumerate()
+        .map(|(n, p)| if n == 0 { p } else { p.split_once('>').map_or("", |x| x.1) })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn search<'a>(app: &'a App, q: &str) -> El<'a> {
+    if q.is_empty() {
+        let Some(gs) = app.data::<Vec<Genre>>("genres") else { return Space::new().into() };
+        let tw = app.grid().1 - 24.0;
+        let th = (tw * 0.56).round();
+        let tile = |g: &'a Genre| -> El<'a> {
+            container(
+                button(theme::bold(&g.name, 24.0).wrapping(text::Wrapping::WordOrGlyph))
+                    .padding(16)
+                    .width(tw)
+                    .height(th)
+                    .clip(true)
+                    .style(move |_, _| button::Style {
+                        background: Some(theme::color_of(&g.name).into()),
+                        text_color: theme::TEXT,
+                        border: iced::Border::default().rounded(8.0),
+                        ..button::Style::default()
+                    })
+                    .on_press(Message::Nav(format!("genre:{}", g.name))),
             )
-        }));
+            .padding(12)
+            .into()
+        };
+        return column![
+            container(theme::bold("Browse all", 24.0)).padding(theme::pad(PAD, PAD, 4.0, PAD)),
+            grid(app, gs.len(), th + 24.0, 64.0, |n| tile(&gs[n])),
+        ]
+        .into();
     }
-    col.into()
-}
-
-fn artists_grid<'a>(app: &'a App) -> Element<'a, Message> {
-    let mut col = column![container(bold("Artists", 24.0)).padding([16, 12])];
-    if let Some(l) = loading(app, &app.route) {
-        return l;
+    let Some(r) = app.data::<SearchRes>(&app.route) else { return Space::new().into() };
+    if r.artists.is_empty() && r.albums.is_empty() && r.songs.is_empty() {
+        return container(
+            column![
+                theme::bold(format!("No results found for \u{201c}{q}\u{201d}"), 24.0),
+                theme::sub("Check the spelling, or use fewer or different keywords.", 16.0),
+            ]
+            .spacing(16)
+            .align_x(Alignment::Center),
+        )
+        .center_x(Fill)
+        .padding(80)
+        .into();
     }
-    if let Some((_, v)) = app.cache.get(&app.route)
-        && let Some(p) = v.downcast_ref::<Pager<Artist>>()
-    {
-        col = col.push(grid(app, &p.items, 246.0, 196.0, |app, a| {
-            card(app, &a.cover, &a.name, "Artist", format!("artist:{}", a.id), true, None)
-        }));
-    }
-    col.into()
-}
-
-fn songs_page<'a>(app: &'a App, _sort: &str) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let mut col = column![container(bold("Songs", 24.0)).padding([16, 12])];
-    if let Some((_, v)) = app.cache.get(&app.route)
-        && let Some(p) = v.downcast_ref::<Pager<Song>>()
-    {
-        col = col.push(track_header(true, false));
-        col = col.push(vlist(app, &p.items, "Songs", true, false, 110.0));
-    }
-    col.into()
-}
-
-fn genres_page<'a>(app: &'a App) -> Element<'a, Message> {
-    search_page(app, "")
-}
-
-fn genre_page<'a>(app: &'a App, name: &str) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let mut col = column![container(bold(name.to_string(), 24.0)).padding([16, 12])];
-    if let Some((_, v)) = app.cache.get(&app.route)
-        && let Some(p) = v.downcast_ref::<Pager<Album>>()
-    {
-        col = col.push(grid(app, &p.items, 246.0, 196.0, |app, a| {
-            card(
-                app,
-                &a.cover,
-                &a.name,
-                &a.artist,
-                format!("album:{}", a.id),
-                false,
-                Some(Message::PlayCtx(format!("album:{}", a.id), false)),
+    let w = app.main_w() - 3.0 * PAD;
+    let lw = (w * 0.4).clamp(280.0, 420.0);
+    let ql = q.to_lowercase();
+    let best: Option<(&str, &str, String, String, bool)> = r
+        .artists
+        .iter()
+        .find(|a| a.name.to_lowercase() == ql)
+        .map(|a| {
+            (
+                a.cover.as_str(),
+                a.name.as_str(),
+                "Artist".to_string(),
+                format!("artist:{}", a.id),
+                true,
             )
-        }));
-    }
-    col.into()
-}
-
-fn folders_page<'a>(app: &'a App) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let mut col = column![container(bold("Folders", 24.0)).padding([16, 12])];
-    if let Some((_, v)) = app.cache.get(&app.route)
-        && let Some(a) = v.downcast_ref::<Vec<Artist>>()
-    {
-        for x in a.iter() {
-            col = col.push(
-                btn(
-                    row![i(icon::FOLDER, 18.0).color(theme::SUB), text(x.name.clone()).size(14),]
-                        .spacing(12)
-                        .padding(10)
-                        .align_y(Alignment::Center),
-                    Message::Nav(format!("folder:{}", x.id)),
+        })
+        .or_else(|| {
+            r.albums.first().map(|a| {
+                (
+                    a.cover.as_str(),
+                    a.name.as_str(),
+                    format!("Album \u{2022} {}", a.artist),
+                    format!("album:{}", a.id),
+                    false,
                 )
-                .width(Fill),
-            );
-        }
-    }
-    col.into()
-}
-
-fn folder_page<'a>(app: &'a App, _id: &str) -> Element<'a, Message> {
-    if let Some(l) = loading(app, &app.route) {
-        return l;
-    }
-    let mut col = Column::new();
-    if let Some((_, v)) = app.cache.get(&app.route)
-        && let Some(songs) = v.downcast_ref::<Vec<Song>>()
-    {
-        for (idx, s) in songs.iter().enumerate() {
-            if s.is_dir {
-                col = col.push(
-                    btn(
-                        row![
-                            i(icon::FOLDER, 18.0).color(theme::SUB),
-                            text(s.title.clone()).size(14),
-                        ]
-                        .spacing(12)
-                        .padding(10)
-                        .align_y(Alignment::Center),
-                        Message::Nav(format!("folder:{}", s.id)),
+            })
+        })
+        .or_else(|| {
+            r.artists.first().map(|a| {
+                (
+                    a.cover.as_str(),
+                    a.name.as_str(),
+                    "Artist".to_string(),
+                    format!("artist:{}", a.id),
+                    true,
+                )
+            })
+        });
+    let top: El = best.map_or_else(
+        || Space::new().into(),
+        |(cid, name, sub, route, round)| {
+            column![
+                theme::bold("Top result", 24.0),
+                button(
+                    column![
+                        cover(app, cid, 300, 92.0, round),
+                        theme::ell(name, lw - 40.0, 32.0, Weight::Bold),
+                        theme::sub(sub, 14.0)
+                    ]
+                    .spacing(12)
+                )
+                .padding(20)
+                .width(lw)
+                .style(|_, s| button::Style {
+                    background: Some(
+                        if matches!(s, button::Status::Hovered) {
+                            theme::MENU
+                        } else {
+                            color!(0x181818)
+                        }
+                        .into()
+                    ),
+                    text_color: theme::TEXT,
+                    border: iced::Border::default().rounded(8.0),
+                    ..button::Style::default()
+                })
+                .on_press(Message::Nav(route)),
+            ]
+            .spacing(8)
+            .into()
+        },
+    );
+    let sw = w - lw;
+    let sc = (sw - 32.0 - 16.0 - 16.0 - 120.0 - 16.0, 0.0, 0.0);
+    let k = app.grid().0;
+    let pls: Vec<El> = app
+        .data::<Lib>("lib")
+        .map(|l| {
+            l.playlists
+                .iter()
+                .filter(|p| p.name.to_lowercase().contains(&ql))
+                .take(k)
+                .map(|p| {
+                    let r = format!("playlist:{}", p.id);
+                    card(
+                        app,
+                        &p.cover,
+                        &p.name,
+                        format!("By {}", p.owner),
+                        r.clone(),
+                        false,
+                        Some(Message::PlayCtx(r, false)),
                     )
-                    .width(Fill),
-                );
-            } else {
-                col = col.push(track_row(app, s, idx, songs, "Folders", false, false, None));
-            }
-        }
-    }
-    col.into()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    column![
+        container(
+            row![
+                top,
+                column![theme::bold("Songs", 24.0)]
+                    .extend(
+                        r.songs
+                            .iter()
+                            .take(4)
+                            .enumerate()
+                            .map(|(n, s)| track(app, s, n, &app.route, sc))
+                    )
+                    .spacing(8)
+                    .width(sw)
+            ]
+            .spacing(PAD)
+        )
+        .padding([0.0, PAD]),
+        shelf("Artists", None, r.artists.iter().take(k).map(|a| artist_card(app, a)).collect()),
+        shelf(
+            "Albums",
+            None,
+            r.albums
+                .iter()
+                .take(k)
+                .map(|a| album_card(app, a, format!("{} \u{2022} {}", a.year, a.artist)))
+                .collect()
+        ),
+        shelf("Playlists", None, pls),
+    ]
+    .spacing(40)
+    .padding(theme::pad(PAD, 0.0, PAD, 0.0))
+    .into()
 }
 
-fn lyrics_page<'a>(app: &'a App) -> Element<'a, Message> {
+fn albums<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
+    let rh = app.grid().1 + 52.0;
+    let chips = (kind == "albums").then(|| {
+        let cur = if arg.is_empty() { "newest" } else { arg };
+        Row::with_children(
+            [
+                ("newest", "Recently added"),
+                ("recent", "Recently played"),
+                ("frequent", "Most played"),
+                ("alphabeticalByName", "Name"),
+                ("alphabeticalByArtist", "Artist"),
+                ("byYear", "Year"),
+                ("random", "Random"),
+            ]
+            .map(|(k, name)| {
+                button(theme::txt(name, 14.0, Weight::Normal))
+                    .style(theme::chip(cur == k))
+                    .padding([6, 12])
+                    .on_press(Message::Nav(format!("albums:{k}")))
+                    .into()
+            }),
+        )
+        .spacing(8)
+        .into()
+    });
+    let title = if kind == "genre" { arg } else { "Albums" };
+    column![grid_head(title, chips)]
+        .push(app.data::<Pager<Album>>(&app.route).map(|p| {
+            grid(app, p.items.len(), rh, GRID_Y, |n| {
+                album_card(app, &p.items[n], p.items[n].artist.clone())
+            })
+        }))
+        .into()
+}
+
+fn artists<'a>(app: &'a App) -> El<'a> {
+    let rh = app.grid().1 + 52.0;
+    column![grid_head("Artists", None)]
+        .push(
+            app.data::<Pager<Artist>>(&app.route)
+                .map(|p| grid(app, p.items.len(), rh, GRID_Y, |n| artist_card(app, &p.items[n]))),
+        )
+        .into()
+}
+
+fn songs<'a>(app: &'a App) -> El<'a> {
+    let c = cols(app, true, false);
+    column![container(theme::bold("Songs", 32.0)).padding(PAD), table_head(c),]
+        .push(
+            app.data::<Pager<Song>>(&app.route)
+                .map(|p| vlist(app, &p.items, &app.route, c, 90.0 + HEAD)),
+        )
+        .into()
+}
+
+fn folders<'a>(app: &'a App) -> El<'a> {
+    let dir = |id: &str, name: &str| -> El<'a> {
+        button(
+            row![
+                container(i(icon::FOLDER, 20.0).color(theme::SUB).center())
+                    .center(40)
+                    .style(theme::fill(theme::ELEVATED, 4.0)),
+                theme::ell(name, app.main_w() - 2.0 * PAD - 80.0, 16.0, Weight::Normal)
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
+        .padding([8, 16])
+        .width(Fill)
+        .style(theme::track(false))
+        .on_press(Message::Nav(format!("folder:{id}")))
+        .into()
+    };
+    let c = cols(app, false, false);
+    let body: El = if let Some(a) = app.data::<Vec<Artist>>(&app.route) {
+        Column::with_children(a.iter().map(|x| dir(&x.id, &x.name))).into()
+    } else if let Some(v) = app.data::<Vec<Song>>(&app.route) {
+        Column::with_children(v.iter().enumerate().map(|(n, s)| {
+            if s.is_dir { dir(&s.id, &s.title) } else { track(app, s, n, &app.route, c) }
+        }))
+        .into()
+    } else {
+        Space::new().into()
+    };
+    column![
+        container(theme::bold("Folders", 32.0)).padding(PAD),
+        container(body).padding(theme::pad(0.0, PAD, PAD, PAD))
+    ]
+    .into()
+}
+
+fn lyrics<'a>(app: &'a App) -> El<'a> {
     let Some(song) = app.current_song() else {
-        return container(theme::sub("Nothing is playing.", 16.0)).padding(60).into();
+        return container(theme::sub("Play a song to see its lyrics.", 16.0))
+            .center_x(Fill)
+            .padding(80)
+            .into();
     };
     let key = format!("lyrics:{}", song.id);
-    if let Some(l) = loading(app, &key) {
-        return l;
+    if let Some(s) = state(app, &key) {
+        return s;
     }
     let c = head_color(app, &song.cover);
-    let Some((_, v)) = app.cache.get(&key) else { return Space::new().into() };
-    let Some(ly) = v.downcast_ref::<Vec<Lyrics>>() else { return Space::new().into() };
-    let pos_ms = (app.position * 1000.0) as i64;
-    let mut col = Column::new().spacing(8).padding([60, 40]).width(Fill);
-    if ly.is_empty() || ly.iter().all(|l| l.lines.is_empty()) {
-        return container(theme::sub("No lyrics are available for this song.", 16.0))
-            .width(Fill)
-            .height(Fill)
+    let Some(l) =
+        app.data::<Vec<Lyrics>>(&key).and_then(|v| v.iter().find(|l| !l.lines.is_empty()))
+    else {
+        return container(theme::bold("No lyrics are available for this song.", 24.0))
             .center_x(Fill)
-            .center_y(Fill)
-            .style(theme::header(c))
+            .padding(80)
+            .height(app.cfg.settings.window.1 - 160.0)
+            .style(theme::fill(c, 0.0))
             .into();
-    }
-    let l = &ly[0];
+    };
+    let ms = (app.position * 1000.0) as i64;
     let cur = l
         .lines
         .iter()
-        .enumerate()
-        .filter(|(_, (t, _))| t.is_some_and(|t| (t as i64 + l.offset) <= pos_ms))
-        .map(|(i, _)| i)
-        .next_back()
+        .rposition(|(t, _)| t.is_some_and(|t| t as i64 + l.offset <= ms))
         .unwrap_or(0);
-    for (i, (t, line)) in l.lines.iter().enumerate() {
-        let (colr, bolded) = if !l.synced {
-            (theme::TEXT, false)
-        } else if i < cur {
-            (theme::tint(0.7), false)
-        } else if i == cur {
-            (theme::TEXT, true)
-        } else {
-            (Color { a: 0.55, ..theme::BG }, false)
+    let lines = l.lines.iter().enumerate().map(|(n, (t, line))| -> El<'a> {
+        let colr = match n {
+            _ if !l.synced => theme::TEXT,
+            n if n == cur => theme::TEXT,
+            n if n < cur => theme::tint(0.7),
+            _ => Color { a: 0.8, ..theme::BG },
         };
-        let mut el = text(line.clone()).size(28).color(colr);
-        if bolded || !l.synced {
-            el = el.font(Font { weight: iced::font::Weight::Bold, ..Font::DEFAULT });
+        let txt = theme::bold(if line.is_empty() { "\u{266a}" } else { line }, 32.0);
+        match t {
+            Some(t) if l.synced => button(txt)
+                .padding(0)
+                .style(theme::link(colr))
+                .on_press(Message::Seek((*t as i64 + l.offset).max(0) as f32 / 1000.0))
+                .into(),
+            _ => txt.color(colr).into(),
         }
-        let seek_ms = t.map(|t| (t as i64 + l.offset).max(0) as f32 / 1000.0);
-        let line: Element<Message> = match seek_ms {
-            Some(ms) => btn(el, Message::Seek(ms)).into(),
-            None => el.into(),
-        };
-        col = col.push(line);
-    }
-    container(col).style(theme::header(c)).into()
+    });
+    container(Column::with_children(lines).spacing(16).max_width(900))
+        .padding([48.0, PAD * 2.0])
+        .width(Fill)
+        .style(theme::fill(c, 0.0))
+        .into()
 }
 
-fn settings_page<'a>(app: &'a App) -> Element<'a, Message> {
+fn settings<'a>(app: &'a App) -> El<'a> {
     let st = &app.cfg.settings;
-    let sct: fn(&'a str) -> Element<'a, Message> =
-        |t| container(bold(t, 20.0)).padding(theme::pad(24.0, 12.0, 8.0, 12.0)).into();
-    let row_s = |label: &str, c: Element<'a, Message>| {
-        row![theme::sub(label.to_string(), 14.0).width(220), container(c).width(Fill),]
+    let section =
+        |t: &'a str| container(theme::bold(t, 16.0)).padding(theme::pad(PAD, 0.0, 8.0, 0.0));
+    let line = |label: &'a str, c: El<'a>| -> El<'a> {
+        row![theme::txt(label, 14.0, Weight::Normal).color(theme::SUB).width(Fill), c]
             .align_y(Alignment::Center)
-            .padding([6, 12])
+            .height(48)
+            .into()
     };
-    let pick = |opts: &'a [&'a str], cur: &'a str, f: fn(String) -> Message| {
-        pick_list(
-            opts.iter().map(|s| s.to_string()).collect::<Vec<String>>(),
-            Some(cur.to_string()),
-            f,
-        )
-        .text_size(13)
-        .padding([6, 10])
+    let pick = |opts: &[&str], cur: String, f: fn(String) -> Message| -> El<'a> {
+        pick_list(opts.iter().map(|s| s.to_string()).collect::<Vec<_>>(), Some(cur), f)
+            .text_size(14)
+            .font(theme::fw(Weight::Normal))
+            .padding([8, 12])
+            .width(200)
+            .into()
     };
-    let mut col = column![container(bold("Settings", 26.0)).padding([16, 12])];
-    col = col.push(sct("Playback"));
-    col = col.push(row_s(
-        "ReplayGain",
-        pick(&["off", "track", "album"], st.replaygain.as_str(), |o| Message::Set(Set::Rg(o)))
-            .into(),
-    ));
-    col = col.push(row_s(
-        "Preamp (dB)",
+    let num = |v: f32,
+               r: std::ops::RangeInclusive<f32>,
+               f: fn(f32) -> Message,
+               label: String|
+     -> El<'a> {
         row![
-            slider(-15.0..=15.0, st.preamp_db, |v| Message::Set(Set::Preamp(v))).width(200),
-            theme::sub(format!("{:.1}", st.preamp_db), 13.0).width(48),
+            slider(r, v, f).step(0.05f32).width(200).style(theme::seek),
+            theme::sub(label, 14.0).width(56).align_x(Alignment::End)
         ]
         .spacing(12)
         .align_y(Alignment::Center)
-        .into(),
-    ));
-    col = col.push(row_s(
-        "Crossfade (s)",
+        .into()
+    };
+    let tog = |v: bool, f: fn(bool) -> Message| -> El<'a> {
+        toggler(v).on_toggle(f).style(theme::tog).size(20).into()
+    };
+    let bitrate = if st.transcode_max_bitrate == 0 {
+        "unlimited".to_string()
+    } else {
+        st.transcode_max_bitrate.to_string()
+    };
+    let servers = app.cfg.servers.iter().map(|s| -> El<'a> {
         row![
-            slider(0.0..=12.0, st.crossfade_secs, |v| Message::Set(Set::Xfade(v))).width(200),
-            theme::sub(format!("{:.0}", st.crossfade_secs), 13.0).width(48),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center)
-        .into(),
-    ));
-    col = col.push(row_s(
-        "Speed",
-        row![
-            slider(0.5..=2.0, st.speed, |v| Message::Set(Set::Speed(v))).width(200),
-            theme::sub(format!("{:.2}x", st.speed), 13.0).width(48),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center)
-        .into(),
-    ));
-    col = col.push(row_s(
-        "Transcode format",
-        pick(&["original", "mp3", "opus", "aac"], st.transcode_format.as_str(), |o| {
-            Message::Set(Set::Trans(match o.as_str() {
-                "mp3" => 1,
-                "opus" => 2,
-                "aac" => 3,
-                _ => 0,
-            }))
-        })
-        .into(),
-    ));
-    col = col.push(row_s(
-        "Max bitrate",
-        pick(
-            &["unlimited", "320", "256", "192", "128", "96"],
-            if st.transcode_max_bitrate == 0 { "unlimited" } else { "0" },
-            |o| Message::Set(Set::Bitrate(o.parse().unwrap_or(0))),
-        )
-        .into(),
-    ));
-    col = col.push(sct("Library"));
-    col = col.push(row_s(
-        "Sync play queue",
-        toggler(st.queue_sync).on_toggle(|b| Message::Set(Set::Qsync(b))).into(),
-    ));
-    col = col.push(sct("Integrations"));
-    col = col.push(row_s(
-        "Discord Rich Presence",
-        toggler(st.discord).on_toggle(|b| Message::Set(Set::Discord(b))).into(),
-    ));
-    col = col.push(sct("Servers"));
-    for s in &app.cfg.servers {
-        col = col.push(
-            row![
-                column![text(s.name.clone()).size(14), theme::sub(s.user.clone(), 12.0),],
-                Space::new().width(Fill),
-                btn(theme::sub("Log out", 13.0), Message::LogOut),
+            column![
+                theme::txt(&s.name, 14.0, Weight::Normal),
+                theme::sub(format!("{} \u{2022} {}", s.user, s.url), 14.0)
             ]
-            .padding([6, 12])
-            .align_y(Alignment::Center),
-        );
-    }
-    col = col.push(sct("Cache"));
-    col = col.push(row_s(
-        "Cover cache",
-        row![
-            theme::sub(format!("{} MB on disk", app.covers.bytes / 1048576), 13.0),
-            Space::new().width(16),
-            btn(theme::sub("Clear cache", 13.0), Message::ClearCache),
+            .spacing(2)
+            .width(Fill),
+            (app.cfg.active.as_ref() == Some(&s.id)).then(|| {
+                button(theme::bold("Log out", 14.0))
+                    .style(theme::pill)
+                    .padding([7, 15])
+                    .on_press(Message::LogOut)
+            }),
         ]
         .align_y(Alignment::Center)
-        .into(),
-    ));
-    col = col.push(sct("About"));
-    col = col.push(
-        row![
-            theme::sub(format!("navify {}", env!("CARGO_PKG_VERSION")), 13.0),
-            Space::new().width(Fill),
-            btn(theme::sub("Licenses", 13.0), Message::Noop),
+        .height(56)
+        .into()
+    });
+    container(
+        column![
+            theme::bold("Settings", 32.0),
+            section("Playback"),
+            line(
+                "ReplayGain",
+                pick(&["off", "track", "album"], st.replaygain.clone(), |o| Message::Set(Set::Rg(
+                    o
+                )))
+            ),
+            line(
+                "Preamp",
+                num(
+                    st.preamp_db,
+                    -15.0..=15.0,
+                    |v| Message::Set(Set::Preamp(v)),
+                    format!("{:+.1} dB", st.preamp_db)
+                )
+            ),
+            line(
+                "Crossfade",
+                num(
+                    st.crossfade_secs,
+                    0.0..=12.0,
+                    |v| Message::Set(Set::Xfade(v)),
+                    format!("{:.0} s", st.crossfade_secs)
+                )
+            ),
+            line(
+                "Speed",
+                num(
+                    st.speed,
+                    0.5..=2.0,
+                    |v| Message::Set(Set::Speed(v)),
+                    format!("{:.2}x", st.speed)
+                )
+            ),
+            section("Streaming"),
+            line(
+                "Transcode format",
+                pick(
+                    &["original", "mp3", "opus", "aac"],
+                    if st.transcode_format.is_empty() {
+                        "original".into()
+                    } else {
+                        st.transcode_format.clone()
+                    },
+                    |o| {
+                        Message::Set(Set::Trans(
+                            ["original", "mp3", "opus", "aac"]
+                                .iter()
+                                .position(|x| *x == o)
+                                .unwrap_or(0) as u8,
+                        ))
+                    }
+                )
+            ),
+            line(
+                "Maximum bitrate (kbps)",
+                pick(&["unlimited", "320", "256", "192", "128", "96"], bitrate, |o| Message::Set(
+                    Set::Bitrate(o.parse().unwrap_or(0))
+                ))
+            ),
+            section("Library"),
+            line(
+                "Sync the play queue with the server",
+                tog(st.queue_sync, |b| Message::Set(Set::Qsync(b)))
+            ),
+            section("Integrations"),
+            line(
+                "Show the current song in Discord",
+                tog(st.discord, |b| Message::Set(Set::Discord(b)))
+            ),
+            section("Servers"),
         ]
-        .padding(theme::pad(6.0, 12.0, 24.0, 12.0)),
-    );
-    col.into()
+        .extend(servers)
+        .push(section("Storage"))
+        .push(line(
+            "Cover cache",
+            row![
+                theme::sub(format!("{} MB in memory", app.covers.bytes / 1_048_576), 14.0),
+                button(theme::bold("Clear", 14.0))
+                    .style(theme::pill)
+                    .padding([7, 15])
+                    .on_press(Message::ClearCache)
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center)
+            .into(),
+        ))
+        .push(section("About"))
+        .push(line("Version", theme::sub(env!("CARGO_PKG_VERSION"), 14.0).into()))
+        .max_width(860),
+    )
+    .padding(PAD)
+    .into()
 }
 
-pub fn now_playing<'a>(app: &'a App) -> Element<'a, Message> {
+pub fn now_playing<'a>(app: &'a App) -> El<'a> {
+    let w = crate::app::RIGHT_W - 32.0;
     let Some(s) = app.current_song() else {
-        return container(theme::sub("Nothing is playing.", 14.0)).padding(24).into();
+        return container(theme::sub("Nothing is playing.", 14.0)).padding(16).into();
     };
-    let starred = app.starred.get(&s.id).copied().unwrap_or(s.starred);
+    let starred = app.is_starred(&s.id, s.starred);
+    let next = app.queue.get(app.real_at(app.index + 1));
     column![
         row![
-            bold("Now playing", 16.0),
-            Space::new().width(Fill),
-            theme::sub(app.source.clone(), 12.0),
+            theme::ell(&app.source, w - 32.0, 16.0, Weight::Bold).width(Fill),
+            icon_btn(icon::X, 16.0, Message::Panel(1)),
         ]
-        .padding(theme::pad(16.0, 16.0, 8.0, 16.0))
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+        .padding(theme::pad(8.0, 8.0, 8.0, 16.0)),
         scrollable(
             column![
-                container(cover(app, &s.cover, 640, 280.0, false)).padding([8, 16]),
+                cover(app, &s.cover, 300, w, false),
                 row![
                     column![
-                        bold(theme::ell(&s.title, 200.0, 20.0), 20.0),
-                        artists_line(&s.artists, 13.0),
+                        btn(
+                            theme::ell(&s.title, w - 40.0, 24.0, Weight::Bold),
+                            Message::Nav(format!("album:{}", s.album_id))
+                        ),
+                        artists_line(&s.artists, 16.0, w - 40.0),
                     ]
-                    .spacing(4),
-                    Space::new().width(Fill),
-                    icon_btn(icon::HEART, 18.0, Message::Star(s.id.clone(), !starred)),
+                    .spacing(4)
+                    .width(Fill),
+                    button(i(icon::HEART, 20.0).center())
+                        .padding(0)
+                        .width(32)
+                        .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
+                        .on_press(Message::Star(s.id.clone(), !starred)),
                 ]
-                .padding([8, 16])
                 .align_y(Alignment::Center),
                 container(
-                    column![bold("About the artist", 15.0), theme::sub(s.artist.clone(), 13.0),]
-                        .spacing(8)
-                        .padding(16)
-                        .width(Fill),
+                    column![
+                        theme::bold("About the artist", 16.0),
+                        button(theme::bold(s.artists.first().map_or(&s.artist, |a| &a.name), 16.0))
+                            .padding(0)
+                            .style(theme::link(theme::TEXT))
+                            .on_press(Message::Nav(format!(
+                                "artist:{}",
+                                s.artists.first().map_or(&s.artist_id, |a| &a.id)
+                            ))),
+                    ]
+                    .spacing(12)
+                    .padding(16)
+                    .width(Fill),
                 )
-                .style(theme::elevated)
-                .padding([8, 16]),
+                .style(theme::fill(theme::ELEVATED, 8.0)),
             ]
-            .spacing(8),
+            .push(next.map(|n| {
+                container(
+                    column![
+                        row![
+                            theme::bold("Next in queue", 16.0).width(Fill),
+                            button(theme::bold("Open queue", 14.0))
+                                .padding(0)
+                                .style(theme::link(theme::SUB))
+                                .on_press(Message::Panel(2))
+                        ],
+                        queue_row(app, n, app.index + 1, w - 32.0),
+                    ]
+                    .spacing(12)
+                    .padding(16)
+                    .width(Fill),
+                )
+                .style(theme::fill(theme::ELEVATED, 8.0))
+            }))
+            .spacing(16)
+            .padding(theme::pad(0.0, 16.0, 16.0, 16.0)),
         )
         .style(theme::scroll),
     ]
     .into()
 }
 
-pub fn queue_panel<'a>(app: &'a App) -> Element<'a, Message> {
-    let mut col = column![
-        row![
-            bold("Queue", 16.0),
-            Space::new().width(Fill),
-            btn(theme::sub("Clear queue", 12.0), Message::QClear),
-        ]
-        .padding(theme::pad(16.0, 16.0, 8.0, 16.0))
-        .align_y(Alignment::Center),
-    ];
-    let mut list = Column::new();
-    if let Some(s) = app.current_song() {
-        list = list.push(container(theme::sub("Now playing", 12.0)).padding([8, 16]));
-        list = list.push(track_row(app, s, app.index, &app.queue, "Queue", false, false, None));
-    }
-    list = list
-        .push(container(theme::sub("Next up", 12.0)).padding(theme::pad(12.0, 16.0, 4.0, 16.0)));
-    for i in (app.index + 1)
-        ..app.queue.len().max(app.shuffle.as_ref().map_or(0, |o| o.len()).max(app.queue.len()))
-    {
-        let ri = app.real_at(i);
-        if ri >= app.queue.len() {
-            break;
-        }
-        let s = &app.queue[ri];
-        list = list.push(
+fn queue_row<'a>(app: &'a App, s: &'a Song, n: usize, w: f32) -> El<'a> {
+    let cur = n == app.index;
+    mouse_area(
+        container(
             row![
-                mouse_area(
-                    row![
-                        cover(app, &s.cover, 128, 40.0, false),
-                        column![
-                            text(s.title.clone()).size(13),
-                            theme::sub(s.artist.clone(), 11.0),
-                        ]
-                        .spacing(2)
-                        .width(Fill),
-                    ]
-                    .spacing(10)
-                    .align_y(Alignment::Center)
-                    .padding([4, 12]),
-                )
-                .on_double_click(Message::PlayQueue(i)),
-                icon_btn(icon::X, 13.0, Message::QDel(i)),
-            ]
-            .align_y(Alignment::Center),
-        );
-    }
-    col = col.push(scrollable(list).style(theme::scroll));
-    col.into()
-}
-
-pub fn menu<'a>(app: &'a App, m: &'a Menu) -> Element<'a, Message> {
-    let items: Vec<Element<Message>> = match &m.kind {
-        MenuKind::Speed => [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-            .iter()
-            .map(|v| {
-                menu_item(
-                    if (app.cfg.settings.speed - v).abs() < 0.01 {
-                        icon::CHECK
+                cover(app, &s.cover, 128, 48.0, false),
+                column![
+                    theme::ell(&s.title, w - 100.0, 16.0, Weight::Normal).color(if cur {
+                        theme::ACCENT
                     } else {
-                        icon::SPEED
-                    },
-                    &format!("{v:.2}x"),
-                    Message::Set(Set::Speed(*v)),
-                )
-            })
-            .collect(),
-        MenuKind::User => {
-            let mut v: Vec<Element<Message>> = vec![
-                container(
-                    column![
-                        text(app.session.as_ref().map_or(String::new(), |s| s.server.name.clone()))
-                            .size(14),
-                        theme::sub(
-                            app.session.as_ref().map_or(String::new(), |s| s.server.url.clone()),
-                            11.0
-                        ),
-                    ]
-                    .padding([8, 12]),
-                )
-                .into(),
-            ];
-            for s in &app.cfg.servers {
-                if Some(&s.id) != app.cfg.active.as_ref() {
-                    v.push(menu_item(
-                        icon::SERVER,
-                        &format!("Switch to {}", s.name),
-                        Message::UseServer(s.id.clone()),
-                    ));
-                }
-            }
-            v.push(menu_item(icon::LOGOUT, "Log out", Message::LogOut));
-            v
-        }
-        MenuKind::Song(s) | MenuKind::SongIn(s, _) => {
-            let starred = app.starred.get(&s.id).copied().unwrap_or(s.starred);
-            let mut v: Vec<Element<Message>> = vec![
-                menu_item(icon::QUEUE, "Add to queue", Message::QEnd(vec![s.clone()])),
-                menu_item(icon::LISTPLUS, "Play next", Message::QNext(vec![s.clone()])),
-            ];
-            if !s.artist_id.is_empty() {
-                v.push(menu_item(
-                    icon::USER,
-                    "Go to artist",
-                    Message::Nav(format!("artist:{}", s.artist_id)),
-                ));
-            }
-            if !s.album_id.is_empty() {
-                v.push(menu_item(
-                    icon::ALBUM,
-                    "Go to album",
-                    Message::Nav(format!("album:{}", s.album_id)),
-                ));
-            }
-            v.push(menu_item(
-                icon::HEART,
-                if starred { "Remove from Liked Songs" } else { "Save to Liked Songs" },
-                Message::Star(s.id.clone(), !starred),
-            ));
-            v.push(menu_sub(icon::PLUS, "Add to playlist", 1));
-            if let MenuKind::SongIn(_, i) = &m.kind {
-                v.push(menu_item(icon::MINUS, "Remove from this playlist", Message::PlRemove(*i)));
-            }
-            v.push(menu_sub(icon::STAR, "Rate", 2));
-            v.push(menu_item(icon::RADIO, "Start radio", Message::Radio(s.id.clone())));
-            match m.sub {
-                1 => {
-                    let mut pl = vec![menu_item(
-                        icon::PLUS,
-                        "New playlist",
-                        Message::Modal(String::new(), false),
-                    )];
-                    if let Some((_, lv)) = app.cache.get("lib")
-                        && let Some(l) = lv.downcast_ref::<Lib>()
-                    {
-                        for p in &l.playlists {
-                            pl.push(menu_item(
-                                icon::MUSIC,
-                                &p.name,
-                                Message::PlAdd(p.id.clone(), vec![s.id.clone()]),
-                            ));
-                        }
-                    }
-                    return container(column(pl)).style(theme::menu).into();
-                }
-                2 => {
-                    return container(
-                        row((0..=5)
-                            .map(|n| {
-                                btn(
-                                    i(icon::STAR, 16.0).color(theme::SUB).center(),
-                                    Message::Rate(s.id.clone(), n),
-                                )
-                                .into()
-                            })
-                            .collect::<Vec<Element<Message>>>())
-                        .padding(8),
-                    )
-                    .style(theme::menu)
-                    .into();
-                }
-                _ => {}
-            }
-            v
-        }
-        MenuKind::Album(a) => vec![
-            menu_item(icon::PLAY, "Play", Message::PlayCtx(format!("album:{}", a.id), false)),
-            menu_item(icon::SHUFFLE, "Shuffle", Message::PlayCtx(format!("album:{}", a.id), true)),
-            menu_item(icon::QUEUE, "Add to queue", Message::AlbumQueue(a.id.clone())),
-            menu_item(
-                icon::HEART,
-                if app.starred.get(&a.id).copied().unwrap_or(a.starred) {
-                    "Remove from Liked"
-                } else {
-                    "Like"
-                },
-                Message::Star(a.id.clone(), !app.starred.get(&a.id).copied().unwrap_or(a.starred)),
-            ),
-            menu_item(icon::USER, "Go to artist", Message::Nav(format!("artist:{}", a.artist_id))),
-        ],
-        MenuKind::Artist(a) => vec![
-            menu_item(icon::PLAY, "Play", Message::PlayCtx(format!("artist:{}", a.id), false)),
-            menu_item(icon::SHUFFLE, "Shuffle", Message::PlayCtx(format!("artist:{}", a.id), true)),
-            menu_item(
-                icon::HEART,
-                if app.starred.get(&a.id).copied().unwrap_or(a.starred) {
-                    "Unfollow"
-                } else {
-                    "Follow"
-                },
-                Message::Star(a.id.clone(), !app.starred.get(&a.id).copied().unwrap_or(a.starred)),
-            ),
-        ],
-        MenuKind::Playlist(p) => vec![
-            menu_item(icon::PLAY, "Play", Message::PlayCtx(format!("playlist:{}", p.id), false)),
-            menu_item(
-                icon::SHUFFLE,
-                "Shuffle",
-                Message::PlayCtx(format!("playlist:{}", p.id), true),
-            ),
-            menu_item(icon::PENCIL, "Rename", Message::Modal(p.id.clone(), true)),
-            menu_item(icon::TRASH, "Delete", Message::PlDel(p.id.clone())),
-        ],
-    };
-    container(column(items)).style(theme::menu).into()
+                        theme::TEXT
+                    }),
+                    theme::ell(&s.artist, w - 100.0, 14.0, Weight::Normal).color(theme::SUB),
+                ]
+                .spacing(2)
+                .width(Fill),
+            ]
+            .push((!cur).then(|| icon_btn(icon::X, 14.0, Message::QDel(n))))
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
+        .padding(8)
+        .style(theme::fill(Color::TRANSPARENT, 4.0)),
+    )
+    .on_double_click(Message::PlayQueue(n))
+    .on_right_press(Message::Menu(Box::new(MenuKind::Song(s.clone()))))
+    .into()
 }
 
-pub fn login<'a>(app: &'a App) -> Element<'a, Message> {
-    let l = &app.login;
-    let mut col = Column::new().spacing(24).width(480);
-    col = col.push(
-        row![i(icon::MUSIC, 30.0).color(theme::ACCENT), theme::black("navify", 30.0)]
-            .spacing(8)
-            .align_y(Alignment::Center),
-    );
-    col = col.push(theme::black("Log in to navify", 44.0));
-    col = col.push(
-        container(Space::new())
-            .height(1)
-            .style(|_| container::Style::default().background(theme::tint(0.15))),
-    );
-    if !app.cfg.servers.is_empty() {
-        let mut srvs = Column::new().spacing(2);
-        for s in &app.cfg.servers {
-            let initial = s.user.chars().next().unwrap_or('?').to_ascii_uppercase().to_string();
-            srvs = srvs.push(
-                button(
-                    row![
-                        container(
-                            text(initial)
-                                .size(16)
-                                .font(theme::fw(iced::font::Weight::Bold))
-                                .center(),
-                        )
-                        .width(40)
-                        .height(40)
-                        .center_x(40)
-                        .center_y(40)
-                        .style(|_| {
-                            container::Style::default()
-                                .background(theme::CHIP)
-                                .border(iced::Border::default().rounded(500.0))
-                        }),
-                        column![
-                            theme::med(s.name.clone(), 15.0),
-                            theme::sub2(s.user.clone(), 13.0),
-                        ]
-                        .spacing(2),
-                        Space::new().width(Fill),
-                        icon_btn(icon::X, 14.0, Message::DropServer(s.id.clone())),
-                    ]
-                    .spacing(12)
-                    .align_y(Alignment::Center)
-                    .padding([8, 4]),
+pub fn queue_panel<'a>(app: &'a App) -> El<'a> {
+    let w = crate::app::RIGHT_W - 16.0;
+    let next: Vec<El> = (app.index + 1..app.queue.len())
+        .take(100)
+        .filter_map(|n| app.queue.get(app.real_at(n)).map(|s| queue_row(app, s, n, w)))
+        .collect();
+    let more = app.queue.len().saturating_sub(app.index + 101);
+    let title = |t: String| {
+        container(theme::ell(&t, w - 16.0, 16.0, Weight::Bold))
+            .padding(theme::pad(16.0, 8.0, 8.0, 8.0))
+    };
+    column![
+        row![
+            theme::bold("Queue", 16.0).width(Fill),
+            (!app.queue.is_empty()).then(|| button(theme::bold("Clear queue", 14.0))
+                .padding(0)
+                .style(theme::link(theme::SUB))
+                .on_press(Message::QClear)),
+            icon_btn(icon::X, 16.0, Message::Panel(2)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .padding(theme::pad(8.0, 8.0, 8.0, 16.0)),
+        scrollable(
+            column![]
+                .push(
+                    app.current_song().map(|s| column![
+                        title("Now playing".into()),
+                        queue_row(app, s, app.index, w)
+                    ])
                 )
-                .on_press(Message::UseServer(s.id.clone()))
-                .style(theme::menu_item)
-                .width(Fill),
+                .push((!next.is_empty()).then(|| title(if app.source.is_empty() {
+                    "Next up".into()
+                } else {
+                    format!("Next from: {}", app.source)
+                })))
+                .extend(next)
+                .push(
+                    (more > 0).then(
+                        || container(theme::sub(format!("{more} more songs"), 14.0)).padding(8)
+                    )
+                )
+                .push(
+                    app.queue.is_empty().then(|| container(theme::sub(
+                        "The queue is empty.",
+                        14.0
+                    ))
+                    .padding(8))
+                )
+                .padding(theme::pad(0.0, 8.0, 8.0, 8.0)),
+        )
+        .style(theme::scroll),
+    ]
+    .into()
+}
+
+pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
+    const W: f32 = 260.0;
+    let item = |ic: char, label: String, msg: Message| -> El<'a> {
+        button(
+            row![i(ic, 16.0).color(theme::SUB), theme::ell(&label, W - 64.0, 14.0, Weight::Normal)]
+                .spacing(12)
+                .align_y(Alignment::Center),
+        )
+        .padding([0, 12])
+        .height(40)
+        .width(Fill)
+        .style(theme::menu_item)
+        .on_press(msg)
+        .into()
+    };
+    let more = |ic: char, label: &str, sub: u8| -> El<'a> {
+        button(
+            row![
+                i(ic, 16.0).color(theme::SUB),
+                theme::txt(label, 14.0, Weight::Normal).width(Fill),
+                i(icon::RIGHT, 16.0)
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
+        .padding([0, 12])
+        .height(40)
+        .width(Fill)
+        .style(theme::menu_item)
+        .on_press(Message::MenuSub(sub))
+        .into()
+    };
+    let star = |id: &str, on: bool, yes: &str, no: &str| {
+        let on = app.is_starred(id, on);
+        item(icon::HEART, if on { yes } else { no }.into(), Message::Star(id.into(), !on))
+    };
+    let ctx = |kind: &str, id: &str| {
+        let r = format!("{kind}:{id}");
+        [
+            item(icon::PLAY, "Play".into(), Message::PlayCtx(r.clone(), false)),
+            item(icon::SHUFFLE, "Shuffle".into(), Message::PlayCtx(r, true)),
+        ]
+    };
+    let (items, seps): (Vec<El>, usize) = match &m.kind {
+        MenuKind::Speed => (
+            [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+                .map(|v| {
+                    let on = (app.cfg.settings.speed - v).abs() < 0.01;
+                    item(
+                        if on { icon::CHECK } else { icon::SPEED },
+                        format!("{v:.2}x"),
+                        Message::Set(Set::Speed(v)),
+                    )
+                })
+                .into(),
+            0,
+        ),
+        MenuKind::User => {
+            let s = app.session.as_ref();
+            let head: El = container(
+                column![
+                    theme::bold(s.map_or("", |s| s.server.user.as_str()), 14.0),
+                    theme::ell(
+                        s.map_or("", |s| s.server.url.as_str()),
+                        W - 32.0,
+                        12.0,
+                        Weight::Normal
+                    )
+                    .color(theme::SUB),
+                ]
+                .spacing(2),
+            )
+            .padding([8, 12])
+            .height(48)
+            .into();
+            let v: Vec<El> = std::iter::once(head)
+                .chain(
+                    app.cfg.servers.iter().filter(|s| app.cfg.active.as_ref() != Some(&s.id)).map(
+                        |s| {
+                            item(
+                                icon::SERVER,
+                                format!("Switch to {}", s.name),
+                                Message::UseServer(s.id.clone()),
+                            )
+                        },
+                    ),
+                )
+                .chain([
+                    item(icon::SETTINGS, "Settings".into(), Message::Nav("settings".into())),
+                    sep(),
+                    item(icon::LOGOUT, "Log out".into(), Message::LogOut),
+                ])
+                .collect();
+            (v, 1)
+        }
+        MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
+            let pl: Vec<El> = std::iter::once(item(
+                icon::PLUS,
+                "New playlist".into(),
+                Message::Modal(String::new(), false),
+            ))
+            .chain([sep()])
+            .chain(app.data::<Lib>("lib").into_iter().flat_map(|l| {
+                l.playlists.iter().map(|p| {
+                    item(
+                        icon::MUSIC,
+                        p.name.clone(),
+                        Message::PlAdd(p.id.clone(), vec![s.id.clone()]),
+                    )
+                })
+            }))
+            .collect();
+            let h = ((pl.len() - 1) as f32 * 40.0 + 9.0 + 8.0).min(400.0);
+            return (
+                container(scrollable(Column::with_children(pl)).style(theme::scroll))
+                    .padding(4)
+                    .width(W)
+                    .height(h)
+                    .style(theme::menu)
+                    .into(),
+                W,
+                h,
             );
         }
-        col = col.push(srvs);
-        col = col.push(
-            container(Space::new())
-                .height(1)
-                .style(|_| container::Style::default().background(theme::tint(0.15))),
-        );
-    }
-    for (idx, (label, v, secure)) in [
-        (0u8, ("Server address", l.url.as_str(), false)),
-        (1, ("Username", l.user.as_str(), false)),
-        (2, ("Password", l.pass.as_str(), true)),
-    ] {
-        let mut f = text_input("", v)
-            .on_input(move |s| Message::LField(idx, s))
-            .on_submit(Message::LSubmit)
-            .style(theme::field)
-            .padding(14)
-            .size(15);
-        if secure {
-            f = f.secure(true);
+        MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 2 => {
+            let cur = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
+            let stars = Row::with_children((1..=5u8).map(|n| {
+                button(i(icon::STAR, 20.0).center())
+                    .width(36)
+                    .height(36)
+                    .padding(0)
+                    .style(theme::link(if n <= cur { theme::ACCENT } else { theme::SUB }))
+                    .on_press(Message::Rate(s.id.clone(), if n == cur { 0 } else { n }))
+                    .into()
+            }));
+            return (container(stars).padding(6).style(theme::menu).into(), 192.0, 48.0);
         }
-        col = col.push(column![theme::bold(label, 14.0), f].spacing(8));
-    }
-    col = col.push(
-        row![
-            toggler(l.remember).on_toggle(Message::LRemember).style(theme::tog).size(18),
-            theme::med("Remember password", 14.0),
+        MenuKind::Song(s) | MenuKind::SongIn(s, _) => {
+            let mut v = vec![
+                item(icon::LISTPLUS, "Add to queue".into(), Message::QEnd(vec![s.clone()])),
+                item(icon::QUEUE, "Play next".into(), Message::QNext(vec![s.clone()])),
+                sep(),
+                more(icon::PLUS, "Add to playlist", 1),
+            ];
+            if let MenuKind::SongIn(_, n) = &m.kind {
+                v.push(item(
+                    icon::MINUS,
+                    "Remove from this playlist".into(),
+                    Message::PlRemove(*n),
+                ));
+            }
+            v.extend([
+                star(&s.id, s.starred, "Remove from your Liked Songs", "Save to your Liked Songs"),
+                more(icon::STAR, "Rate", 2),
+                sep(),
+                item(icon::RADIO, "Go to song radio".into(), Message::Radio(s.id.clone())),
+            ]);
+            v.extend((!s.artist_id.is_empty()).then(|| {
+                item(
+                    icon::USER,
+                    "Go to artist".into(),
+                    Message::Nav(format!("artist:{}", s.artist_id)),
+                )
+            }));
+            v.extend((!s.album_id.is_empty()).then(|| {
+                item(
+                    icon::ALBUM,
+                    "Go to album".into(),
+                    Message::Nav(format!("album:{}", s.album_id)),
+                )
+            }));
+            (v, 2)
+        }
+        MenuKind::Album(a) => (
+            ctx("album", &a.id)
+                .into_iter()
+                .chain([
+                    item(icon::LISTPLUS, "Add to queue".into(), Message::AlbumQueue(a.id.clone())),
+                    star(&a.id, a.starred, "Remove from Your Library", "Save to Your Library"),
+                    item(
+                        icon::USER,
+                        "Go to artist".into(),
+                        Message::Nav(format!("artist:{}", a.artist_id)),
+                    ),
+                ])
+                .collect(),
+            0,
+        ),
+        MenuKind::Artist(a) => (
+            ctx("artist", &a.id)
+                .into_iter()
+                .chain([
+                    star(&a.id, a.starred, "Unfollow", "Follow"),
+                    item(icon::RADIO, "Go to artist radio".into(), Message::Radio(a.id.clone())),
+                ])
+                .collect(),
+            0,
+        ),
+        MenuKind::Playlist(p) => (
+            ctx("playlist", &p.id)
+                .into_iter()
+                .chain([
+                    item(icon::PENCIL, "Edit details".into(), Message::Modal(p.id.clone(), true)),
+                    sep(),
+                    item(icon::TRASH, "Delete".into(), Message::PlDel(p.id.clone())),
+                ])
+                .collect(),
+            1,
+        ),
+    };
+    let h = (items.len() - seps) as f32 * 40.0 + seps as f32 + 8.0;
+    (container(Column::with_children(items)).padding(4).width(W).style(theme::menu).into(), W, h)
+}
+
+pub fn login<'a>(app: &'a App) -> El<'a> {
+    let l = &app.login;
+    const W: f32 = 324.0;
+    let field = |label: &'a str, v: &'a str, n: u8, secure: bool| -> El<'a> {
+        column![
+            theme::bold(label, 14.0),
+            text_input("", v)
+                .on_input(move |s| Message::LField(n, s))
+                .on_submit(Message::LSubmit)
+                .secure(secure)
+                .style(theme::field)
+                .font(theme::fw(Weight::Normal))
+                .padding(13)
+                .line_height(text::LineHeight::Absolute(20.0.into()))
+                .size(16)
         ]
-        .spacing(10)
-        .align_y(Alignment::Center),
-    );
-    if !l.error.is_empty() {
-        col = col.push(text(l.error.clone()).size(13).color(theme::ERR));
-    }
-    col = col.push(
-        button(theme::bold("Log In", 16.0).color(theme::BG).center().width(Fill))
+        .spacing(8)
+        .into()
+    };
+    let saved = app.cfg.servers.iter().map(|s| -> El<'a> {
+        let initial = s.user.chars().next().unwrap_or('?').to_ascii_uppercase();
+        button(
+            row![
+                container(theme::bold(initial, 16.0).color(theme::BG).center())
+                    .center(40)
+                    .style(theme::fill(theme::color_of(&initial.to_string()), 20.0)),
+                column![
+                    theme::ell(&s.name, W - 120.0, 16.0, Weight::Bold),
+                    theme::ell(&s.user, W - 120.0, 14.0, Weight::Normal).color(theme::SUB)
+                ]
+                .spacing(2)
+                .width(Fill),
+                icon_btn(icon::X, 14.0, Message::DropServer(s.id.clone())),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
+        .padding(8)
+        .width(Fill)
+        .style(theme::track(false))
+        .on_press(Message::UseServer(s.id.clone()))
+        .into()
+    });
+    let form = column![
+        container(i(icon::MUSIC, 36.0).color(theme::TEXT)).padding(8),
+        theme::bold("Log in to navify", 48.0).align_x(Alignment::Center).line_height(1.1),
+    ]
+    .push((!l.error.is_empty()).then(|| {
+        container(
+            row![i(icon::X, 16.0), theme::txt(&l.error, 14.0, Weight::Normal)]
+                .spacing(12)
+                .align_y(Alignment::Center),
+        )
+        .padding(12)
+        .width(Fill)
+        .style(theme::fill(color!(0xe91429), 4.0))
+    }))
+    .push(
+        (!app.cfg.servers.is_empty())
+            .then(|| column![theme::bold("Saved servers", 14.0)].extend(saved).spacing(4).width(W)),
+    )
+    .push((!app.cfg.servers.is_empty()).then(sep))
+    .push(
+        column![
+            field("Server address", &l.url, 0, false),
+            field("Username", &l.user, 1, false),
+            field("Password", &l.pass, 2, true),
+            row![
+                toggler(l.remember).on_toggle(Message::LRemember).style(theme::tog).size(20),
+                theme::txt("Remember password", 14.0, Weight::Normal),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+            button(
+                theme::bold(if l.busy { "Logging in" } else { "Log In" }, 16.0)
+                    .color(theme::BG)
+                    .center()
+                    .width(Fill)
+            )
             .style(theme::accent)
             .width(Fill)
             .padding(14)
-            .on_press(Message::LSubmit),
-    );
-    if l.busy {
-        col = col.push(theme::sub2("Signing in.", 13.0));
-    }
-    container(container(col).padding(40).width(560).style(|_| {
-        container::Style::default()
-            .background(theme::PANEL)
-            .border(iced::Border::default().rounded(8.0))
-    }))
-    .width(Fill)
-    .height(Fill)
+            .on_press_maybe((!l.busy).then_some(Message::LSubmit)),
+        ]
+        .spacing(16)
+        .width(W),
+    )
+    .spacing(32)
+    .align_x(Alignment::Center);
+    container(
+        container(form)
+            .padding([40, 32])
+            .width((app.cfg.settings.window.0 - 64.0).clamp(W + 64.0, 734.0))
+            .center_x(Fill)
+            .max_width(734)
+            .style(theme::panel),
+    )
     .center_x(Fill)
-    .center_y(Fill)
-    .style(|_| {
-        container::Style::default().background(iced::Gradient::Linear(
-            iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI * 1.5))
-                .add_stop(0.0, theme::tint(0.1))
-                .add_stop(1.0, theme::BG),
-        ))
-    })
+    .padding([32, 32])
+    .height(Fill)
+    .style(theme::grad(color!(0x2a2a2a), theme::BG))
     .into()
 }
