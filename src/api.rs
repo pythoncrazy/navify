@@ -712,12 +712,12 @@ impl Session {
                 Ok((serde_json::from_value(v.clone())?, vlist(&v, "album")))
             }
         };
-        let ip = [
-            ("id", id.to_string()),
-            ("count", "20".to_string()),
-            ("includeNotPresent", "true".to_string()),
-        ];
-        let info = self.rest::<Info>("getArtistInfo2", &ip, "/artistInfo2");
+        let info = async {
+            let ip = [("id", id.to_string()), ("count", "20".to_string())];
+            let mut i = self.rest::<Info>("getArtistInfo2", &ip, "/artistInfo2").await?;
+            i.similar.retain(|a| a.album_count > 0);
+            anyhow::Ok(i)
+        };
         if self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
             let tp = [("id", id.to_string()), ("count", "20".to_string())];
             let ((a, al), t, i) = tokio::try_join!(
