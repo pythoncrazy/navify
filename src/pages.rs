@@ -92,7 +92,7 @@ fn track_row<'a>(
     if show_album {
         r = r.push(
             container(btn(
-                theme::sub(s.album.clone(), 13.0),
+                theme::sub(theme::ell(&s.album, 280.0, 13.0), 13.0),
                 Message::Nav(format!("album:{}", s.album_id)),
             ))
             .width(Length::FillPortion(3)),
@@ -136,7 +136,8 @@ pub fn sticky_track_header<'a>(app: &'a App) -> Option<Element<'a, Message>> {
         return None;
     }
     let (show_album, show_date) = match app.route.split(':').next().unwrap_or("") {
-        "album" | "liked" => (true, false),
+        "album" => (false, false),
+        "liked" => (true, false),
         "playlist" => (true, true),
         _ => return None,
     };
@@ -230,8 +231,8 @@ fn card<'a>(
     button(
         column![
             cover_el,
-            med(title.to_string(), 15.0).width(Fill).wrapping(Wrapping::None),
-            theme::sub(sub.to_string(), 13.0).width(Fill),
+            med(theme::ell(title, 156.0, 15.0), 15.0).width(Fill).wrapping(Wrapping::None),
+            theme::sub(theme::ell(sub, 156.0, 13.0), 13.0).width(Fill).wrapping(Wrapping::None),
         ]
         .spacing(8)
         .padding(12)
@@ -443,13 +444,10 @@ fn detail_head<'a>(
     title: &str,
     meta: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
-    let size = if title.len() > 40 {
-        42.0
-    } else if title.len() > 20 {
-        64.0
-    } else {
-        84.0
-    };
+    let size = [96.0_f32, 72.0, 48.0, 32.0]
+        .into_iter()
+        .find(|s| title.chars().count() as f32 * s * 0.55 <= 620.0)
+        .unwrap_or(32.0);
     container(
         row![
             container(cover(app, cover_id, 640, 232.0, false)).style(|_| container::Style {
@@ -463,7 +461,7 @@ fn detail_head<'a>(
             column![
                 Space::new().height(Fill),
                 theme::sub(label, 13.0),
-                theme::black(title.to_string(), size).wrapping(Wrapping::None),
+                theme::black(theme::ell(title, 620.0, size), size).wrapping(Wrapping::None),
                 row(meta).spacing(4).align_y(Alignment::Center),
             ]
             .spacing(8),
@@ -515,7 +513,7 @@ fn album_page<'a>(app: &'a App, _id: &str) -> Element<'a, Message> {
     let multi_disc = discs.len() > 1;
     let mut list = Column::new();
     if !multi_disc {
-        list = list.push(vlist(app, songs, &a.name, true, false, 430.0));
+        list = list.push(vlist(app, songs, &a.name, false, false, 430.0));
     } else {
         let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 900.0));
         let mut y = 430.0f32;
@@ -527,13 +525,13 @@ fn album_page<'a>(app: &'a App, _id: &str) -> Element<'a, Message> {
                     .padding(theme::pad(16.0, 8.0, 8.0, 8.0)),
             );
             for &i in &ds {
-                list = list.push(track_row(app, &songs[i], i, songs, &a.name, true, false, None));
+                list = list.push(track_row(app, &songs[i], i, songs, &a.name, false, false, None));
             }
             y += (ds.len() as f32 + 1.0) * 56.0;
             let _ = (off, view, y);
         }
     }
-    column![head, bar, track_header(true, false), list].into()
+    column![head, bar, track_header(false, false), list].into()
 }
 
 fn playlist_page<'a>(app: &'a App, _id: &str) -> Element<'a, Message> {
@@ -1231,8 +1229,11 @@ pub fn now_playing<'a>(app: &'a App) -> Element<'a, Message> {
             column![
                 container(cover(app, &s.cover, 640, 280.0, false)).padding([8, 16]),
                 row![
-                    column![bold(s.title.clone(), 20.0), artists_line(&s.artists, 13.0),]
-                        .spacing(4),
+                    column![
+                        bold(theme::ell(&s.title, 200.0, 20.0), 20.0),
+                        artists_line(&s.artists, 13.0),
+                    ]
+                    .spacing(4),
                     Space::new().width(Fill),
                     icon_btn(icon::HEART, 18.0, Message::Star(s.id.clone(), !starred)),
                 ]

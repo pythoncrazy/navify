@@ -380,3 +380,17 @@ pub fn tile(_: &Theme, s: button::Status) -> button::Style {
         ..button::Style::default()
     }
 }
+
+pub fn ell(s: &str, px: f32, size: f32) -> String {
+    let max = (px / (size * 0.52)).floor() as usize;
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+        while t.ends_with(' ') {
+            t.pop();
+        }
+        t.push('\u{2026}');
+        t
+    }
+}

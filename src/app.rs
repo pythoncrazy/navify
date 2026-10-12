@@ -280,6 +280,7 @@ impl App {
         let t = Task::batch([
             prune,
             if app.session.is_none()
+                && app.shot.as_deref() != Some("login")
                 && let Some((u, n, p)) = creds
             {
                 Task::perform(

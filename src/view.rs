@@ -46,13 +46,17 @@ pub fn artists_line<'a>(artists: &[Artist], size: f32) -> Element<'a, Message> {
             r = r.push(theme::sub(", ", size));
         }
         let link: Element<Message> = if a.id.is_empty() {
-            theme::sub(a.name.clone(), size).into()
+            theme::sub(a.name.clone(), size).wrapping(iced::widget::text::Wrapping::None).into()
         } else {
-            btn(theme::sub(a.name.clone(), size), Message::Nav(format!("artist:{}", a.id))).into()
+            btn(
+                theme::sub(a.name.clone(), size).wrapping(iced::widget::text::Wrapping::None),
+                Message::Nav(format!("artist:{}", a.id)),
+            )
+            .into()
         };
         r = r.push(link);
     }
-    r.into()
+    container(r).clip(true).width(Fill).into()
 }
 
 fn head_title(app: &App) -> Option<(String, iced::Color, Option<Message>)> {
@@ -228,12 +232,12 @@ fn lib_row<'a>(
             row![
                 cover(app, cover_id, 128, 48.0, circle),
                 column![
-                    text(title.to_string()).size(14).color(if app.route == route {
+                    text(theme::ell(title, 180.0, 14.0)).size(14).color(if app.route == route {
                         theme::ACCENT
                     } else {
                         theme::TEXT
                     }),
-                    theme::sub(sub, 12.0),
+                    theme::sub(theme::ell(&sub, 180.0, 12.0), 12.0),
                 ]
                 .spacing(2),
             ]
@@ -281,7 +285,64 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
         }
     }
     let mut list = Column::new().spacing(2);
-    list = list.push(lib_row(app, "", "Liked Songs", "Playlist".into(), "liked", false));
+    let lk = app.route == "liked";
+    let tile: Element<Message> = if app.lib_collapsed {
+        btn(
+            container(i(icon::HEART, 16.0).color(theme::TEXT).center())
+                .width(48)
+                .height(48)
+                .center_x(48)
+                .center_y(48)
+                .style(|_| {
+                    container::Style::default()
+                        .background(iced::Gradient::Linear(
+                            iced::gradient::Linear::new(iced::Radians(2.4))
+                                .add_stop(0.0, theme::GRAD_A)
+                                .add_stop(1.0, theme::GRAD_B),
+                        ))
+                        .border(iced::Border::default().rounded(4.0))
+                }),
+            Message::Nav("liked".into()),
+        )
+        .into()
+    } else {
+        button(
+            row![
+                container(i(icon::HEART, 18.0).color(theme::TEXT).center())
+                    .width(48)
+                    .height(48)
+                    .center_x(48)
+                    .center_y(48)
+                    .style(|_| {
+                        container::Style::default()
+                            .background(iced::Gradient::Linear(
+                                iced::gradient::Linear::new(iced::Radians(2.4))
+                                    .add_stop(0.0, theme::GRAD_A)
+                                    .add_stop(1.0, theme::GRAD_B),
+                            ))
+                            .border(iced::Border::default().rounded(4.0))
+                    }),
+                column![
+                    text("Liked Songs").size(14).color(if lk {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT
+                    }),
+                    theme::sub("Playlist", 12.0),
+                ]
+                .spacing(2),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+            .padding(8)
+            .width(Fill),
+        )
+        .on_press(Message::Nav("liked".into()))
+        .style(theme::row)
+        .width(Fill)
+        .into()
+    };
+    list = list.push(tile);
     if let Some((_, v)) = app.cache.get("lib")
         && let Some(l) = v.downcast_ref::<crate::app::Lib>()
     {
@@ -348,12 +409,20 @@ pub fn fmt_long(s: f32) -> String {
 
 fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
     let song = app.current_song();
+    let idle = song.is_none();
+    let dim = if idle { Color::from_rgb8(0x6a, 0x6a, 0x6a) } else { theme::SUB };
     let left: Element<Message> = match song {
         Some(s) => row![
             cover(app, &s.cover, 128, 56.0, false),
             column![
-                btn(text(s.title.clone()).size(13), Message::Nav(format!("album:{}", s.album_id))),
-                artists_line(&s.artists, 11.0),
+                btn(
+                    text(theme::ell(&s.title, 190.0, 13.0)).size(13),
+                    Message::Nav(format!("album:{}", s.album_id))
+                ),
+                theme::sub(
+                    s.artists.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "),
+                    11.0
+                ),
             ]
             .spacing(2),
             icon_btn(
@@ -381,11 +450,11 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         row![
             btn(
                 i(icon::SHUFFLE, 16.0)
-                    .color(if app.shuffle.is_some() { theme::ACCENT } else { theme::SUB })
+                    .color(if app.shuffle.is_some() { theme::ACCENT } else { dim })
                     .center(),
                 Message::Shuffle
             ),
-            icon_btn(icon::PREV, 18.0, Message::Prev),
+            btn(i(icon::PREV, 18.0).color(dim).center(), Message::Prev),
             btn(
                 container(
                     i(if app.playing { icon::PAUSE } else { icon::PLAY }, 16.0)
@@ -401,11 +470,11 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
                     .border(iced::Border::default().rounded(500.0))),
                 Message::Toggle,
             ),
-            icon_btn(icon::NEXT, 18.0, Message::Next(true)),
+            btn(i(icon::NEXT, 18.0).color(dim).center(), Message::Next(true)),
             btn(
                 column![
                     i(if app.repeat == 2 { icon::REPEAT1 } else { icon::REPEAT }, 16.0)
-                        .color(if app.repeat > 0 { theme::ACCENT } else { theme::SUB })
+                        .color(if app.repeat > 0 { theme::ACCENT } else { dim })
                         .center(),
                     if app.repeat > 0 {
                         text("\u{2022}").size(8).color(theme::ACCENT).center()
@@ -419,19 +488,35 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         ]
         .spacing(16)
         .align_y(iced::Alignment::Center),
-        row![
-            theme::sub(fmt_dur(pos), 11.0),
-            container(
-                slider(0.0..=dur, app.seek_preview.unwrap_or(pos), Message::SeekPreview)
-                    .on_release(Message::SeekRelease)
-                    .style(theme::seek)
-            )
-            .width(Fill)
-            .center_y(28),
-            theme::sub(fmt_dur(dur), 11.0),
-        ]
-        .spacing(8)
-        .align_y(iced::Alignment::Center),
+        {
+            let bar: Element<Message> = if idle {
+                container(Space::new().width(Fill).height(4))
+                    .style(|_| {
+                        container::Style::default()
+                            .background(theme::TRACK)
+                            .border(iced::Border::default().rounded(2.0))
+                    })
+                    .width(Fill)
+                    .center_y(28)
+                    .into()
+            } else {
+                row![
+                    theme::sub(fmt_dur(pos), 11.0),
+                    container(
+                        slider(0.0..=dur, app.seek_preview.unwrap_or(pos), Message::SeekPreview)
+                            .on_release(Message::SeekRelease)
+                            .style(theme::seek)
+                    )
+                    .width(Fill)
+                    .center_y(28),
+                    theme::sub(fmt_dur(dur), 11.0),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into()
+            };
+            bar
+        },
     ]
     .align_x(iced::Alignment::Center)
     .width(Fill);
