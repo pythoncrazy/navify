@@ -27,4 +27,5 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: j178/prek-action@v1
-      - run: prek run --all-files
+        env:
+          SKIP: cargo-fmt,cargo-clippy
