@@ -136,6 +136,7 @@ pub enum Message {
     Quit,
     SaveQ(u64),
     Tick,
+    Heard(u64),
     Edit(String, String, String),
     Modal(String, u8),
     StarFailed(Vec<String>, bool, String),
@@ -235,7 +236,10 @@ pub struct App {
     pub ctx: String,
     pub playing: bool,
     pub position: f32,
-    pub scrobbled: bool,
+    scrobbled: bool,
+    heard: f32,
+    since: Option<Instant>,
+    listen_seq: u64,
     pub loaded: bool,
     pub starred: HashMap<String, bool>,
     pub ratings: HashMap<String, u8>,
@@ -565,6 +569,9 @@ impl App {
             playing: false,
             position: 0.0,
             scrobbled: false,
+            heard: 0.0,
+            since: None,
+            listen_seq: 0,
             loaded: false,
             starred: HashMap::new(),
             ratings: HashMap::new(),
@@ -709,7 +716,7 @@ impl App {
         if self.queue.is_empty() {
             return Task::none();
         }
-        let done = if self.loaded { self.scrobble_due(self.pos()) } else { Task::none() };
+        let done = if self.loaded { self.listen(false) } else { Task::none() };
         self.index = i.min(self.queue.len() - 1);
         self.playing = true;
         let t = self.track(&self.queue[self.real_index()]);
@@ -721,11 +728,11 @@ impl App {
         }
         let began = self.began();
         self.position = at;
-        Task::batch([done, began])
+        Task::batch([done, began, self.listen(true)])
     }
 
     fn began(&mut self) -> Task<Message> {
-        (self.position, self.scrobbled, self.loaded) = (0.0, false, true);
+        (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
         self.queue_next_refresh();
         let Some(song) = self.current_song().cloned() else { return Task::none() };
         let lyr = if self.route == "lyrics" {
@@ -733,35 +740,45 @@ impl App {
         } else {
             Task::none()
         };
-        let Some(s) = self.session.clone().filter(|_| self.cfg.settings.scrobble) else {
-            return Task::batch([lyr, self.debounce_save_queue()]);
+        let now = if self.cfg.settings.scrobble {
+            self.send(
+                move |s| async move { s.scrobble(&song.id, false).await },
+                "Could not send the playing track to the server.",
+            )
+        } else {
+            Task::none()
         };
-        Task::batch([
-            lyr,
-            Task::perform(async move { s.scrobble(&song.id, false).await }, |_| Message::Noop),
-            self.debounce_save_queue(),
-        ])
+        Task::batch([lyr, now, self.debounce_save_queue()])
     }
 
     fn pos(&self) -> f32 {
         self.player.as_ref().filter(|_| self.loaded).map_or(self.position, |p| p.position())
     }
 
-    fn scrobble_due(&mut self, pos: f32) -> Task<Message> {
-        let dur = self.current_dur();
-        if self.scrobbled
-            || !self.cfg.settings.scrobble
-            || dur <= 0.0
-            || (pos < dur * 0.5 && pos < 240.0)
-        {
+    fn listen(&mut self, on: bool) -> Task<Message> {
+        let (speed, enabled) = (self.cfg.settings.speed, self.cfg.settings.scrobble);
+        self.heard += self.since.take().map_or(0.0, |t| t.elapsed().as_secs_f32() * speed);
+        self.since = on.then(Instant::now);
+        self.listen_seq += 1;
+        let Some(song) =
+            self.current_song().filter(|s| enabled && !self.scrobbled && s.duration > 0.0)
+        else {
             return Task::none();
-        }
-        self.scrobbled = true;
-        match (self.session.clone(), self.current_song().map(|s| s.id.clone())) {
-            (Some(s), Some(id)) => {
-                Task::perform(async move { s.scrobble(&id, true).await }, |_| Message::Noop)
-            }
-            _ => Task::none(),
+        };
+        let (id, left) = (song.id.clone(), (song.duration * 0.5).min(240.0) - self.heard);
+        if left <= 0.0 {
+            self.scrobbled = true;
+            self.send(
+                move |s| async move { s.scrobble(&id, true).await },
+                "Could not send the played track to the server.",
+            )
+        } else if on {
+            let n = self.listen_seq;
+            Task::perform(tokio::time::sleep(Duration::from_secs_f32(left / speed)), move |_| {
+                Message::Heard(n)
+            })
+        } else {
+            Task::none()
         }
     }
 
@@ -1107,12 +1124,13 @@ impl App {
                 if let Some(p) = &self.player {
                     p.set_paused(!self.playing);
                 }
+                let l = self.listen(self.playing);
                 if self.playing {
-                    return Task::none();
+                    return l;
                 }
                 self.position = self.pos();
                 self.save_seq += 1;
-                self.update(Message::SaveQ(self.save_seq))
+                Task::batch([l, self.update(Message::SaveQ(self.save_seq))])
             }
             Message::Prev => {
                 if self.pos() > 3.0 {
@@ -1130,21 +1148,28 @@ impl App {
                 match self.next_index() {
                     Some(n) => self.play_index(n, 0.0),
                     None => {
+                        let l = self.listen(false);
                         (self.playing, self.loaded) = (false, false);
                         if let Some(p) = &self.player {
                             p.stop();
                         }
-                        Task::none()
+                        l
                     }
                 }
             }
             Message::Ended => self.update(Message::Next(false)),
             Message::Seek(pos) => {
+                let again = pos < 5.0 && self.pos() > 10.0;
                 self.position = pos;
                 if let Some(p) = &self.player {
                     p.seek(pos);
                 }
-                Task::none()
+                if !again {
+                    return Task::none();
+                }
+                let done = self.listen(false);
+                (self.scrobbled, self.heard) = (false, 0.0);
+                Task::batch([done, self.listen(self.playing)])
             }
             Message::Shuffle => {
                 self.shuffle = match self.shuffle {
@@ -1250,6 +1275,7 @@ impl App {
                 self.debounce_save_queue()
             }
             Message::QClear => {
+                let done = self.listen(false);
                 self.queue.clear();
                 self.index = 0;
                 self.shuffle = self.shuffle.as_ref().map(|_| Vec::new());
@@ -1257,7 +1283,7 @@ impl App {
                 if let Some(p) = &self.player {
                     p.stop();
                 }
-                self.debounce_save_queue()
+                Task::batch([done, self.debounce_save_queue()])
             }
             Message::Menu(kind) => {
                 let bits = CURSOR.load(std::sync::atomic::Ordering::Relaxed);
@@ -1556,7 +1582,8 @@ impl App {
                     p.set_gain(self.gain(s));
                     self.queue_next_refresh();
                 }
-                Task::batch([extra, self.persist()])
+                let l = if self.loaded { self.listen(self.playing) } else { Task::none() };
+                Task::batch([extra, l, self.persist()])
             }
             Message::ClearCache => {
                 self.covers.map.clear();
@@ -1821,8 +1848,10 @@ impl App {
             }
             Message::Tick => {
                 self.position = self.pos();
-                self.scrobble_due(self.position)
+                Task::none()
             }
+            Message::Heard(n) if n == self.listen_seq => self.listen(self.since.is_some()),
+            Message::Heard(_) => Task::none(),
             Message::Modal(id, kind) => {
                 self.new_pl_ids = match self.menu.take().map(|m| m.kind) {
                     Some(MenuKind::Song(s) | MenuKind::SongIn(s, _)) => {
@@ -1910,28 +1939,25 @@ impl App {
             }
             Message::Audio(e) => match e {
                 navify_audio::Event::Started(id) => {
-                    let done = self.scrobble_due(f32::MAX);
+                    let done = self.listen(false);
                     let n = if self.repeat == 2 { Some(self.index) } else { self.next_index() };
                     match n.filter(|&n| self.queue.get(self.real_at(n)).is_some_and(|s| s.id == id))
                     {
                         Some(n) => {
                             self.index = n;
-                            Task::batch([done, self.began()])
+                            Task::batch([done, self.began(), self.listen(true)])
                         }
-                        None => done,
+                        None => Task::batch([done, self.listen(true)]),
                     }
                 }
                 navify_audio::Event::Ended => self.update(Message::Ended),
                 navify_audio::Event::Error(e) => {
+                    let done = self.listen(false);
                     (self.playing, self.loaded) = (false, false);
-                    self.toast(&format!("Playback failed. {e}"))
+                    Task::batch([done, self.toast(&format!("Playback failed. {e}"))])
                 }
             },
         }
-    }
-
-    fn current_dur(&self) -> f32 {
-        self.current_song().map_or(0.0, |s| s.duration)
     }
 
     fn insert_queue(&mut self, songs: Vec<Song>, at: usize) {
