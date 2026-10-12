@@ -599,7 +599,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             title: &a.name,
             meta: meta_line(
                 lead.into(),
-                format!("{year} \u{2022} {} songs, {}", songs.len(), fmt_long(a.duration)),
+                format!("{year} \u{2022} {} songs, {}", a.song_count, fmt_long(a.duration)),
             ),
             color: head_color(app, &a.cover),
             songs,
@@ -616,11 +616,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
                 .push((!p.comment.is_empty()).then(|| theme::sub(&p.comment, 14.0)))
                 .push(meta_line(
                     theme::bold(&p.owner, 14.0).into(),
-                    format!(
-                        " \u{2022} {} songs, {}",
-                        songs.len(),
-                        fmt_long(songs.iter().map(|s| s.duration).sum())
-                    ),
+                    format!(" \u{2022} {} songs, {}", p.song_count, fmt_long(p.duration)),
                 ))
                 .spacing(8)
                 .into(),
@@ -731,7 +727,7 @@ fn artist<'a>(app: &'a App) -> El<'a> {
     else {
         return Space::new().into();
     };
-    let hh = (app.cfg.settings.window.1 * 0.4).clamp(240.0, 400.0);
+    let hh = (app.view_size().1 * 0.4).clamp(240.0, 400.0);
     let c = head_color(app, &a.cover);
     let name = theme::ell(&a.name, app.main_w() - 2.0 * PAD, 96.0, Weight::Black).line_height(1.1);
     let label =
@@ -1138,7 +1134,7 @@ fn lyrics<'a>(app: &'a App) -> El<'a> {
         return container(theme::bold("No lyrics are available for this song.", 24.0))
             .center_x(Fill)
             .padding(80)
-            .height(app.cfg.settings.window.1 - 160.0)
+            .height(app.view_size().1 - 160.0)
             .style(theme::fill(c, 0.0))
             .into();
     };
@@ -1510,7 +1506,7 @@ pub fn queue_panel<'a>(app: &'a App) -> El<'a> {
     .into()
 }
 
-pub const SPEEDS: [f32; 10] = [0.5, 0.8, 1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0, 3.5];
+pub const SPEED_H: f32 = 436.0;
 
 pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     const W: f32 = 260.0;
@@ -1567,7 +1563,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             let head = container(theme::bold("Playback speed", 12.0).color(theme::SUB))
                 .padding([0, 12])
                 .center_y(40);
-            let v = std::iter::once(head.into()).chain(SPEEDS.map(|v| {
+            let list = Column::with_children((5..=35u8).map(|n| {
+                let v = f32::from(n) / 10.0;
                 let on = app.cfg.settings.speed == v;
                 entry(
                     row![
@@ -1581,11 +1578,18 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                     Message::Set(Set::Speed(v)),
                 )
             }));
-            let h = (SPEEDS.len() + 1) as f32 * 40.0 + 8.0;
             return (
-                container(Column::with_children(v)).padding(4).width(160).style(theme::menu).into(),
+                container(column![
+                    head,
+                    scrollable(list).id("speed").style(theme::scroll).height(Fill)
+                ])
+                .padding(4)
+                .width(160)
+                .height(SPEED_H)
+                .style(theme::menu)
+                .into(),
                 160.0,
-                h,
+                SPEED_H,
             );
         }
         MenuKind::User => {
@@ -1877,7 +1881,7 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
             container(
                 container(form)
                     .padding([40, 32])
-                    .width((app.cfg.settings.window.0 - 64.0).clamp(W + 64.0, 734.0))
+                    .width((app.view_size().0 - 64.0).clamp(W + 64.0, 734.0))
                     .center_x(Fill)
                     .max_width(734)
                     .style(theme::panel),

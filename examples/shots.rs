@@ -19,7 +19,7 @@ fn main() {
     }
     let app = application(App::boot, App::update, App::view)
         .subscription(App::subscription)
-        .scale_factor(|a: &App| a.cfg.settings.zoom)
+        .scale_factor(App::scale)
         .theme(|_: &App| Theme::Dark)
         .default_font(Font::with_name("Figtree"))
         .font(fonts[0])
@@ -52,8 +52,12 @@ fn main() {
         .ok()
         .and_then(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
         .unwrap_or((1280.0, 800.0));
-    let mut emu = Emulator::new(tx, &app, Mode::Immediate, Size::new(w, h));
-    emu.update(&app, Message::Resize(w, h));
+    let mut cfg = navify::config::Config::load();
+    cfg.settings.window = (w, h);
+    cfg.save().expect("save the configuration");
+    let s = cfg.settings.zoom;
+    let mut emu = Emulator::new(tx, &app, Mode::Immediate, Size::new(w / s, h / s));
+    emu.update(&app, Message::Resize(w / s, h / s));
     let mut next = Instant::now() + Duration::from_secs(secs);
     loop {
         while let Ok(e) = rx.try_recv() {
@@ -89,7 +93,7 @@ fn main() {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    let shot = emu.screenshot(&app, &Theme::Dark, 1.0);
+    let shot = emu.screenshot(&app, &Theme::Dark, s);
     let name = std::env::var("NAVIFY_SHOT")
         .unwrap_or_else(|_| "shot".into())
         .replace([':', '/', '|'], "_");

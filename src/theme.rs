@@ -332,6 +332,15 @@ pub fn accent(_: &Theme, s: button::Status) -> button::Style {
     btn_style(c, BG, 500.0)
 }
 
+pub fn danger(_: &Theme, s: button::Status) -> button::Style {
+    let c = match s {
+        button::Status::Hovered => color!(0xd81326),
+        button::Status::Pressed => color!(0xa60e1d),
+        _ => color!(0xe91429),
+    };
+    btn_style(c, TEXT, 500.0)
+}
+
 pub fn white(_: &Theme, s: button::Status) -> button::Style {
     let hot = matches!(s, button::Status::Hovered | button::Status::Pressed);
     btn_style(if hot { color!(0xf0f0f0) } else { TEXT }, BG, 500.0)

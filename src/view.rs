@@ -1,12 +1,12 @@
 use iced::font::Weight;
 use iced::widget::{
     Column, Space, button, column, container, image, mouse_area, row, scrollable, slider, stack,
-    text, text_input,
+    text, text_input, tooltip,
 };
 use iced::{Alignment, Color, Element, Fill, Length};
 
 use crate::api::Artist;
-use crate::app::{App, MenuKind, Message};
+use crate::app::{App, MenuKind, Message, Set};
 use crate::pages;
 use crate::theme::{self, icon, icon as i};
 
@@ -245,13 +245,18 @@ pub fn fmt_long(s: f32) -> String {
 }
 
 fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
-    let nav = |c: char, on: bool, m: Message| {
-        button(i(c, 22.0).center())
-            .width(32)
-            .height(32)
-            .padding(0)
-            .style(theme::link(if on { theme::SUB } else { theme::DIM }))
-            .on_press_maybe(on.then_some(m))
+    use tooltip::Position::Bottom;
+    let nav = |c: char, on: bool, label: &str, m: Message| {
+        tip(
+            button(i(c, 22.0).center())
+                .width(32)
+                .height(32)
+                .padding(0)
+                .style(theme::link(if on { theme::SUB } else { theme::DIM }))
+                .on_press_maybe(on.then_some(m)),
+            label,
+            Bottom,
+        )
     };
     let initial = app
         .session
@@ -264,21 +269,25 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
     row![
         container(
             row![
-                nav(icon::LEFT, app.hi > 0, Message::Back),
-                nav(icon::RIGHT, app.hi + 1 < app.history.len(), Message::Fwd)
+                nav(icon::LEFT, app.hi > 0, "Go back", Message::Back),
+                nav(icon::RIGHT, app.hi + 1 < app.history.len(), "Go forward", Message::Fwd)
             ]
             .spacing(8)
         )
         .width(Fill),
         row![
-            round(
-                if app.route == "home" {
-                    theme::filled(theme::fill::HOME, 24.0).color(theme::TEXT)
-                } else {
-                    i(icon::HOME, 24.0).color(theme::SUB)
-                }
-                .into(),
-                Message::Nav("home".into())
+            tip(
+                round(
+                    if app.route == "home" {
+                        theme::filled(theme::fill::HOME, 24.0).color(theme::TEXT)
+                    } else {
+                        i(icon::HOME, 24.0).color(theme::SUB)
+                    }
+                    .into(),
+                    Message::Nav("home".into())
+                ),
+                "Home",
+                Bottom
             ),
             text_input("What do you want to play?", &app.search_q)
                 .id("search")
@@ -302,13 +311,21 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .align_y(Alignment::Center),
         container(
             row![
-                icon_btn(icon::SETTINGS, 18.0, Message::Nav("settings".into())),
-                round(
-                    container(theme::bold(initial, 14.0).color(theme::BG).center())
-                        .center(32)
-                        .style(theme::fill(theme::color_of(&initial.to_string()), 500.0))
-                        .into(),
-                    Message::Menu(Box::new(MenuKind::User))
+                tip(
+                    icon_btn(icon::SETTINGS, 18.0, Message::Nav("settings".into())),
+                    "Settings",
+                    Bottom
+                ),
+                tip(
+                    round(
+                        container(theme::bold(initial, 14.0).color(theme::BG).center())
+                            .center(32)
+                            .style(theme::fill(theme::color_of(&initial.to_string()), 500.0))
+                            .into(),
+                        Message::Menu(Box::new(MenuKind::User))
+                    ),
+                    app.session.as_ref().map_or("", |s| s.server.user.as_str()),
+                    Bottom
                 ),
             ]
             .spacing(8)
@@ -356,24 +373,38 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
         )
     };
     let head: Element<'a, Message> = if app.lib_collapsed {
-        container(icon_btn(icon::LIBRARY, 20.0, Message::LibCollapse)).center_x(Fill).into()
+        container(tip(
+            icon_btn(icon::LIBRARY, 20.0, Message::LibCollapse),
+            "Expand Your Library",
+            tooltip::Position::Right,
+        ))
+        .center_x(Fill)
+        .into()
     } else {
         row![
-            button(
-                row![i(icon::LIBRARY, 22.0), theme::bold("Your Library", 16.0)]
-                    .spacing(12)
-                    .align_y(Alignment::Center)
-            )
-            .padding(0)
-            .style(theme::link(theme::SUB))
-            .on_press(Message::LibCollapse),
-            Space::new().width(Fill),
-            button(i(icon::PLUS, 18.0).center())
-                .width(32)
-                .height(32)
+            tip(
+                button(
+                    row![i(icon::LIBRARY, 22.0), theme::bold("Your Library", 16.0)]
+                        .spacing(12)
+                        .align_y(Alignment::Center)
+                )
                 .padding(0)
-                .style(theme::round(theme::CHIP))
-                .on_press(Message::NewPlaylist),
+                .style(theme::link(theme::SUB))
+                .on_press(Message::LibCollapse),
+                "Collapse Your Library",
+                tooltip::Position::Bottom,
+            ),
+            Space::new().width(Fill),
+            tip(
+                button(i(icon::PLUS, 18.0).center())
+                    .width(32)
+                    .height(32)
+                    .padding(0)
+                    .style(theme::round(theme::CHIP))
+                    .on_press(Message::NewPlaylist),
+                "Create playlist",
+                tooltip::Position::Bottom,
+            ),
         ]
         .align_y(Alignment::Center)
         .into()
@@ -455,35 +486,46 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
     .into()
 }
 
+pub fn tip<'a>(
+    c: impl Into<Element<'a, Message>>,
+    label: impl ToString,
+    at: tooltip::Position,
+) -> Element<'a, Message> {
+    tooltip(
+        c,
+        container(theme::txt(label, 14.0, Weight::Normal)).padding([4, 8]).style(theme::menu),
+        at,
+    )
+    .gap(8)
+    .delay(std::time::Duration::from_millis(200))
+    .into()
+}
+
 fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
+    use tooltip::Position::Top;
     let song = app.current_song();
-    let dim = if song.is_some() { theme::SUB } else { theme::DIM };
-    let ctl = |c: char, on: bool, m: Message| -> Element<'a, Message> {
-        let dot = text(if on { "\u{2022}" } else { " " }).size(8).color(theme::ACCENT);
-        button(
-            column![i(c, 16.0).color(if on { theme::ACCENT } else { dim }), dot]
-                .align_x(Alignment::Center),
-        )
-        .padding(theme::pad(8.0, 8.0, 0.0, 8.0))
-        .style(theme::ghost)
-        .on_press(m)
-        .into()
-    };
-    let side = |t: theme::Txt<'a>, on: bool, m: Message| -> Element<'a, Message> {
-        button(t.center())
+    let side = |t: theme::Txt<'a>, on: bool, label: &str, m: Message| -> Element<'a, Message> {
+        let dot = container(Space::new()).width(4).height(4).style(theme::fill(theme::ACCENT, 2.0));
+        tip(
+            button(
+                stack![container(t).center(Fill)]
+                    .push(on.then(|| container(dot).center_x(Fill).align_bottom(Fill))),
+            )
             .width(32)
             .height(32)
             .padding(0)
             .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
-            .on_press(m)
-            .into()
+            .on_press(m),
+            label,
+            Top,
+        )
     };
     let left: Element<Message> = song.map_or_else(
         || Space::new().into(),
         |s| {
             let starred = app.is_starred(&s.id, s.starred);
             row![
-                cover(app, &s.cover, 128, 56.0, false),
+                btn(cover(app, &s.cover, 128, 56.0, false), Message::Panel(1)),
                 column![
                     btn(
                         theme::ell(&s.title, 200.0, 14.0, Weight::Normal),
@@ -493,8 +535,9 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
                 ]
                 .spacing(2),
                 side(
-                    theme::heart(starred, 16.0),
-                    starred,
+                    theme::heart(starred, 16.0).color_maybe(starred.then_some(theme::ACCENT)),
+                    false,
+                    if starred { "Remove from Liked Songs" } else { "Add to Liked Songs" },
                     Message::Star(vec![s.id.clone()], !starred)
                 ),
             ]
@@ -513,11 +556,23 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .padding([0, 48])
         .into(),
         Some(_) => row![
-            theme::sub(fmt_dur(pos), 12.0).width(40).align_x(Alignment::End),
+            theme::sub(fmt_dur(pos), 12.0).width(48).align_x(Alignment::End),
             slider(0.0..=dur, pos, Message::SeekPreview)
                 .on_release(Message::SeekRelease)
                 .style(theme::seek),
-            theme::sub(fmt_dur(dur), 12.0).width(40),
+            button(theme::txt(
+                if app.cfg.settings.remaining {
+                    format!("-{}", fmt_dur(dur - pos))
+                } else {
+                    fmt_dur(dur)
+                },
+                12.0,
+                Weight::Normal
+            ))
+            .width(48)
+            .padding(0)
+            .style(theme::link(theme::SUB))
+            .on_press(Message::Set(Set::Remaining(!app.cfg.settings.remaining))),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
@@ -537,15 +592,22 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         ..button::Style::default()
     })
     .on_press(Message::Toggle);
+    let on = app.shuffle.is_some();
     let center = column![
         row![
-            ctl(icon::SHUFFLE, app.shuffle.is_some(), Message::Shuffle),
-            side(theme::filled(theme::fill::PREV, 16.0), false, Message::Prev),
-            play,
-            side(theme::filled(theme::fill::NEXT, 16.0), false, Message::Next(true)),
-            ctl(
-                if app.repeat == 2 { icon::REPEAT1 } else { icon::REPEAT },
+            side(
+                i(icon::SHUFFLE, 16.0),
+                on,
+                if on { "Disable shuffle" } else { "Enable shuffle" },
+                Message::Shuffle
+            ),
+            side(theme::filled(theme::fill::PREV, 16.0), false, "Previous", Message::Prev),
+            tip(play, if app.playing { "Pause" } else { "Play" }, Top),
+            side(theme::filled(theme::fill::NEXT, 16.0), false, "Next", Message::Next(true)),
+            side(
+                i(if app.repeat == 2 { icon::REPEAT1 } else { icon::REPEAT }, 16.0),
                 app.repeat > 0,
+                ["Enable repeat", "Enable repeat one", "Disable repeat"][usize::from(app.repeat)],
                 Message::Repeat
             ),
         ]
@@ -562,24 +624,39 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         v if v < 0.5 => icon::VOL1,
         _ => icon::VOL2,
     };
+    let vol = if app.muted { 0.0 } else { app.volume };
     let right = row![
-        side(i(icon::PR, 16.0), app.panel == 1, Message::Panel(1)),
-        side(i(icon::LYRICS, 16.0), app.route == "lyrics", Message::Nav("lyrics".into())),
-        side(i(icon::QUEUE, 16.0), app.panel == 2, Message::Panel(2)),
-        button(theme::bold(format!("{}x", app.cfg.settings.speed), 12.0).center())
-            .width(40)
-            .height(32)
-            .padding(0)
-            .style(theme::link(if app.cfg.settings.speed == 1.0 {
-                theme::SUB
-            } else {
-                theme::ACCENT
-            }))
-            .on_press(Message::Menu(Box::new(MenuKind::Speed))),
-        side(i(vol_icon, 16.0), false, Message::Mute),
-        slider(0.0..=1.0, if app.muted { 0.0 } else { app.volume }, Message::Vol)
-            .width(93)
-            .style(theme::seek),
+        side(i(icon::PR, 16.0), app.panel == 1, "Now playing view", Message::Panel(1)),
+        side(
+            i(icon::LYRICS, 16.0),
+            app.route == "lyrics",
+            "Lyrics",
+            if app.route == "lyrics" { Message::Back } else { Message::Nav("lyrics".into()) }
+        ),
+        side(i(icon::QUEUE, 16.0), app.panel == 2, "Queue", Message::Panel(2)),
+        tip(
+            button(theme::bold(format!("{}x", app.cfg.settings.speed), 12.0).center())
+                .width(40)
+                .height(32)
+                .padding(0)
+                .style(theme::link(if app.cfg.settings.speed == 1.0 {
+                    theme::SUB
+                } else {
+                    theme::ACCENT
+                }))
+                .on_press(Message::Menu(Box::new(MenuKind::Speed))),
+            "Change speed",
+            Top
+        ),
+        side(i(vol_icon, 16.0), false, if app.muted { "Unmute" } else { "Mute" }, Message::Mute),
+        mouse_area(slider(0.0..=1.0, vol, Message::Vol).step(0.01f32).width(93).style(theme::seek))
+            .on_scroll(move |d| {
+                let step = match d {
+                    iced::mouse::ScrollDelta::Lines { y, .. } => y.clamp(-1.0, 1.0) / 10.0,
+                    iced::mouse::ScrollDelta::Pixels { y, .. } => y.clamp(-120.0, 120.0) / 1200.0,
+                };
+                Message::Vol((vol + step).clamp(0.0, 1.0))
+            }),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -602,123 +679,119 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
     };
     let mut layers = Vec::new();
     if let Some((id, kind)) = &app.modal {
-        let named = !app.new_pl.trim().is_empty();
-        let input = |hint: &'a str, v: &'a str, n: u8, ok: &Message| {
-            text_input(hint, v)
-                .id("layer")
-                .on_input(move |v| Message::LField(n, v))
-                .on_submit_maybe(named.then(|| ok.clone()))
-                .style(theme::modal_field)
-                .font(theme::fw(Weight::Normal))
-                .padding(10)
-                .size(14)
-        };
-        let name =
-            |ok: &Message| -> Element<'a, Message> {
-                column![input("Name", &app.new_pl, 3, ok)]
-                    .push((!named).then(|| {
-                        theme::txt("Enter a name.", 12.0, Weight::Normal).color(theme::ERR)
-                    }))
-                    .spacing(6)
-                    .into()
-            };
         let pl = app
             .data::<crate::app::Lib>("lib")
             .and_then(|l| l.playlists.iter().find(|p| &p.id == id));
-        let (title, ok, label, body): (&str, Option<Message>, &str, Element<'a, Message>) =
-            match kind {
-                1 => {
-                    let ok = Message::Edit(id.clone(), app.new_pl.clone(), app.new_pl_desc.clone());
-                    let body = row![
+        let act = |b: button::Button<'a, Message>, m: Option<Message>| {
+            focusable(b.on_press_maybe(m.clone()), m, 500.0, Some("layer"))
+        };
+        let card: Element<'a, Message> = if *kind == 1 {
+            let named = !app.new_pl.trim().is_empty();
+            let ok = named
+                .then(|| Message::Edit(id.clone(), app.new_pl.clone(), app.new_pl_desc.clone()));
+            let input = |hint: &'a str, v: &'a str, n: u8| {
+                text_input(hint, v)
+                    .id("layer")
+                    .on_input(move |v| Message::LField(n, v))
+                    .on_submit_maybe(ok.clone())
+                    .style(theme::modal_field)
+                    .font(theme::fw(Weight::Normal))
+                    .padding(10)
+                    .size(14)
+            };
+            container(
+                column![
+                    row![
+                        theme::bold("Edit details", 24.0).width(Fill),
+                        focusable(
+                            icon_btn(icon::X, 16.0, Message::MenuClose),
+                            Some(Message::MenuClose),
+                            16.0,
+                            Some("layer"),
+                        )
+                    ]
+                    .align_y(Alignment::Center),
+                    row![
                         cover(app, pl.map_or("", |p| p.cover.as_str()), 300, 180.0, false),
                         column![
-                            name(&ok),
-                            input("Add an optional description", &app.new_pl_desc, 4, &ok)
+                            column![input("Add a name", &app.new_pl, 3)]
+                                .push((!named).then(|| {
+                                    theme::txt("Enter a name.", 12.0, Weight::Normal)
+                                        .color(theme::ERR)
+                                }))
+                                .spacing(6),
+                            input("Add an optional description", &app.new_pl_desc, 4),
                         ]
                         .spacing(16),
                     ]
-                    .spacing(16)
-                    .into();
-                    ("Edit details", named.then_some(ok), "Save", body)
-                }
-                _ => {
-                    let body = text::Rich::<(), Message>::with_spans(vec![
+                    .spacing(16),
+                    container(act(
+                        button(theme::bold("Save", 16.0)).style(theme::white).padding([12, 32]),
+                        ok
+                    ))
+                    .align_right(Fill),
+                ]
+                .spacing(24)
+                .width(524)
+                .padding(24),
+            )
+            .style(|_| container::Style {
+                border: iced::Border::default().rounded(8.0),
+                ..theme::menu(&iced::Theme::Dark)
+            })
+            .into()
+        } else {
+            container(
+                column![
+                    theme::bold("Delete from Your Library?", 24.0).color(theme::BG),
+                    text::Rich::<(), Message>::with_spans(vec![
                         text::Span::new("This will delete "),
                         text::Span::new(pl.map_or("", |p| p.name.as_str()))
                             .font(theme::fw(Weight::Bold)),
-                        text::Span::new(" from Your Library."),
+                        text::Span::new(" from "),
+                        text::Span::new("Your Library.").font(theme::fw(Weight::Bold)),
                     ])
                     .size(14)
                     .font(theme::fw(Weight::Normal))
-                    .width(Fill)
-                    .into();
-                    ("Delete from Your Library?", Some(Message::PlDel(id.clone())), "Delete", body)
-                }
-            };
+                    .color(theme::BG),
+                    row![
+                        Space::new().width(Fill),
+                        act(
+                            button(theme::bold("Cancel", 16.0))
+                                .style(|_, _| button::Style {
+                                    text_color: theme::BG,
+                                    ..button::Style::default()
+                                })
+                                .padding([12, 16]),
+                            Some(Message::MenuClose)
+                        ),
+                        act(
+                            button(theme::bold("Delete", 16.0))
+                                .style(theme::danger)
+                                .padding([12, 32]),
+                            Some(Message::PlDel(id.clone()))
+                        ),
+                    ]
+                    .spacing(16)
+                    .align_y(Alignment::Center)
+                    .padding(theme::pad(16.0, 0.0, 0.0, 0.0)),
+                ]
+                .spacing(8)
+                .width(420)
+                .padding(32),
+            )
+            .style(theme::fill(theme::TEXT, 8.0))
+            .into()
+        };
         layers.push(
-            stack![
-                scrim(Color { a: 0.7, ..theme::BG }),
-                container(
-                    container(
-                        column![
-                            row![
-                                theme::bold(title, 24.0).width(Fill),
-                                focusable(
-                                    icon_btn(icon::X, 16.0, Message::MenuClose),
-                                    Some(Message::MenuClose),
-                                    16.0,
-                                    Some("layer"),
-                                )
-                            ]
-                            .align_y(Alignment::Center),
-                            body,
-                            row![
-                                Space::new().width(Fill),
-                                focusable(
-                                    button(theme::bold("Cancel", 16.0))
-                                        .style(theme::link(theme::SUB))
-                                        .padding([12, 16])
-                                        .on_press(Message::MenuClose),
-                                    Some(Message::MenuClose),
-                                    500.0,
-                                    Some("layer"),
-                                ),
-                                focusable(
-                                    button(theme::bold(label, 16.0))
-                                        .style(if *kind == 2 {
-                                            theme::accent
-                                        } else {
-                                            theme::white
-                                        })
-                                        .padding([12, 32])
-                                        .on_press_maybe(ok.clone()),
-                                    ok,
-                                    500.0,
-                                    Some("layer"),
-                                ),
-                            ]
-                            .spacing(8)
-                            .align_y(Alignment::Center),
-                        ]
-                        .spacing(24)
-                        .width(524)
-                        .padding(24),
-                    )
-                    .style(|_| container::Style {
-                        border: iced::Border::default().rounded(8.0),
-                        ..theme::menu(&iced::Theme::Dark)
-                    })
-                )
-                .center(Fill),
-            ]
-            .into(),
+            stack![scrim(Color { a: 0.7, ..theme::BG }), container(card).center(Fill)].into(),
         );
     }
     if let Some(m) = &app.menu {
         let (el, w, h) = pages::menu(app, m);
-        let (ww, wh) = app.cfg.settings.window;
+        let (ww, wh) = app.view_size();
         let (x, y) = match m.kind {
-            MenuKind::Speed => (m.x - w / 2.0, wh - 64.0 - h),
+            MenuKind::Speed => (m.x - 20.0, wh - 64.0 - h),
             _ => (
                 if m.x + w + 8.0 > ww { m.x - w } else { m.x },
                 if m.y + h + 8.0 > wh { m.y - h } else { m.y },

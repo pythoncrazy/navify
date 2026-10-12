@@ -26,10 +26,10 @@ impl iced::Executor for Rt {
 
 fn main() -> iced::Result {
     let cfg = Config::load();
-    let ((w, h), z) = (cfg.settings.window, cfg.settings.zoom);
+    let ((w, h), s) = (cfg.settings.window, cfg.settings.zoom);
     application(App::boot, App::update, App::view)
         .subscription(App::subscription)
-        .scale_factor(|a: &App| a.cfg.settings.zoom)
+        .scale_factor(App::scale)
         .executor::<Rt>()
         .theme(|_: &App| Theme::Dark)
         .default_font(Font::with_name("Figtree"))
@@ -41,8 +41,8 @@ fn main() -> iced::Result {
         .font(include_bytes!("../assets/fonts/phosphor-fill.ttf").as_slice())
         .title(App::title)
         .window(window::Settings {
-            size: Size::new(w.max(800.0), h.max(600.0)),
-            min_size: Some(Size::new(800.0, 600.0) * z),
+            size: Size::new(w.max(800.0), h.max(600.0)) * (1.0 / s),
+            min_size: Some(Size::new(800.0, 600.0)),
             ..window::Settings::default()
         })
         .run()
