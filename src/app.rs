@@ -664,19 +664,14 @@ impl App {
 
     pub fn gain(&self, song: &Song) -> f32 {
         let st = &self.cfg.settings;
-        let g = match st.replaygain.as_str() {
+        let db = match st.replaygain.as_str() {
             "track" => song.rg.track_gain.or(song.rg.album_gain),
             "album" => song.rg.album_gain.or(song.rg.track_gain),
             _ => return 1.0,
-        };
-        match g {
-            Some(db) => {
-                let lin = 10f32.powf((db + st.preamp_db) / 20.0);
-                let peak = song.rg.track_peak.or(song.rg.album_peak).unwrap_or(1.0).max(1e-3);
-                lin.min(1.0 / peak)
-            }
-            None => 10f32.powf(st.fallback_db / 20.0),
         }
+        .unwrap_or(st.fallback_db);
+        let peak = song.rg.track_peak.or(song.rg.album_peak).unwrap_or(1.0).max(1e-3);
+        10f32.powf((db + st.preamp_db) / 20.0).min(1.0 / peak)
     }
 
     fn track(&self, song: &Song) -> Track {
