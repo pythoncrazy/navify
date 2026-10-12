@@ -210,7 +210,10 @@ impl Source {
                 let gain = 10f32.powf(le(16) as i16 as f32 / 5120.0);
                 let (mut d, mut buf) = (OpusDecoder::new(48_000, 2)?, vec![0f32; 5760 * 2]);
                 Box::new(move |p, out| {
-                    let Some(p) = p else { return Ok(d.reset()) };
+                    let Some(p) = p else {
+                        d.reset();
+                        return Ok(());
+                    };
                     let n = d
                         .decode_float(&p.data, &mut buf, false)
                         .map_err(|_| SymError::DecodeError("opus"))?;
@@ -225,9 +228,12 @@ impl Source {
             } else {
                 let mut d =
                     symphonia::default::get_codecs().make_audio_decoder(&p, &Default::default())?;
-                let mut buf = Vec::new();
+                let mut buf: Vec<f32> = Vec::new();
                 Box::new(move |p, out| {
-                    let Some(p) = p else { return Ok(d.reset()) };
+                    let Some(p) = p else {
+                        d.reset();
+                        return Ok(());
+                    };
                     let b = d.decode(p)?;
                     let ch = b.spec().channels().count().max(1);
                     b.copy_to_vec_interleaved(&mut buf);
@@ -437,13 +443,16 @@ impl Mixer {
             let m = inc.fill(&mut self.b)?;
             self.b[m * 2..].fill(0.0);
             let (pos, len) = self.fade;
-            out.chunks_exact_mut(2).zip(self.b.chunks_exact(2)).enumerate().for_each(
-                |(i, (o, b))| {
+            out.as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(self.b.as_chunks::<2>().0.iter())
+                .enumerate()
+                .for_each(|(i, (o, b))| {
                     let (s, c) = (((pos + i) as f32 / len as f32).min(1.0) * FRAC_PI_2).sin_cos();
                     o[0] = o[0] * c + b[0] * s;
                     o[1] = o[1] * c + b[1] * s;
-                },
-            );
+                });
             self.fade.0 += CHUNK;
             if self.fade.0 >= len || n < CHUNK {
                 self.cur = self.inc.take();
@@ -526,7 +535,7 @@ fn engine(rx: Receiver<Cmd>, tx: Sender<Event>, sh: Arc<Shared>) {
                 let n = cons.pop_partial_slice(out).0.len();
                 out[n..].fill(0.0);
                 let target = f32::from_bits(csh.volume.load(Relaxed)).powi(3);
-                out.chunks_exact_mut(2).for_each(|f| {
+                out.as_chunks_mut::<2>().0.iter_mut().for_each(|f| {
                     vol += (target - vol) * 0.002;
                     f[0] *= vol;
                     f[1] *= vol;

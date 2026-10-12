@@ -656,14 +656,17 @@ impl Session {
             let path = format!("album/{id}");
             let q =
                 [("album_id", id), ("_sort", "album".to_string()), ("_order", "ASC".to_string())];
-            let (album, songs) = tokio::try_join!(
+            let (album, (mut songs, _)) = tokio::try_join!(
                 self.nd::<Album>(Method::GET, &path, &[]),
                 self.nd::<Vec<Song>>(Method::GET, "song", &q),
             )?;
-            Ok((album.0, songs.0))
+            songs.sort_by_key(|s| (s.disc, s.track));
+            Ok((album.0, songs))
         } else {
             let v: Value = self.rest("getAlbum", &[("id", id.to_string())], "/album").await?;
-            Ok((serde_json::from_value(v.clone()).unwrap_or_default(), vlist(&v, "song")))
+            let mut songs: Vec<Song> = vlist(&v, "song");
+            songs.sort_by_key(|s| (s.disc, s.track));
+            Ok((serde_json::from_value(v.clone())?, songs))
         }
     }
 

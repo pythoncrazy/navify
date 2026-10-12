@@ -37,10 +37,8 @@ fn main() {
             w.load_font(std::borrow::Cow::Borrowed(*f));
         }
     }
-    let secs: u64 = std::env::var("NAVIFY_SHOT_WAIT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(12);
+    let secs: u64 =
+        std::env::var("NAVIFY_SHOT_WAIT").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
     let shot = iced_test::screenshot(
         &app,
         &Theme::Dark,

@@ -67,16 +67,15 @@ fn head_title(app: &App) -> Option<(String, iced::Color, Option<Message>)> {
             let (a, songs) = v.downcast_ref::<(crate::api::Album, Vec<crate::api::Song>)>()?;
             Some((
                 a.name.clone(),
-                pages_head_color(app, &a.cover),
+                pages::head_color(app, &a.cover),
                 Some(Message::Play(songs.clone(), 0, format!("album:{id}"))),
             ))
         }
         "playlist" => {
-            let (p, songs) =
-                v.downcast_ref::<(crate::api::Playlist, Vec<crate::api::Song>)>()?;
+            let (p, songs) = v.downcast_ref::<(crate::api::Playlist, Vec<crate::api::Song>)>()?;
             Some((
                 p.name.clone(),
-                pages_head_color(app, &p.cover),
+                pages::head_color(app, &p.cover),
                 Some(Message::Play(songs.clone(), 0, format!("playlist:{id}"))),
             ))
         }
@@ -103,10 +102,6 @@ fn head_title(app: &App) -> Option<(String, iced::Color, Option<Message>)> {
         }
         _ => None,
     }
-}
-
-fn pages_head_color(app: &App, id: &str) -> iced::Color {
-    app.covers.color.get(id).copied().unwrap_or(Color::from_rgb8(0x50, 0x3a, 0x55))
 }
 
 fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
@@ -147,7 +142,7 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .into()
     };
     let mini = head_title(app);
-    let mini2 = head_title(app);
+    let mini_c = mini.as_ref().map(|(_, c, _)| *c);
     let mut mini_el: Element<'a, Message> = Space::new().into();
     if let Some((title, _c, play)) = mini {
         let pl: Element<'a, Message> = match play {
@@ -211,13 +206,10 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
     .spacing(8)
     .align_y(iced::Alignment::Center)
     .height(64);
-    let hdr = container(r)
-        .width(Fill)
-        .padding(theme::pad(0.0, 16.0, 0.0, 16.0));
-    if let Some((_, c, _)) = mini2 {
-        hdr.style(move |_| container::Style::default().background(c)).into()
-    } else {
-        hdr.into()
+    let hdr = container(r).width(Fill).padding(theme::pad(0.0, 16.0, 0.0, 16.0));
+    match mini_c {
+        Some(c) => hdr.style(move |_| container::Style::default().background(c)).into(),
+        None => hdr.into(),
     }
 }
 
@@ -572,20 +564,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if app.session.is_none() {
         return pages::login(app);
     }
-    let mut main_stack = stack![scrollable(pages::route(app))
-        .id(SCROLL)
-        .on_scroll(|v| {
-            let o = v.absolute_offset();
-            Message::Scrolled(o.y, v.bounds().height, v.content_bounds().height)
-        })
-        .style(theme::scroll)];
+    let mut main_stack = stack![
+        scrollable(pages::route(app))
+            .id(SCROLL)
+            .on_scroll(|v| {
+                let o = v.absolute_offset();
+                Message::Scrolled(o.y, v.bounds().height, v.content_bounds().height)
+            })
+            .style(theme::scroll)
+    ];
     if let Some(h) = pages::sticky_track_header(app) {
         main_stack = main_stack.push(h);
     }
-    let main = column![
-        top_bar(app),
-        container(main_stack).padding(theme::pad(0.0, 16.0, 16.0, 16.0)),
-    ];
+    let main =
+        column![top_bar(app), container(main_stack).padding(theme::pad(0.0, 16.0, 16.0, 16.0)),];
     let layout = column![
         {
             let mut r =

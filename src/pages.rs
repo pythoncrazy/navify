@@ -1,8 +1,8 @@
+use iced::widget::text::Wrapping;
 use iced::widget::{
     Column, Row, Space, button, column, container, mouse_area, pick_list, row, scrollable, slider,
     text, text_input, toggler,
 };
-use iced::widget::text::Wrapping;
 use iced::{Alignment, Color, Element, Fill, Font, Length, color};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Song};
@@ -18,7 +18,7 @@ fn med(t: impl ToString, s: f32) -> text::Text<'static> {
     theme::med(t.to_string(), s)
 }
 
-fn head_color(app: &App, id: &str) -> Color {
+pub fn head_color(app: &App, id: &str) -> Color {
     app.covers.color.get(id).copied().unwrap_or(color!(0x503a55))
 }
 
@@ -79,10 +79,11 @@ fn track_row<'a>(
     r = r.push(idx);
     r = r.push(
         column![
-            text(s.title.clone())
-                .size(14)
-                .wrapping(Wrapping::None)
-                .color(if cur { theme::ACCENT } else { theme::TEXT }),
+            text(s.title.clone()).size(14).wrapping(Wrapping::None).color(if cur {
+                theme::ACCENT
+            } else {
+                theme::TEXT
+            }),
             artists_line(&s.artists, 12.0),
         ]
         .spacing(2)
@@ -297,9 +298,7 @@ fn loading<'a>(app: &'a App, key: &str) -> Option<Element<'a, Message>> {
     if app.cache.contains_key(key) {
         return None;
     }
-    let blk = |w: Length, h: f32| {
-        container(Space::new()).width(w).height(h).style(theme::skel)
-    };
+    let blk = |w: Length, h: f32| container(Space::new()).width(w).height(h).style(theme::skel);
     Some(
         column![
             blk(280.0.into(), 32.0),
@@ -354,11 +353,9 @@ fn home<'a>(app: &'a App) -> Element<'a, Message> {
             button(
                 row![
                     cover(app, &a.cover, 300, 64.0, false),
-                    container(
-                        med(a.name.clone(), 14.0).wrapping(Wrapping::None),
-                    )
-                    .center_y(64)
-                    .padding([0, 12]),
+                    container(med(a.name.clone(), 14.0).wrapping(Wrapping::None),)
+                        .center_y(64)
+                        .padding([0, 12]),
                 ]
                 .width(Length::FillPortion(1)),
             )
@@ -374,13 +371,10 @@ fn home<'a>(app: &'a App) -> Element<'a, Message> {
         tiles = tiles.push(r);
     }
     let mut col = column![
-        container(column![
-            bold(greet, 30.0),
-            tiles,
-        ])
-        .padding(theme::pad(16.0, 12.0, 24.0, 12.0))
-        .width(Fill)
-        .style(theme::header(gc)),
+        container(column![bold(greet, 30.0), tiles,])
+            .padding(theme::pad(16.0, 12.0, 24.0, 12.0))
+            .width(Fill)
+            .style(theme::header(gc)),
     ]
     .spacing(24);
     let mk = |l: &'a Vec<Album>, title: &'a str| {
@@ -1564,16 +1558,11 @@ pub fn login<'a>(app: &'a App) -> Element<'a, Message> {
     if l.busy {
         col = col.push(theme::sub2("Signing in.", 13.0));
     }
-    container(
-        container(col)
-            .padding(40)
-            .width(560)
-            .style(|_| {
-                container::Style::default()
-                    .background(theme::PANEL)
-                    .border(iced::Border::default().rounded(8.0))
-            }),
-    )
+    container(container(col).padding(40).width(560).style(|_| {
+        container::Style::default()
+            .background(theme::PANEL)
+            .border(iced::Border::default().rounded(8.0))
+    }))
     .width(Fill)
     .height(Fill)
     .center_x(Fill)

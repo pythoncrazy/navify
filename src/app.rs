@@ -271,23 +271,34 @@ impl App {
                 std::env::var("NAVIFY_PASS").ok()?,
             ))
         })();
-        let t = if app.session.is_none() && creds.is_some() {
-            let (u, n, p) = creds.unwrap();
-            Task::perform(
-                async move { Session::login(&u, &n, &p).await.map_err(|e| e.to_string()) },
-                Message::LoggedIn,
-            )
-        } else if app.session.is_some() || app.route != "login" {
-            let r = app.route.clone();
-            app.route = String::new();
-            app.nav(r)
-        } else if app.shot.is_some() {
-            Task::perform(async { tokio::time::sleep(Duration::from_millis(800)).await }, |_| {
-                Message::ShotTake
-            })
-        } else {
-            Task::none()
-        };
+        let prune = Task::perform(
+            async {
+                let _ = tokio::task::spawn_blocking(crate::api::prune_covers).await;
+            },
+            |_| Message::Noop,
+        );
+        let t = Task::batch([
+            prune,
+            if app.session.is_none()
+                && let Some((u, n, p)) = creds
+            {
+                Task::perform(
+                    async move { Session::login(&u, &n, &p).await.map_err(|e| e.to_string()) },
+                    Message::LoggedIn,
+                )
+            } else if app.session.is_some() || app.route != "login" {
+                let r = app.route.clone();
+                app.route = String::new();
+                app.nav(r)
+            } else if app.shot.is_some() {
+                Task::perform(
+                    async { tokio::time::sleep(Duration::from_millis(800)).await },
+                    |_| Message::ShotTake,
+                )
+            } else {
+                Task::none()
+            },
+        ]);
         (app, t)
     }
 
@@ -320,7 +331,8 @@ impl App {
         Vec::new()
     }
 
-    fn apply_shot_setup(&mut self) {
+    fn apply_shot_setup(&mut self) -> Task<Message> {
+        let mut task = Task::none();
         for s in self.shot_setups() {
             match s.as_str() {
                 "panel1" => self.panel = 1,
@@ -340,9 +352,17 @@ impl App {
                 "toast" => {
                     self.toast = Some((u64::MAX, "Added to queue".into()));
                 }
+                "lyrics" => {
+                    if let Some(sg) = self.any_songs().into_iter().next() {
+                        self.queue = vec![sg];
+                        self.index = 0;
+                        task = self.nav("lyrics".into());
+                    }
+                }
                 _ => {}
             }
         }
+        task
     }
 
     fn maybe_shot(&mut self) -> Task<Message> {
@@ -804,12 +824,13 @@ impl App {
                 self.cache.insert(key.clone(), (Instant::now(), v));
                 let ids: Vec<(String, u32)> = self.visible_covers();
                 let sk = shot_key(self.shot.as_deref());
+                let mut setup = Task::none();
                 if self.shot_ready == 0 && sk.as_deref() == Some(key.as_str()) {
                     self.shot_ready = 1;
-                    self.apply_shot_setup();
+                    setup = self.apply_shot_setup();
                 }
                 let wc = self.want_covers(ids);
-                Task::batch([wc, self.maybe_shot()])
+                Task::batch([wc, setup, self.maybe_shot()])
             }
             Message::Cover(id, size, r) => {
                 self.covers.want.remove(&(id.clone(), size));

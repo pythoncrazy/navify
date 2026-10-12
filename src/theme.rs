@@ -1,5 +1,5 @@
-use iced::widget::{button, container, scrollable, slider, text, text_input, toggler};
 use iced::font::{Family, Weight};
+use iced::widget::{button, container, scrollable, slider, text, text_input, toggler};
 use iced::{Border, Color, Font, Shadow, Theme, color};
 
 pub const BG: Color = color!(0x000000);
@@ -282,7 +282,11 @@ pub fn pad(top: f32, right: f32, bottom: f32, left: f32) -> iced::Padding {
 }
 
 pub fn tog(_: &Theme, s: toggler::Status) -> toggler::Style {
-    let on = matches!(s, toggler::Status::Active { is_toggled: true } | toggler::Status::Hovered { is_toggled: true });
+    let on = matches!(
+        s,
+        toggler::Status::Active { is_toggled: true }
+            | toggler::Status::Hovered { is_toggled: true }
+    );
     toggler::Style {
         background: if on { ACCENT } else { FIELD }.into(),
         background_border_width: 0.0,
@@ -297,9 +301,7 @@ pub fn tog(_: &Theme, s: toggler::Status) -> toggler::Style {
 }
 
 pub fn skel(_: &Theme) -> container::Style {
-    container::Style::default()
-        .background(SKEL)
-        .border(Border::default().rounded(4.0))
+    container::Style::default().background(SKEL).border(Border::default().rounded(4.0))
 }
 
 pub fn navbtn(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
