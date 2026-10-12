@@ -416,11 +416,47 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
             .on_right_press(Message::MenuClose)
     };
     let mut layers = Vec::new();
-    if let Some((id, rename)) = &app.modal {
-        let save = if *rename {
-            Message::Rename(id.clone(), app.new_pl.clone())
-        } else {
-            Message::PlNew(app.new_pl.clone())
+    if let Some((id, kind)) = &app.modal {
+        let input = |hint: &'a str, v: &'a str, n: u8, ok: &Message| {
+            text_input(hint, v)
+                .on_input(move |v| Message::LField(n, v))
+                .on_submit(ok.clone())
+                .style(theme::modal_field)
+                .font(theme::fw(Weight::Normal))
+                .padding(10)
+                .size(14)
+        };
+        let pl = app
+            .data::<crate::app::Lib>("lib")
+            .and_then(|l| l.playlists.iter().find(|p| &p.id == id));
+        let (title, ok, label, body): (&str, Message, &str, Element<'a, Message>) = match kind {
+            0 => {
+                let ok = Message::PlNew(app.new_pl.clone());
+                ("Make a playlist", ok.clone(), "Save", input("Name", &app.new_pl, 3, &ok).into())
+            }
+            1 => {
+                let ok = Message::Edit(id.clone(), app.new_pl.clone(), app.new_pl_desc.clone());
+                let body = row![
+                    cover(app, pl.map_or("", |p| p.cover.as_str()), 300, 180.0, false),
+                    column![
+                        input("Name", &app.new_pl, 3, &ok),
+                        input("Add an optional description", &app.new_pl_desc, 4, &ok),
+                    ]
+                    .spacing(16),
+                ]
+                .spacing(16)
+                .into();
+                ("Edit details", ok, "Save", body)
+            }
+            _ => {
+                let body = row![
+                    theme::txt("This will delete ", 14.0, Weight::Normal),
+                    theme::bold(pl.map_or("", |p| p.name.as_str()), 14.0),
+                    theme::txt(" from Your Library.", 14.0, Weight::Normal)
+                ]
+                .into();
+                ("Delete from Your Library?", Message::PlDel(id.clone()), "Delete", body)
+            }
         };
         layers.push(
             stack![
@@ -428,38 +464,28 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
                 container(
                     container(
                         column![
-                            theme::bold(
-                                if *rename { "Rename playlist" } else { "New playlist" },
-                                24.0
-                            ),
-                            text_input("Playlist name", &app.new_pl)
-                                .on_input(|v| Message::LField(3, v))
-                                .on_submit(save.clone())
-                                .style(theme::field)
-                                .font(theme::fw(Weight::Normal))
-                                .padding(12)
-                                .size(14),
+                            row![
+                                theme::bold(title, 24.0).width(Fill),
+                                icon_btn(icon::X, 16.0, Message::MenuClose)
+                            ]
+                            .align_y(Alignment::Center),
+                            body,
                             row![
                                 Space::new().width(Fill),
-                                button(theme::bold("Cancel", 14.0))
+                                button(theme::bold("Cancel", 16.0))
                                     .style(theme::link(theme::SUB))
                                     .padding([12, 16])
                                     .on_press(Message::MenuClose),
-                                button(theme::bold("Save", 16.0))
-                                    .style(|_, _| button::Style {
-                                        background: Some(theme::TEXT.into()),
-                                        text_color: theme::BG,
-                                        border: iced::Border::default().rounded(500.0),
-                                        ..button::Style::default()
-                                    })
+                                button(theme::bold(label, 16.0))
+                                    .style(if *kind == 2 { theme::accent } else { theme::white })
                                     .padding([12, 32])
-                                    .on_press(save),
+                                    .on_press(ok),
                             ]
                             .spacing(8)
                             .align_y(Alignment::Center),
                         ]
                         .spacing(24)
-                        .width(480)
+                        .width(524)
                         .padding(24),
                     )
                     .style(|_| container::Style {

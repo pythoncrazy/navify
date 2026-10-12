@@ -1,7 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use iced::font::{Family, Weight};
-use iced::widget::{button, container, scrollable, slider, text, text_input, toggler};
+use iced::overlay::menu;
+use iced::widget::{button, container, pick_list, scrollable, slider, text, text_input, toggler};
 use iced::{Border, Color, Font, Gradient, Radians, Shadow, Theme, color, gradient};
 
 pub const BG: Color = color!(0x000000);
@@ -254,6 +255,21 @@ pub fn field(_: &Theme, s: text_input::Status) -> text_input::Style {
     }
 }
 
+pub fn modal_field(_: &Theme, s: text_input::Status) -> text_input::Style {
+    text_input::Style {
+        background: MENU_HOVER.into(),
+        border: Border {
+            color: color!(0x535353),
+            width: if matches!(s, text_input::Status::Focused { .. }) { 1.0 } else { 0.0 },
+            radius: 4.0.into(),
+        },
+        icon: SUB,
+        placeholder: SUB,
+        value: TEXT,
+        selection: tint(0.3),
+    }
+}
+
 fn btn_style(bg: Color, fg: Color, radius: f32) -> button::Style {
     button::Style {
         background: Some(bg.into()),
@@ -301,6 +317,11 @@ pub fn accent(_: &Theme, s: button::Status) -> button::Style {
         _ => ACCENT,
     };
     btn_style(c, BG, 500.0)
+}
+
+pub fn white(_: &Theme, s: button::Status) -> button::Style {
+    let hot = matches!(s, button::Status::Hovered | button::Status::Pressed);
+    btn_style(if hot { color!(0xf0f0f0) } else { TEXT }, BG, 500.0)
 }
 
 pub fn pill(_: &Theme, s: button::Status) -> button::Style {
@@ -374,6 +395,28 @@ pub fn tog(_: &Theme, s: toggler::Status) -> toggler::Style {
         text_color: None,
         border_radius: None,
         padding_ratio: 0.12,
+    }
+}
+
+pub fn pick(_: &Theme, s: pick_list::Status) -> pick_list::Style {
+    let hot = !matches!(s, pick_list::Status::Active);
+    pick_list::Style {
+        text_color: TEXT,
+        placeholder_color: SUB,
+        handle_color: if hot { TEXT } else { SUB },
+        background: if hot { MENU_HOVER } else { CHIP }.into(),
+        border: Border::default().rounded(4),
+    }
+}
+
+pub fn pick_menu(_: &Theme) -> menu::Style {
+    menu::Style {
+        background: MENU.into(),
+        border: Border::default().rounded(4),
+        text_color: TEXT,
+        selected_text_color: TEXT,
+        selected_background: MENU_HOVER.into(),
+        shadow: Shadow { color: Color { a: 0.5, ..BG }, blur_radius: 24.0, ..Shadow::default() },
     }
 }
 

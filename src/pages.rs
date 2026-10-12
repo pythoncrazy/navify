@@ -280,8 +280,14 @@ fn shelf<'a>(title: &str, all: Option<String>, cards: Vec<El<'a>>) -> El<'a> {
         .into()
 }
 
-fn grid<'a>(app: &App, n: usize, row_h: f32, y0: f32, f: impl Fn(usize) -> El<'a>) -> El<'a> {
-    let cols = app.grid().0;
+fn grid<'a>(
+    app: &App,
+    n: usize,
+    cols: usize,
+    row_h: f32,
+    y0: f32,
+    f: impl Fn(usize) -> El<'a>,
+) -> El<'a> {
     let rows = n.div_ceil(cols);
     let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 800.0));
     let lo = (((off - y0) / row_h).max(0.0) as usize).saturating_sub(1).min(rows);
@@ -566,6 +572,9 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
                 .on_press(Message::Nav(format!("artist:{}", x.id)))
                 .into()
         }));
+        let lead = row![cover(app, &artists[0].id, 128, 24.0, true), lead]
+            .spacing(8)
+            .align_y(Alignment::Center);
         let year = if a.year > 0 { format!(" \u{2022} {}", a.year) } else { String::new() };
         return Some(Detail {
             art: cover(app, &a.cover, 300, px, false),
@@ -807,7 +816,8 @@ fn strip_html(s: &str) -> String {
 fn search<'a>(app: &'a App, q: &str) -> El<'a> {
     if q.is_empty() {
         let Some(gs) = app.data::<Vec<Genre>>("genres") else { return Space::new().into() };
-        let tw = app.grid().1 - 24.0;
+        let cols = ((app.main_w() - 24.0) / 300.0).max(2.0) as usize;
+        let tw = (app.main_w() - 24.0) / cols as f32 - 24.0;
         let th = (tw * 0.56).round();
         let tile = |g: &'a Genre| -> El<'a> {
             container(
@@ -829,7 +839,7 @@ fn search<'a>(app: &'a App, q: &str) -> El<'a> {
         };
         return column![
             container(theme::bold("Browse all", 24.0)).padding(theme::pad(PAD, PAD, 4.0, PAD)),
-            grid(app, gs.len(), th + 24.0, 64.0, |n| tile(&gs[n])),
+            grid(app, gs.len(), cols, th + 24.0, 64.0, |n| tile(&gs[n])),
         ]
         .into();
     }
@@ -1007,7 +1017,7 @@ fn albums<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
     let title = if kind == "genre" { arg } else { "Albums" };
     column![grid_head(title, chips)]
         .push(app.data::<Pager<Album>>(&app.route).map(|p| {
-            grid(app, p.items.len(), rh, GRID_Y, |n| {
+            grid(app, p.items.len(), app.grid().0, rh, GRID_Y, |n| {
                 album_card(app, &p.items[n], p.items[n].artist.clone())
             })
         }))
@@ -1017,10 +1027,9 @@ fn albums<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
 fn artists<'a>(app: &'a App) -> El<'a> {
     let rh = app.grid().1 + 52.0;
     column![grid_head("Artists", None)]
-        .push(
-            app.data::<Pager<Artist>>(&app.route)
-                .map(|p| grid(app, p.items.len(), rh, GRID_Y, |n| artist_card(app, &p.items[n]))),
-        )
+        .push(app.data::<Pager<Artist>>(&app.route).map(|p| {
+            grid(app, p.items.len(), app.grid().0, rh, GRID_Y, |n| artist_card(app, &p.items[n]))
+        }))
         .into()
 }
 
@@ -1138,6 +1147,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             .font(theme::fw(Weight::Normal))
             .padding([8, 12])
             .width(200)
+            .style(theme::pick)
+            .menu_style(theme::pick_menu)
             .into()
     };
     let num = |v: f32,
@@ -1539,7 +1550,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             let pl: Vec<El> = std::iter::once(item(
                 icon::PLUS,
                 "New playlist".into(),
-                Message::Modal(String::new(), false),
+                Message::Modal(String::new(), 0),
             ))
             .chain([sep()])
             .chain(app.data::<Lib>("lib").into_iter().flat_map(|l| {
@@ -1642,9 +1653,9 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             ctx("playlist", &p.id)
                 .into_iter()
                 .chain([
-                    item(icon::PENCIL, "Edit details".into(), Message::Modal(p.id.clone(), true)),
+                    item(icon::PENCIL, "Edit details".into(), Message::Modal(p.id.clone(), 1)),
                     sep(),
-                    item(icon::TRASH, "Delete".into(), Message::PlDel(p.id.clone())),
+                    item(icon::TRASH, "Delete".into(), Message::Modal(p.id.clone(), 2)),
                 ])
                 .collect(),
             1,

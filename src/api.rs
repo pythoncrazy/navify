@@ -909,17 +909,13 @@ impl Session {
         &self,
         id: &str,
         name: Option<&str>,
-        public: Option<bool>,
+        comment: Option<&str>,
         add: &[String],
         remove: &[usize],
     ) -> Result<()> {
         let mut p = vec![("playlistId", id.to_string())];
-        if let Some(n) = name {
-            p.push(("name", n.to_string()));
-        }
-        if let Some(b) = public {
-            p.push(("public", b.to_string()));
-        }
+        p.extend(name.map(|n| ("name", n.to_string())));
+        p.extend(comment.map(|c| ("comment", c.to_string())));
         p.extend(add.iter().map(|i| ("songIdToAdd", i.clone())));
         p.extend(remove.iter().map(|i| ("songIndexToRemove", i.to_string())));
         self.rest::<Value>("updatePlaylist", &p, "").await?;
