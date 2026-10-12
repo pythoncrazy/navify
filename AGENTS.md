@@ -47,3 +47,47 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 - Dependencies: only versions published ≥7 days ago.
 - Tools: install all developer tools with `cargo install --locked` (not uv, pip, or system packages).
 - Linux build deps: `libasound2-dev libdbus-1-dev pkg-config` (Arch: `alsa-lib dbus pkgconf`).
+
+## Status (2026-10-12)
+
+- `main`: project base, API client (`src/api.rs`), and configuration (`src/config.rs`). CI passes on Linux, macOS, and Windows.
+- `wip/ui`: work in progress. It does not compile yet.
+  - `src/app.rs`, `src/pages.rs`, `src/view.rs`, `src/theme.rs`: the iced UI (Phase B, partly done).
+  - `crates/audio`: the playback engine (partly done). It has one compile error (`Vec::new()` type annotation).
+  - `examples/shots.rs`: renders screenshots of the routes with `iced_test`.
+- Local test server for tests that change data: `tests/` read `NAVIFY_TEST_LOCAL_URL` and related variables. A Navidrome release binary with generated test tracks works well (see Phase A tests). Never change data on the `.env` server; it is the real library of the user.
+
+## Roadmap
+
+### Phase A fixes (do first)
+
+1. Replace the accessor methods (`cover_id`, `gains`, `artists`, `album_artists`) and the dual fields with one normalization pass over the JSON in `rest()` and `nd()`: `participants.artist` → `artists`, `participants.albumartist` → `albumArtists`, `replayGain{..}` → flat `rg*`, `mediaFileId` → `id`, empty `coverArt` → `id`.
+2. Use `std::io::Error` with `ErrorKind::PermissionDenied` for a native 401.
+3. A missing JSON value gives `T::default()`. A value that does not parse gives an error.
+4. Remove the in-memory cover LRU from the API layer. Use a unique temp file name for each cover download. Prune the cover disk cache to 300 MB at startup, oldest first.
+5. Send independent requests at the same time (`tokio::try_join!`). Use `topSongsByArtistId` when the server advertises it.
+6. Album tracks sort by disc, then track.
+7. Subset the icon font to the used glyphs (target < 30 KB) with a cargo-installed tool.
+
+### Phase B: UI (Spotify desktop look)
+
+- Architecture: routes are strings that are also cache keys (`home`, `search:<q>`, `album:<id>`, `artist:<id>`, `playlist:<id>`, `liked`, `albums`, `artists`, `songs`, `genres`, `genre:<name>`, `folders`, `folder:<id>`, `lyrics`, `settings`). Back/forward history. Query cache `HashMap<String, (Instant, Arc<dyn Any + Send + Sync>)>`, stale time 5 min, a pending set to remove duplicate requests, one `fetch(key)` function, and one `Loaded(key, result)` message. Pages of 100 load as the user scrolls. Optimistic overlays for stars and ratings.
+- Images: cover sizes 128, 300, and 640 only. Decode with the `image` crate in a blocking task. Keep `Handle::from_rgba` in an LRU with a 64 MB byte limit. Calculate the dominant color from the same pixels.
+- Virtualized lists and grids: fixed 56 px rows, render only the visible rows ± 6. Keep the scroll offset per route.
+- Player: queue, index, shuffle order, repeat (0 off, 1 all, 2 one). ReplayGain linear gain = 10^((gain_db + preamp)/20), clamped by 1/peak. Send the next track to the engine for gapless playback. Scrobble with `submission=false` at start and `submission=true` after 50% or 240 s. Queue sync: restore after login, save 5 s after a change and on pause or quit.
+- Keyboard: Space, Ctrl/Cmd+Left/Right, Ctrl/Cmd+Up/Down, Ctrl/Cmd+K and L (search), Ctrl/Cmd+S (shuffle), Ctrl/Cmd+R (repeat), Alt+Left/Right (back/forward). Previous restarts the track after 3 s.
+- Look: as close to Spotify as possible, classy and restrained. Collect real Spotify reference images first and compare screenshots side by side.
+  - Colors: window #000000, panels #121212 with radius 8 and 8 px gaps, elevated #1f1f1f, hover white 10%, selected white 30%, text #ffffff, subdued #b3b3b3, accent #1ed760, menu #282828 (hover #3e3e3e).
+  - Typography: Figtree Regular, Medium, Bold, and Black. Huge titles are Black with tight tracking. Single-line text gets an ellipsis.
+  - Icons: 16/20/24 px scale. No emoji. No borders where Spotify has none. Static skeletons for loading. Short STE messages for empty and error states.
+  - Login page: the Spotify login layout (gradient background, centered #121212 card, 48 px heading, labels above 48 px inputs, green pill button, "Remember password" toggle, saved servers as rows).
+  - Main layout: top bar (back/forward, home, search pill, settings, avatar), left "Your Library" panel (chips, Liked Songs first, collapsible), main panel, right panel (Now Playing view or Queue), player bar (72 px).
+  - Pages: Home (greeting tiles and shelves), album/playlist/liked (gradient header, action bar, track table, disc separators), artist (header, Popular, Discography, Fans also like, About), search (Browse all genre tiles, then Top result, Songs, Artists, Albums), lyrics (synced highlight, click to seek), library grids with sort pickers, folders, settings, and a context menu.
+- Resource budget applies to all effects: no timers, no continuous redraws.
+
+### Phase C: integration and release
+
+- Finish `crates/audio` (symphonia 0.6 + `opus-decoder` + cpal + rubato + stream-download): gapless, crossfade, seek, speed, volume, pause stops the stream. Use the shared tokio runtime of the app.
+- souvlaki for MPRIS, SMTC, and macOS Now Playing (libdbus on Linux; HWND on Windows). Optional Discord Rich Presence.
+- Measure RSS and idle CPU with wgpu and with `ICED_BACKEND=tiny-skia`. Count network requests for cold start, album open, and album reopen (reopen must make 0 requests in the stale time).
+- Check that `prek run --all-files`, clippy, and tests pass on all three platforms. Then tag a release.

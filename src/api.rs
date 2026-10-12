@@ -1,9 +1,11 @@
 use std::{
-    collections::HashMap,
-    fmt,
     hash::{BuildHasher, DefaultHasher, Hash, Hasher},
+    io::{Error as IoError, ErrorKind},
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{
+        Arc, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use anyhow::{Result, bail};
@@ -12,17 +14,6 @@ use reqwest::Method;
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tokio::fs;
-
-#[derive(Debug)]
-pub struct Unauthorized;
-
-impl fmt::Display for Unauthorized {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("The server session expired. Log in again.")
-    }
-}
-
-impl std::error::Error for Unauthorized {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Server {
@@ -34,14 +25,14 @@ pub struct Server {
     pub token: String,
     pub jwt: String,
     pub native: bool,
+    #[serde(default)]
+    pub ext: Vec<String>,
 }
 
-#[derive(Clone)]
 pub struct Session {
     pub server: Server,
     jwt: Arc<Mutex<String>>,
     http: reqwest::Client,
-    covers: Arc<Mutex<lru::LruCache<(String, u32), Bytes>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -124,12 +115,11 @@ pub struct Album {
     pub original_date: String,
     pub version: String,
     #[serde(rename = "artists")]
-    artists: Vec<Artist>,
-    participants: HashMap<String, Vec<Artist>>,
+    pub artists: Vec<Artist>,
+    #[serde(rename = "albumArtists")]
+    pub album_artists: Vec<Artist>,
     #[serde(flatten)]
-    rg: Rg,
-    #[serde(rename = "replayGain")]
-    rg2: Rg,
+    pub rg: Rg,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -176,14 +166,11 @@ pub struct Song {
     pub media_type: String,
     pub song_count: u32,
     #[serde(rename = "artists")]
-    artists: Vec<Artist>,
+    pub artists: Vec<Artist>,
     #[serde(rename = "albumArtists")]
-    album_artists: Vec<Artist>,
-    participants: HashMap<String, Vec<Artist>>,
+    pub album_artists: Vec<Artist>,
     #[serde(flatten)]
-    rg: Rg,
-    #[serde(rename = "replayGain")]
-    rg2: Rg,
+    pub rg: Rg,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -289,6 +276,58 @@ fn vlist<T: DeserializeOwned + Default>(v: &Value, key: &str) -> Vec<T> {
     serde_json::from_value(v[key].clone()).unwrap_or_default()
 }
 
+pub fn normalize(v: &mut Value) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(normalize),
+        Value::Object(m) => {
+            if let Some(Value::Object(p)) = m.remove("participants") {
+                for (src, dst) in [("artist", "artists"), ("albumartist", "albumArtists")] {
+                    if let Some(list) = p.get(src)
+                        && m.get(dst).and_then(Value::as_array).is_none_or(|a| a.is_empty())
+                    {
+                        m.insert(dst.to_string(), list.clone());
+                    }
+                }
+            }
+            if let Some(Value::Object(rg)) = m.remove("replayGain") {
+                for (src, dst) in [
+                    ("trackGain", "rgTrackGain"),
+                    ("albumGain", "rgAlbumGain"),
+                    ("trackPeak", "rgTrackPeak"),
+                    ("albumPeak", "rgAlbumPeak"),
+                ] {
+                    if let Some(g) = rg.get(src) {
+                        m.insert(dst.to_string(), g.clone());
+                    }
+                }
+            }
+            if let Some(id) = m.get("mediaFileId").and_then(Value::as_str).map(str::to_string) {
+                m.insert("id".to_string(), Value::String(id));
+            }
+            if m.get("coverArt").is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+                && m.get("hasCoverArt").and_then(Value::as_bool) != Some(false)
+                && let Some(id) = m.get("id").and_then(Value::as_str).map(str::to_string)
+            {
+                m.insert("coverArt".to_string(), Value::String(id));
+            }
+            for v in m.values_mut() {
+                normalize(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn parse<T: DeserializeOwned + Default>(mut v: Value) -> Result<T> {
+    normalize(&mut v);
+    if v.is_null() {
+        Ok(T::default())
+    } else {
+        serde_json::from_value(v)
+            .map_err(|e| anyhow::anyhow!("The server returned an unexpected response: {e}"))
+    }
+}
+
 fn net_err(e: &reqwest::Error) -> anyhow::Error {
     anyhow::anyhow!(
         "{}",
@@ -302,6 +341,18 @@ fn net_err(e: &reqwest::Error) -> anyhow::Error {
             "The request failed."
         }
     )
+}
+
+impl Clone for Session {
+    fn clone(&self) -> Self {
+        Self { server: self.server.clone(), jwt: self.jwt.clone(), http: self.http.clone() }
+    }
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session").field("server", &self.server.id).finish()
+    }
 }
 
 impl Session {
@@ -318,14 +369,7 @@ impl Session {
     }
 
     pub fn new(server: Server) -> Self {
-        Self {
-            jwt: Arc::new(Mutex::new(server.jwt.clone())),
-            server,
-            http: Self::client(),
-            covers: Arc::new(Mutex::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(256).expect("nonzero"),
-            ))),
-        }
+        Self { jwt: Arc::new(Mutex::new(server.jwt.clone())), server, http: Self::client() }
     }
 
     fn lock(&self) -> MutexGuard<'_, String> {
@@ -337,9 +381,8 @@ impl Session {
     }
 
     pub async fn login(url: &str, user: &str, pass: &str) -> Result<Session> {
-        let url = format!("https://{}", url.trim_end_matches('/'))
-            .replace("https://http://", "http://")
-            .replace("https://https://", "https://");
+        let url = url.trim().trim_end_matches('/');
+        let url = if url.contains("://") { url.to_string() } else { format!("https://{url}") };
         let salt = (0..2)
             .map(|_| {
                 format!(
@@ -364,8 +407,13 @@ impl Session {
             token: md5_hex(&format!("{pass}{salt}")),
             jwt: String::new(),
             native: false,
+            ext: Vec::new(),
         });
         let ping: Value = s.rest("ping", &[], "").await?;
+        s.server.ext = ping["openSubsonicExtensions"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|e| e["name"].as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
         if ping["type"].as_str() == Some("navidrome") {
             let res = s
                 .http
@@ -445,8 +493,7 @@ impl Session {
                 }
             );
         }
-        let data = pointer.split('/').filter(|k| !k.is_empty()).fold(sub, |v, k| &v[k]);
-        Ok(serde_json::from_value(data.clone()).unwrap_or_default())
+        parse(pointer.split('/').filter(|k| !k.is_empty()).fold(sub, |v, k| &v[k]).clone())
     }
 
     pub async fn nd<T: DeserializeOwned + Default>(
@@ -480,7 +527,11 @@ impl Session {
         }
         let status = res.status();
         if status.as_u16() == 401 {
-            return Err(Unauthorized.into());
+            return Err(IoError::new(
+                ErrorKind::PermissionDenied,
+                "The server session expired. Log in again.",
+            )
+            .into());
         }
         if !status.is_success() {
             bail!("The server returned HTTP {}.", status.as_u16());
@@ -491,7 +542,11 @@ impl Session {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok())
             .unwrap_or_default();
-        Ok((res.json().await.unwrap_or_default(), total))
+        let v: Value = res
+            .json()
+            .await
+            .map_err(|_| anyhow::anyhow!("The server returned an invalid response."))?;
+        Ok((parse(v)?, total))
     }
 
     pub fn url(&self, method: &str, params: &[(&str, String)]) -> String {
@@ -521,19 +576,13 @@ impl Session {
     }
 
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
-        let key = (id.to_string(), size);
-        if let Some(b) = self.covers.lock().expect("covers").get(&key) {
-            return Ok(b.clone());
-        }
         let file = dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("navify/covers")
             .join(&self.server.id)
             .join(format!("{id}-{size}"));
         if let Ok(b) = fs::read(&file).await {
-            let b = Bytes::from(b);
-            self.covers.lock().expect("covers").put(key, b.clone());
-            return Ok(b);
+            return Ok(Bytes::from(b));
         }
         let res = self
             .http
@@ -547,12 +596,16 @@ impl Session {
         let b = res.bytes().await.map_err(|e| net_err(&e))?;
         if let Some(dir) = file.parent() {
             let _ = fs::create_dir_all(dir).await;
-            let tmp = dir.join(format!("{}.tmp", std::process::id()));
+            static N: AtomicUsize = AtomicUsize::new(0);
+            let tmp = dir.join(format!(
+                "{id}-{size}.{}.{}.tmp",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
             if fs::write(&tmp, &b).await.is_ok() {
                 let _ = fs::rename(&tmp, &file).await;
             }
         }
-        self.covers.lock().expect("covers").put(key, b.clone());
         Ok(b)
     }
 
@@ -600,19 +653,14 @@ impl Session {
     pub async fn album(&self, id: &str) -> Result<(Album, Vec<Song>)> {
         if self.server.native {
             let id = id.to_string();
-            let (album, _) = self.nd::<Album>(Method::GET, &format!("album/{id}"), &[]).await?;
-            let (songs, _) = self
-                .nd::<Vec<Song>>(
-                    Method::GET,
-                    "song",
-                    &[
-                        ("album_id", id),
-                        ("_sort", "trackNumber".to_string()),
-                        ("_order", "ASC".to_string()),
-                    ],
-                )
-                .await?;
-            Ok((album, songs))
+            let path = format!("album/{id}");
+            let q =
+                [("album_id", id), ("_sort", "album".to_string()), ("_order", "ASC".to_string())];
+            let (album, songs) = tokio::try_join!(
+                self.nd::<Album>(Method::GET, &path, &[]),
+                self.nd::<Vec<Song>>(Method::GET, "song", &q),
+            )?;
+            Ok((album.0, songs.0))
         } else {
             let v: Value = self.rest("getAlbum", &[("id", id.to_string())], "/album").await?;
             Ok((serde_json::from_value(v.clone()).unwrap_or_default(), vlist(&v, "song")))
@@ -644,35 +692,45 @@ impl Session {
     }
 
     pub async fn artist(&self, id: &str) -> Result<(Artist, Vec<Album>, Vec<Song>, Info)> {
-        let (artist, albums) = if self.server.native {
-            let (a, _) = self.nd::<Artist>(Method::GET, &format!("artist/{id}"), &[]).await?;
-            let (albums, _) = self
-                .nd::<Vec<Album>>(Method::GET, "album", &[("role_albumartist_id", id.to_string())])
-                .await?;
-            (a, albums)
-        } else {
-            let v: Value = self.rest("getArtist", &[("id", id.to_string())], "/artist").await?;
-            (serde_json::from_value(v.clone()).unwrap_or_default(), vlist(&v, "album"))
+        let aa = async {
+            if self.server.native {
+                let p = format!("artist/{id}");
+                let q = [("role_albumartist_id", id.to_string())];
+                let (a, al) = tokio::try_join!(
+                    self.nd::<Artist>(Method::GET, &p, &[]),
+                    self.nd::<Vec<Album>>(Method::GET, "album", &q),
+                )?;
+                Ok((a.0, al.0))
+            } else {
+                let v: Value = self.rest("getArtist", &[("id", id.to_string())], "/artist").await?;
+                Ok((serde_json::from_value(v.clone())?, vlist(&v, "album")))
+            }
         };
-        let top: Vec<Song> = self
-            .rest(
-                "getTopSongs",
-                &[("artist", artist.name.clone()), ("count", "20".to_string())],
-                "/topSongs/song",
-            )
-            .await?;
-        let info: Info = self
-            .rest(
-                "getArtistInfo2",
-                &[
-                    ("id", id.to_string()),
-                    ("count", "20".to_string()),
-                    ("includeNotPresent", "true".to_string()),
-                ],
-                "/artistInfo2",
-            )
-            .await?;
-        Ok((artist, albums, top, info))
+        let ip = [
+            ("id", id.to_string()),
+            ("count", "20".to_string()),
+            ("includeNotPresent", "true".to_string()),
+        ];
+        let info = self.rest::<Info>("getArtistInfo2", &ip, "/artistInfo2");
+        if self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
+            let tp = [("id", id.to_string()), ("count", "20".to_string())];
+            let ((a, al), t, i) = tokio::try_join!(
+                aa,
+                self.rest::<Vec<Song>>("getTopSongs", &tp, "/topSongs/song"),
+                info,
+            )?;
+            Ok((a, al, t, i))
+        } else {
+            let ((a, al), i) = tokio::try_join!(aa, info)?;
+            let t = self
+                .rest::<Vec<Song>>(
+                    "getTopSongs",
+                    &[("artist", a.name.clone()), ("count", "20".to_string())],
+                    "/topSongs/song",
+                )
+                .await?;
+            Ok((a, al, t, i))
+        }
     }
 
     pub async fn playlists(&self) -> Result<Vec<Playlist>> {
@@ -692,15 +750,13 @@ impl Session {
 
     pub async fn playlist(&self, id: &str) -> Result<(Playlist, Vec<Song>)> {
         if self.server.native {
-            let (pl, _) = self.nd::<Playlist>(Method::GET, &format!("playlist/{id}"), &[]).await?;
-            let (mut tracks, _) =
-                self.nd::<Vec<Value>>(Method::GET, &format!("playlist/{id}/tracks"), &[]).await?;
-            for t in &mut tracks {
-                if let Some(id) = t["mediaFileId"].as_str() {
-                    t["id"] = Value::String(id.to_string());
-                }
-            }
-            Ok((pl, serde_json::from_value(Value::Array(tracks)).unwrap_or_default()))
+            let p = format!("playlist/{id}");
+            let tp = format!("{p}/tracks");
+            let (pl, tracks) = tokio::try_join!(
+                self.nd::<Playlist>(Method::GET, &p, &[]),
+                self.nd::<Vec<Song>>(Method::GET, &tp, &[]),
+            )?;
+            Ok((pl.0, tracks.0))
         } else {
             let v: Value = self.rest("getPlaylist", &[("id", id.to_string())], "/playlist").await?;
             Ok((serde_json::from_value(v.clone()).unwrap_or_default(), vlist(&v, "entry")))
@@ -895,59 +951,6 @@ impl Session {
     }
 }
 
-impl Album {
-    pub fn cover_id(&self) -> &str {
-        if self.cover.is_empty() { &self.id } else { &self.cover }
-    }
-
-    pub fn artists(&self) -> &[Artist] {
-        self.participants
-            .get("albumartist")
-            .filter(|v| !v.is_empty())
-            .map_or(&self.artists, Vec::as_slice)
-    }
-
-    pub fn gains(&self) -> Rg {
-        if self.rg == Rg::default() { self.rg2 } else { self.rg }
-    }
-}
-
-impl Song {
-    pub fn cover_id(&self) -> &str {
-        if self.cover.is_empty() { &self.id } else { &self.cover }
-    }
-
-    pub fn artists(&self) -> &[Artist] {
-        self.participants
-            .get("artist")
-            .filter(|v| !v.is_empty())
-            .map_or(&self.artists, Vec::as_slice)
-    }
-
-    pub fn album_artists(&self) -> &[Artist] {
-        self.participants
-            .get("albumartist")
-            .filter(|v| !v.is_empty())
-            .map_or(&self.album_artists, Vec::as_slice)
-    }
-
-    pub fn gains(&self) -> Rg {
-        if self.rg == Rg::default() { self.rg2 } else { self.rg }
-    }
-}
-
-impl Artist {
-    pub fn cover_id(&self) -> &str {
-        if self.cover.is_empty() { &self.id } else { &self.cover }
-    }
-}
-
-impl Playlist {
-    pub fn cover_id(&self) -> &str {
-        if self.cover.is_empty() { &self.id } else { &self.cover }
-    }
-}
-
 fn md5_hex(s: &str) -> String {
     use md5::Digest;
     md5::Md5::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
@@ -990,3 +993,40 @@ const SONG_SORTS: &[(&str, &str, &str)] = &[
     ("genre", "byGenre", "genre"),
     ("rating", "highest", "rating"),
 ];
+
+fn cache_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    if let Ok(d) = std::fs::read_dir(dir) {
+        for p in d.flatten().map(|e| e.path()) {
+            if p.is_dir() {
+                cache_files(&p, out)
+            } else if p.extension() != Some("tmp".as_ref()) {
+                out.push(p);
+            }
+        }
+    }
+}
+
+pub fn prune_covers() {
+    let dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join("navify/covers");
+    let mut files = Vec::new();
+    cache_files(&dir, &mut files);
+    let mut metas: Vec<(PathBuf, std::time::SystemTime, u64)> = files
+        .into_iter()
+        .filter_map(|p| {
+            std::fs::metadata(&p)
+                .ok()
+                .map(|m| (p, m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()))
+        })
+        .collect();
+    metas.sort_by_key(|(.., t, _)| *t);
+    let mut total: u64 = metas.iter().map(|(.., s)| s).sum();
+    const CAP: u64 = 300 * 1024 * 1024;
+    for (p, .., s) in metas {
+        if total <= CAP {
+            break;
+        }
+        if std::fs::remove_file(&p).is_ok() {
+            total = total.saturating_sub(s);
+        }
+    }
+}

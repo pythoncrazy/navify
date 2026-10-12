@@ -1,0 +1,21 @@
+[package]
+name = "navify-audio"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cpal = "0.18.2"
+opus-decoder = "0.1.1"
+rtrb = "0.4.0"
+rubato = "5.0.1"
+stream-download = { version = "0.24.4", default-features = false, features = ["reqwest-rustls"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "flac", "aac", "isomp4", "ogg", "vorbis", "wav", "pcm", "alac", "mkv", "opt-simd", "id3v2"] }
+tokio = { version = "1.53", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+dotenvy = "0.15.7"
+md-5 = "0.11.0"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "json"] }
+serde_json = "1.0.151"

@@ -1,4 +1,4 @@
-use navify::api::{Session, Song};
+use navify::api::{self, Session, Song};
 
 fn creds() -> Option<(String, String, String)> {
     let _ = dotenvy::dotenv();
@@ -103,7 +103,7 @@ fn album_detail_has_songs_with_gain() {
         assert_eq!(album.id, albums[0].id);
         assert!(!songs.is_empty());
         assert!(songs.windows(2).all(|w| w[0].track <= w[1].track));
-        assert!(songs.iter().any(|s| s.gains().track_gain.is_some()));
+        assert!(songs.iter().any(|s| s.rg.track_gain.is_some()));
         assert!(songs.iter().all(|s| !s.album_id.is_empty()));
     });
 }
@@ -167,7 +167,7 @@ fn cover_caches_on_disk() {
     rt().block_on(async {
         let s = live!();
         let (albums, _) = s.albums("name", &[], 0, 1).await.expect("albums");
-        let id = albums[0].cover_id().to_string();
+        let id = albums[0].cover.clone();
         let first = s.cover(&id, 128).await.expect("cover fetch");
         assert!(!first.is_empty());
         let start = std::time::Instant::now();
@@ -184,7 +184,7 @@ fn subsonic_fallback_lists_albums() {
         s.server.native = false;
         let (albums, _) = s.albums("name", &[], 0, 10).await.expect("subsonic albums");
         assert_eq!(albums.len(), 10);
-        assert!(albums.iter().all(|a| !a.name.is_empty() && !a.cover_id().is_empty()));
+        assert!(albums.iter().all(|a| !a.name.is_empty() && !a.cover.is_empty()));
         let songs = s.songs("starred", &[], 0, 10).await.expect("starred songs");
         assert!(songs.0.iter().all(|s| s.starred));
     });
@@ -242,8 +242,8 @@ fn song_deserializes_native_and_subsonic() {
         "albumArtists": [{"id": "aa1", "name": "AA"}],
         "replayGain": {"trackGain": -7.5, "albumGain": -8.0, "trackPeak": 1.1, "albumPeak": 1.2}
     });
-    let n: Song = serde_json::from_value(native).expect("native song");
-    let s: Song = serde_json::from_value(subsonic).expect("subsonic song");
+    let n: Song = api::parse(native).expect("native song");
+    let s: Song = api::parse(subsonic).expect("subsonic song");
     for song in [&n, &s] {
         assert_eq!(song.title, "T");
         assert_eq!(song.album_id, "al1");
@@ -252,16 +252,17 @@ fn song_deserializes_native_and_subsonic() {
         assert_eq!(song.user_rating, 4);
         assert!(song.explicit);
         assert_eq!(song.genres[0].name, "Rock");
-        assert_eq!(song.gains().track_gain, Some(-7.5));
-        assert_eq!(song.gains().album_peak, Some(1.2));
+        assert_eq!(song.rg.track_gain, Some(-7.5));
+        assert_eq!(song.rg.album_peak, Some(1.2));
     }
     assert_eq!(n.id, "n1");
-    assert_eq!(n.artists()[0].name, "Ar");
-    assert_eq!(n.album_artists()[0].name, "AA");
+    assert_eq!(n.artists[0].name, "Ar");
+    assert_eq!(n.album_artists[0].name, "AA");
     assert_eq!(s.id, "s1");
-    assert_eq!(s.cover_id(), "mf-s1_x");
-    assert_eq!(s.artists()[0].id, "ar1");
-    assert_eq!(s.album_artists()[0].name, "AA");
+    assert_eq!(s.cover, "mf-s1_x");
+    assert_eq!(s.artists[0].id, "ar1");
+    assert_eq!(s.album_artists[0].name, "AA");
+    assert_eq!(n.cover, "n1");
     assert!((s.duration - 123.0).abs() < f32::EPSILON);
 }
 
