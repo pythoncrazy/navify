@@ -50,6 +50,7 @@ enum Cmd {
     Play(Track, f32),
     Next(Option<Track>),
     Seek(f32),
+    Gain(f32),
     Stop,
 }
 
@@ -109,6 +110,10 @@ impl Player {
 
     pub fn stop(&self) {
         self.send(Cmd::Stop);
+    }
+
+    pub fn set_gain(&self, gain: f32) {
+        self.send(Cmd::Gain(gain));
     }
 
     pub fn set_volume(&self, v: f32) {
@@ -587,7 +592,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Ha
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             };
-            if !matches!(cmd, Cmd::Next(_)) {
+            if !matches!(cmd, Cmd::Next(_) | Cmd::Gain(_)) {
                 sh.flush.store(written, Relaxed);
                 marks.clear();
                 events.clear();
@@ -595,6 +600,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Ha
             match cmd {
                 Cmd::Play(t, at) => (mix.cur, mix.inc, play) = (None, None, Some((t, at))),
                 Cmd::Next(t) => (mix.next, mix.pre) = (t, None),
+                Cmd::Gain(g) => mix.cur.iter_mut().for_each(|c| c.track.gain = g),
                 Cmd::Seek(s) => {
                     if let Err(e) = mix.seek(s) {
                         (mix.cur, mix.inc) = (None, None);

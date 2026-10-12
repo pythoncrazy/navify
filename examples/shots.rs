@@ -37,15 +37,38 @@ fn main() {
             w.load_font(std::borrow::Cow::Borrowed(*f));
         }
     }
+    use iced_test::emulator::{Emulator, Event, Mode};
+    use navify::app::Message;
+    use std::time::{Duration, Instant};
     let secs: u64 =
         std::env::var("NAVIFY_SHOT_WAIT").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
-    let shot = iced_test::screenshot(
-        &app,
-        &Theme::Dark,
-        Size::new(1280.0, 800.0),
-        1.0,
-        std::time::Duration::from_secs(secs),
-    );
+    let steps = std::env::var("NAVIFY_STEPS").unwrap_or_default();
+    let mut steps = steps.split(';').map(str::trim).filter(|s| !s.is_empty());
+    let (tx, mut rx) = iced_test::futures::futures::channel::mpsc::channel(100);
+    let mut emu = Emulator::new(tx, &app, Mode::Immediate, Size::new(1280.0, 800.0));
+    let mut next = Instant::now() + Duration::from_secs(secs);
+    loop {
+        while let Ok(e) = rx.try_recv() {
+            if let Event::Action(a) = e {
+                emu.perform(&app, a);
+            }
+        }
+        if Instant::now() >= next {
+            let Some(s) = steps.next() else { break };
+            match s {
+                "tab" => emu.update(&app, Message::FocusMove(false)),
+                "shift-tab" => emu.update(&app, Message::FocusMove(true)),
+                "up" => emu.update(&app, Message::Arrow(true)),
+                "down" => emu.update(&app, Message::Arrow(false)),
+                "enter" => emu.update(&app, Message::Enter),
+                "escape" => emu.update(&app, Message::MenuClose),
+                _ => emu.run(&app, iced_test::Instruction::parse(s).expect("step")),
+            }
+            next = Instant::now() + Duration::from_millis(700);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let shot = emu.screenshot(&app, &Theme::Dark, 1.0);
     let name = std::env::var("NAVIFY_SHOT")
         .unwrap_or_else(|_| "shot".into())
         .replace([':', '/', '|'], "_");

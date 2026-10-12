@@ -409,6 +409,17 @@ pub fn pick(_: &Theme, s: pick_list::Status) -> pick_list::Style {
     }
 }
 
+pub fn pick_flat(_: &Theme, s: pick_list::Status) -> pick_list::Style {
+    let hot = !matches!(s, pick_list::Status::Active);
+    pick_list::Style {
+        text_color: if hot { TEXT } else { SUB },
+        placeholder_color: SUB,
+        handle_color: if hot { TEXT } else { SUB },
+        background: Color::TRANSPARENT.into(),
+        border: Border::default(),
+    }
+}
+
 pub fn pick_menu(_: &Theme) -> menu::Style {
     menu::Style {
         background: MENU.into(),
@@ -421,14 +432,15 @@ pub fn pick_menu(_: &Theme) -> menu::Style {
 }
 
 pub fn scroll(_: &Theme, s: scrollable::Status) -> scrollable::Style {
-    let hot = !matches!(s, scrollable::Status::Active { .. });
+    let a = match s {
+        scrollable::Status::Active { .. } => 0.0,
+        scrollable::Status::Hovered { is_vertical_scrollbar_hovered: false, .. } => 0.3,
+        _ => 0.5,
+    };
     let rail = scrollable::Rail {
         background: None,
         border: Border::default(),
-        scroller: scrollable::Scroller {
-            background: tint(if hot { 0.3 } else { 0.15 }).into(),
-            border: Border::default(),
-        },
+        scroller: scrollable::Scroller { background: tint(a).into(), border: Border::default() },
     };
     scrollable::Style {
         container: container::Style::default(),

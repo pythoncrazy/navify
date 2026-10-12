@@ -70,7 +70,7 @@ pub enum Set {
     Rg(String),
     Preamp(f32),
     Xfade(f32),
-    Trans(u8),
+    Trans(String),
     Bitrate(u32),
     Qsync(bool),
     Speed(f32),
@@ -147,6 +147,9 @@ pub enum Message {
     Retry,
     Popular,
     FocusSearch,
+    FocusMove(bool),
+    Arrow(bool),
+    Enter,
     VolUp,
     VolDown,
     Resize(f32, f32),
@@ -223,6 +226,7 @@ pub struct App {
     pub shuffle: Option<Vec<usize>>,
     pub repeat: u8,
     pub source: String,
+    pub ctx: String,
     pub playing: bool,
     pub position: f32,
     pub scrobbled: bool,
@@ -313,7 +317,7 @@ impl App {
                 app.route = String::new();
                 Task::batch([app.nav(r), app.restore()])
             } else {
-                Task::none()
+                app.show()
             },
         ]);
         (app, t)
@@ -347,6 +351,14 @@ impl App {
                 "toast" => {
                     self.toast = Some((u64::MAX, "Added to queue".into()));
                 }
+                "modal0" | "modal1" | "modal2" => {
+                    let k = s.as_bytes()[5] - b'0';
+                    let id = self
+                        .data::<Lib>("lib")
+                        .and_then(|l| l.playlists.first())
+                        .map_or(String::new(), |p| p.id.clone());
+                    task = self.update(Message::Modal(if k == 0 { String::new() } else { id }, k));
+                }
                 "lyrics" => {
                     if let Some(sg) = self.any_songs().into_iter().next() {
                         self.queue = vec![sg];
@@ -366,6 +378,10 @@ impl App {
 
     pub fn is_starred(&self, id: &str, server: bool) -> bool {
         self.starred.get(id).copied().unwrap_or(server)
+    }
+
+    pub fn scroll(&self) -> (f32, f32) {
+        self.scrolls.get(&self.route).copied().unwrap_or((0.0, self.cfg.settings.window.1 - 136.0))
     }
 
     pub fn lib_w(&self) -> f32 {
@@ -515,6 +531,7 @@ impl App {
             index: 0,
             shuffle: None,
             source: String::new(),
+            ctx: String::new(),
             playing: false,
             position: 0.0,
             scrobbled: false,
@@ -561,19 +578,18 @@ impl App {
         if self.cache.get(key).is_some_and(|(t, v)| t.elapsed() < STALE && !v.is::<String>()) {
             return Task::none();
         }
+        let Some(s) = self.session.clone() else { return Task::none() };
         if !self.pending.insert(key.to_string()) {
             return Task::none();
         }
-        let Some(s) = self.session.clone() else { return Task::none() };
         fetch(s, key.to_string(), 0)
     }
 
     fn request_page(&mut self, key: &str, offset: usize) -> Task<Message> {
-        let pkey = format!("{key}#{offset}");
-        if !self.pending.insert(pkey) {
+        let Some(s) = self.session.clone() else { return Task::none() };
+        if !self.pending.insert(format!("{key}#{offset}")) {
             return Task::none();
         }
-        let Some(s) = self.session.clone() else { return Task::none() };
         fetch(s, key.to_string(), offset)
     }
 
@@ -912,6 +928,10 @@ impl App {
             crate::view::SCROLL,
             iced::widget::operation::AbsoluteOffset::<Option<f32>> { x: None, y: Some(target) },
         ));
+        if route == "login" {
+            let n = [&self.login.url, &self.login.user].iter().position(|v| v.is_empty());
+            tasks.push(iced::widget::operation::focus(format!("login{}", n.unwrap_or(2))));
+        }
         Task::batch(tasks)
     }
 
@@ -1027,6 +1047,7 @@ impl App {
             Message::Play(songs, i, source) => {
                 self.queue = songs;
                 self.source = source;
+                self.ctx.clear();
                 self.shuffle = self.shuffle.as_ref().map(|_| {
                     let mut o: Vec<usize> = (0..self.queue.len()).collect();
                     shuffle(&mut o, i);
@@ -1202,6 +1223,9 @@ impl App {
                 Task::none()
             }
             Message::MenuClose => {
+                if self.menu.is_none() && self.modal.is_none() {
+                    self.sel = None;
+                }
                 self.menu = None;
                 self.modal = None;
                 Task::none()
@@ -1228,11 +1252,14 @@ impl App {
                     self.toast(&format!("Added to {name}.")),
                 ])
             }
+            Message::PlNew(name) if name.trim().is_empty() => Task::none(),
+            Message::Edit(_, name, _) if name.trim().is_empty() => Task::none(),
             Message::PlNew(name) => {
                 self.menu = None;
                 self.modal = None;
                 let ids = std::mem::take(&mut self.new_pl_ids);
                 let Some(s) = self.session.clone() else { return Task::none() };
+                let name = name.trim().to_string();
                 Task::perform(async move { s.playlist_create(&name, &ids).await }, |r| match r {
                     Ok(p) => Message::PlCreated(p),
                     Err(e) => Message::Toast(0, format!("Could not make the playlist. {e}")),
@@ -1331,8 +1358,15 @@ impl App {
                 Task::none()
             }
             Message::LSubmit => {
-                if self.login.busy || self.login.url.is_empty() || self.login.user.is_empty() {
+                if self.login.busy {
                     return Task::none();
+                }
+                if let Some(n) =
+                    [&self.login.url, &self.login.user].iter().position(|v| v.trim().is_empty())
+                {
+                    self.login.error =
+                        ["Enter the server address.", "Enter the username."][n].into();
+                    return iced::widget::operation::focus(format!("login{n}"));
                 }
                 self.login.busy = true;
                 self.login.error.clear();
@@ -1430,15 +1464,12 @@ impl App {
                 match set {
                     Set::Rg(v) => self.cfg.settings.replaygain = v,
                     Set::Preamp(v) => self.cfg.settings.preamp_db = v,
+                    Set::Trans(v) => self.cfg.settings.transcode_format = v,
                     Set::Xfade(v) => {
                         self.cfg.settings.crossfade_secs = v;
                         if let Some(p) = &self.player {
                             p.set_crossfade(v);
                         }
-                    }
-                    Set::Trans(v) => {
-                        self.cfg.settings.transcode_format =
-                            ["original", "mp3", "opus", "aac"][v as usize].into()
                     }
                     Set::Bitrate(v) => self.cfg.settings.transcode_max_bitrate = v,
                     Set::Qsync(b) => self.cfg.settings.queue_sync = b,
@@ -1448,6 +1479,10 @@ impl App {
                             p.set_speed(v);
                         }
                     }
+                }
+                if let (Some(p), Some(s)) = (&self.player, self.current_song()) {
+                    p.set_gain(self.gain(s));
+                    self.queue_next_refresh();
                 }
                 self.persist()
             }
@@ -1514,6 +1549,7 @@ impl App {
                 )
             }
             Message::PlayCtx(route, shuf) => {
+                self.ctx = route.clone();
                 if let Some((v, src)) = self.songs_of(&route).filter(|(v, _)| !v.is_empty()) {
                     return self.update(Message::PlayCtxDone(v, src, shuf));
                 }
@@ -1538,6 +1574,12 @@ impl App {
                             "liked" => (
                                 s.songs("starred", &[], 0, PAGE * 5).await?.0,
                                 "Liked Songs".into(),
+                            ),
+                            "songs" => (
+                                s.songs(if id.is_empty() { "name" } else { &id }, &[], 0, PAGE * 5)
+                                    .await?
+                                    .0,
+                                "Songs".into(),
                             ),
                             _ => (Vec::new(), String::new()),
                         };
@@ -1589,7 +1631,9 @@ impl App {
                 Some((list, src)) => {
                     let n = n - list[..n.min(list.len())].iter().filter(|s| s.is_dir).count();
                     let list = list.into_iter().filter(|s| !s.is_dir).collect();
-                    self.update(Message::Play(list, n, src))
+                    let t = self.update(Message::Play(list, n, src));
+                    self.ctx = key;
+                    t
                 }
                 None => self.update(Message::PlayCtx(key, false)),
             },
@@ -1602,10 +1646,73 @@ impl App {
                 self.request(&key)
             }
             Message::FocusSearch => iced::widget::operation::focus("search"),
+            Message::FocusMove(back) => {
+                layer_focus(self.modal.is_some() || self.menu.is_some(), move |cur, n| match cur {
+                    Some(i) => (i + if back { n - 1 } else { 1 }) % n,
+                    None if back => n - 1,
+                    None => 0,
+                })
+            }
+            Message::Arrow(up) if self.menu.is_some() => self.update(Message::FocusMove(up)),
+            Message::Arrow(up) => {
+                let Some((key, n)) = self
+                    .sel
+                    .as_ref()
+                    .and_then(|s| s.rsplit_once('#'))
+                    .and_then(|(k, n)| Some((k.to_string(), n.parse::<usize>().ok()?)))
+                else {
+                    return Task::none();
+                };
+                let Some((list, _)) = self.songs_of(&key) else { return Task::none() };
+                let n = if up {
+                    n.saturating_sub(1)
+                } else {
+                    (n + 1).min(list.len().saturating_sub(1))
+                };
+                self.sel = Some(format!("{key}#{n}"));
+                let (kind, _) = key.split_once(':').unwrap_or((&key, ""));
+                if key != self.route || !matches!(kind, "album" | "playlist" | "liked" | "songs") {
+                    return Task::none();
+                }
+                let discs = if kind == "album" && list.iter().any(|s| s.disc != list[0].disc) {
+                    1 + list[..=n].windows(2).filter(|w| w[0].disc != w[1].disc).count()
+                } else {
+                    0
+                };
+                let top = crate::pages::art_px(self)
+                    + 2.0 * crate::pages::PAD
+                    + crate::pages::BAR
+                    + crate::pages::HEAD
+                    + (n + discs) as f32 * crate::pages::ROW;
+                let (off, view) = self.scroll();
+                let to = if top < off + 100.0 {
+                    top - 100.0
+                } else if top + crate::pages::ROW > off + view {
+                    top + crate::pages::ROW - view
+                } else {
+                    return Task::none();
+                };
+                self.scrolls.insert(key, (to.max(0.0), view));
+                iced::widget::operation::scroll_to(
+                    crate::view::SCROLL,
+                    iced::widget::operation::AbsoluteOffset::<Option<f32>> {
+                        x: None,
+                        y: Some(to.max(0.0)),
+                    },
+                )
+            }
+            Message::Enter => match self.sel.as_ref().and_then(|s| s.rsplit_once('#')) {
+                Some((k, n)) if self.menu.is_none() && self.modal.is_none() => {
+                    let (k, n) = (k.to_string(), n.parse().unwrap_or(0));
+                    self.update(Message::PlayAt(k, n))
+                }
+                _ => Task::none(),
+            },
             Message::VolUp => self.update(Message::Vol((self.volume + 0.1).min(1.0))),
             Message::VolDown => self.update(Message::Vol((self.volume - 0.1).max(0.0))),
             Message::Resize(w, h) => {
                 self.cfg.settings.window = (w, h);
+                self.scrolls.values_mut().for_each(|s| s.1 = h - 136.0);
                 let ids = self.visible_covers();
                 self.want_covers(ids)
             }
@@ -1632,15 +1739,23 @@ impl App {
                     Some(MenuKind::Song(s) | MenuKind::SongIn(s, _)) => vec![s.id],
                     _ => Vec::new(),
                 };
-                let p =
-                    self.data::<Lib>("lib").and_then(|l| l.playlists.iter().find(|p| p.id == id));
-                (self.new_pl, self.new_pl_desc) =
-                    p.map_or_else(Default::default, |p| (p.name.clone(), p.comment.clone()));
+                let lib = self.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
+                let (name, desc, cover) = lib.iter().find(|p| p.id == id).map_or_else(
+                    || (format!("My Playlist #{}", lib.len() + 1), String::new(), String::new()),
+                    |p| (p.name.clone(), p.comment.clone(), p.cover.clone()),
+                );
+                (self.new_pl, self.new_pl_desc) = (name, desc);
+                let art = self.want_covers([(cover, 300)]);
                 self.modal = Some((id, kind));
-                Task::none()
+                Task::batch([
+                    art,
+                    layer_focus(true, |_, n| n.min(2) - 1)
+                        .chain(iced::widget::operation::select_all(iced::widget::Id::new("layer"))),
+                ])
             }
             Message::Edit(id, name, comment) => {
                 self.modal = None;
+                let (name, comment) = (name.trim().to_string(), comment.trim().to_string());
                 let set = |p: &mut Playlist| (p.name, p.comment) = (name.clone(), comment.clone());
                 self.edit::<Lib>("lib", |l| {
                     l.playlists.iter_mut().filter(|p| p.id == id).for_each(set)
@@ -1791,7 +1906,7 @@ impl App {
     }
 
     fn visible_covers<'a>(&'a self) -> Vec<(String, u32)> {
-        let (off, view) = self.scrolls.get(&self.route).copied().unwrap_or((0.0, 800.0));
+        let (off, view) = self.scroll();
         let (cols, cw) = self.grid();
         let span = |n: usize, h: f32, per: usize| {
             let lo = (off / h).max(0.0) as usize;
@@ -1866,6 +1981,46 @@ impl App {
     }
 }
 
+fn layer_focus(
+    layer: bool,
+    pick: impl Fn(Option<usize>, usize) -> usize + Send + 'static,
+) -> Task<Message> {
+    use iced::advanced::widget::operation::{Focusable, Outcome};
+    use iced::advanced::widget::{Id, Operation};
+    struct Scan<F>(bool, F, usize, Option<usize>);
+    struct Nth(bool, usize, usize);
+    impl<F: Fn(Option<usize>, usize) -> usize + Send> Operation<Message> for Scan<F> {
+        fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation<Message>)) {
+            f(self);
+        }
+        fn focusable(&mut self, id: Option<&Id>, _: iced::Rectangle, s: &mut dyn Focusable) {
+            if !self.0 || id == Some(&Id::from("layer")) {
+                self.3 = if s.is_focused() { Some(self.2) } else { self.3 };
+                self.2 += 1;
+            }
+        }
+        fn finish(&self) -> Outcome<Message> {
+            match self.2 {
+                0 => Outcome::None,
+                n => Outcome::Chain(Box::new(Nth(self.0, (self.1)(self.3, n), 0))),
+            }
+        }
+    }
+    impl Operation<Message> for Nth {
+        fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation<Message>)) {
+            f(self);
+        }
+        fn focusable(&mut self, id: Option<&Id>, _: iced::Rectangle, s: &mut dyn Focusable) {
+            let hit = (!self.0 || id == Some(&Id::from("layer"))) && {
+                self.2 += 1;
+                self.2 - 1 == self.1
+            };
+            if hit { s.focus() } else { s.unfocus() }
+        }
+    }
+    iced::advanced::widget::operate(Scan(layer, pick, 0, None))
+}
+
 fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
     v.downcast_ref::<(Album, Vec<Song>)>()
         .map(|(a, s)| (&s[..], a.name.as_str()))
@@ -1937,6 +2092,10 @@ impl App {
             iced::Event::Window(iced::window::Event::Resized(s)) => {
                 Some(Message::Resize(s.width, s.height))
             }
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                ..
+            }) => Some(Message::MenuClose),
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. })
                 if status == iced::event::Status::Ignored =>
             {
@@ -1957,10 +2116,13 @@ impl App {
                     }
                 } else {
                     match key {
+                        Key::Named(Named::Tab) => Some(Message::FocusMove(modifiers.shift())),
                         Key::Named(Named::Space) => Some(Message::Toggle),
                         Key::Named(Named::ArrowLeft) if modifiers.alt() => Some(Message::Back),
                         Key::Named(Named::ArrowRight) if modifiers.alt() => Some(Message::Fwd),
-                        Key::Named(Named::Escape) => Some(Message::MenuClose),
+                        Key::Named(Named::ArrowUp) => Some(Message::Arrow(true)),
+                        Key::Named(Named::ArrowDown) => Some(Message::Arrow(false)),
+                        Key::Named(Named::Enter) => Some(Message::Enter),
                         _ => None,
                     }
                 }

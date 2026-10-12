@@ -8,7 +8,10 @@ use iced::{Alignment, Color, Element, Fill, color};
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Song};
 use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, Set};
 use crate::theme::{self, icon, icon as i};
-use crate::view::{artists_line, btn, cover, fmt_dur, fmt_long, icon_btn, liked_art};
+use crate::view::{
+    SONGS_BG, artists_line, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, icon_btn, liked_art,
+    pin_art,
+};
 
 type El<'a> = Element<'a, Message>;
 type Cols = (f32, f32, f32);
@@ -16,8 +19,8 @@ type Cols = (f32, f32, f32);
 pub const PAD: f32 = 24.0;
 pub const ROW: f32 = 56.0;
 pub const GRID_Y: f32 = 136.0;
-const BAR: f32 = 104.0;
-const HEAD: f32 = 45.0;
+pub const BAR: f32 = 104.0;
+pub const HEAD: f32 = 45.0;
 const GREY: Color = color!(0x535353);
 
 pub fn head_color(app: &App, id: &str) -> Color {
@@ -195,7 +198,7 @@ fn vlist<'a>(app: &'a App, songs: &'a [Song], key: &'a str, c: Cols, y0: f32) ->
                 .chain([Ok(n)])
         })
         .collect();
-    let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 800.0));
+    let (off, view) = app.scroll();
     let lo = (((off - y0) / ROW).max(0.0) as usize).saturating_sub(6).min(rows.len());
     let hi = (lo + (view / ROW) as usize + 13).min(rows.len());
     container(
@@ -289,7 +292,7 @@ fn grid<'a>(
     f: impl Fn(usize) -> El<'a>,
 ) -> El<'a> {
     let rows = n.div_ceil(cols);
-    let (off, view) = app.scrolls.get(&app.route).copied().unwrap_or((0.0, 800.0));
+    let (off, view) = app.scroll();
     let lo = (((off - y0) / row_h).max(0.0) as usize).saturating_sub(1).min(rows);
     let hi = (lo + (view / row_h) as usize + 3).min(rows);
     container(
@@ -376,12 +379,11 @@ pub fn route<'a>(app: &'a App) -> El<'a> {
     }
     match kind {
         "home" => home(app),
-        "album" | "playlist" | "liked" => detail(app),
+        "album" | "playlist" | "liked" | "songs" => detail(app),
         "artist" => artist(app),
         "search" | "genres" => search(app, arg),
         "albums" | "genre" => albums(app, kind, arg),
         "artists" => artists(app),
-        "songs" => songs(app),
         "folders" | "folder" => folders(app),
         "lyrics" => lyrics(app),
         "settings" => settings(app),
@@ -613,19 +615,52 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             cols: cols(app, true, true),
         });
     }
-    let p = app.data::<Pager<Song>>("liked").filter(|_| key == "liked")?;
-    let user = app.session.as_ref().map_or(String::new(), |s| s.server.user.clone());
+    let liked = key == "liked";
+    let p =
+        app.data::<Pager<Song>>(key).filter(|_| liked || key.split(':').next() == Some("songs"))?;
+    let (user, native) = app
+        .session
+        .as_ref()
+        .map_or((String::new(), false), |s| (s.server.user.clone(), s.server.native));
+    let count =
+        (liked || native).then(|| format!(" \u{2022} {} songs", fmt_n(p.total.max(p.items.len()))));
+    const SORTS: [(&str, &str); 8] = [
+        ("name", "Title"),
+        ("artist", "Artist"),
+        ("album", "Album"),
+        ("newest", "Recently added"),
+        ("recent", "Recently played"),
+        ("frequent", "Most played"),
+        ("year", "Year"),
+        ("rating", "Rating"),
+    ];
+    let cur = key.strip_prefix("songs:").unwrap_or("name");
+    let sort = (!liked && native).then(|| -> El<'a> {
+        pick_list(
+            SORTS.map(|(_, l)| l),
+            SORTS.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l),
+            |l| {
+                Message::Nav(format!(
+                    "songs:{}",
+                    SORTS.iter().find(|(_, x)| *x == l).map_or("name", |(k, _)| *k)
+                ))
+            },
+        )
+        .text_size(14)
+        .font(theme::fw(Weight::Normal))
+        .padding([8, 12])
+        .style(theme::pick_flat)
+        .menu_style(theme::pick_menu)
+        .into()
+    });
     Some(Detail {
-        art: liked_art(px),
-        kind: "Playlist",
-        title: "Liked Songs",
-        meta: meta_line(
-            theme::bold(user, 14.0).into(),
-            format!(" \u{2022} {} songs", p.total.max(p.items.len())),
-        ),
-        color: color!(0x5038a0),
+        art: if liked { liked_art(px) } else { pin_art(px, icon::MUSIC, SONGS_BG, theme::ACCENT) },
+        kind: if liked { "Playlist" } else { "Library" },
+        title: if liked { "Liked Songs" } else { "Songs" },
+        meta: meta_line(theme::bold(user, 14.0).into(), count.unwrap_or_default()),
+        color: if liked { color!(0x5038a0) } else { color!(0x1e6b52) },
         songs: &p.items,
-        extra: Vec::new(),
+        extra: sort.into_iter().flat_map(|s| [Space::new().width(Fill).into(), s]).collect(),
         cols: cols(app, true, true),
     })
 }
@@ -1033,16 +1068,6 @@ fn artists<'a>(app: &'a App) -> El<'a> {
         .into()
 }
 
-fn songs<'a>(app: &'a App) -> El<'a> {
-    let c = cols(app, true, false);
-    column![container(theme::bold("Songs", 32.0)).padding(PAD), table_head(c),]
-        .push(
-            app.data::<Pager<Song>>(&app.route)
-                .map(|p| vlist(app, &p.items, &app.route, c, 90.0 + HEAD)),
-        )
-        .into()
-}
-
 fn folders<'a>(app: &'a App) -> El<'a> {
     let dir = |id: &str, name: &str| -> El<'a> {
         button(
@@ -1141,15 +1166,22 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             .height(48)
             .into()
     };
-    let pick = |opts: &[&str], cur: String, f: fn(String) -> Message| -> El<'a> {
-        pick_list(opts.iter().map(|s| s.to_string()).collect::<Vec<_>>(), Some(cur), f)
-            .text_size(14)
-            .font(theme::fw(Weight::Normal))
-            .padding([8, 12])
-            .width(200)
-            .style(theme::pick)
-            .menu_style(theme::pick_menu)
-            .into()
+    let pick = |opts: &'static [(&'static str, &'static str)],
+                cur: &str,
+                f: fn(&'static str) -> Message|
+     -> El<'a> {
+        pick_list(
+            opts.iter().map(|o| o.1).collect::<Vec<_>>(),
+            opts.iter().find(|o| o.0 == cur).map(|o| o.1),
+            move |l| f(opts.iter().find(|o| o.1 == l).map_or(opts[0].0, |o| o.0)),
+        )
+        .text_size(14)
+        .font(theme::fw(Weight::Normal))
+        .padding([8, 12])
+        .width(200)
+        .style(theme::pick)
+        .menu_style(theme::pick_menu)
+        .into()
     };
     let num = |v: f32,
                r: std::ops::RangeInclusive<f32>,
@@ -1166,11 +1198,6 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     };
     let tog = |v: bool, f: fn(bool) -> Message| -> El<'a> {
         toggler(v).on_toggle(f).style(theme::tog).size(20).into()
-    };
-    let bitrate = if st.transcode_max_bitrate == 0 {
-        "unlimited".to_string()
-    } else {
-        st.transcode_max_bitrate.to_string()
     };
     let servers = app.cfg.servers.iter().map(|s| -> El<'a> {
         row![
@@ -1197,9 +1224,11 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             section("Playback"),
             line(
                 "ReplayGain",
-                pick(&["off", "track", "album"], st.replaygain.clone(), |o| Message::Set(Set::Rg(
-                    o
-                )))
+                pick(
+                    &[("off", "Off"), ("track", "Track"), ("album", "Album")],
+                    &st.replaygain,
+                    |v| { Message::Set(Set::Rg(v.into())) }
+                )
             ),
             line(
                 "Preamp",
@@ -1232,27 +1261,25 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             line(
                 "Transcode format",
                 pick(
-                    &["original", "mp3", "opus", "aac"],
-                    if st.transcode_format.is_empty() {
-                        "original".into()
-                    } else {
-                        st.transcode_format.clone()
-                    },
-                    |o| {
-                        Message::Set(Set::Trans(
-                            ["original", "mp3", "opus", "aac"]
-                                .iter()
-                                .position(|x| *x == o)
-                                .unwrap_or(0) as u8,
-                        ))
-                    }
+                    &[("original", "Original"), ("mp3", "MP3"), ("opus", "Opus"), ("aac", "AAC")],
+                    if st.transcode_format.is_empty() { "original" } else { &st.transcode_format },
+                    |v| Message::Set(Set::Trans(v.into()))
                 )
             ),
             line(
-                "Maximum bitrate (kbps)",
-                pick(&["unlimited", "320", "256", "192", "128", "96"], bitrate, |o| Message::Set(
-                    Set::Bitrate(o.parse().unwrap_or(0))
-                ))
+                "Maximum bitrate",
+                pick(
+                    &[
+                        ("0", "No limit"),
+                        ("320", "320 kbps"),
+                        ("256", "256 kbps"),
+                        ("192", "192 kbps"),
+                        ("128", "128 kbps"),
+                        ("96", "96 kbps"),
+                    ],
+                    &st.transcode_max_bitrate.to_string(),
+                    |v| Message::Set(Set::Bitrate(v.parse().unwrap_or(0)))
+                )
             ),
             section("Library"),
             line(
@@ -1448,35 +1475,40 @@ pub fn queue_panel<'a>(app: &'a App) -> El<'a> {
 
 pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     const W: f32 = 260.0;
+    let entry = |r: El<'a>, msg: Message| -> El<'a> {
+        focusable(
+            button(r)
+                .padding([0, 12])
+                .height(40)
+                .width(Fill)
+                .style(theme::menu_item)
+                .on_press(msg.clone()),
+            Some(msg),
+            2.0,
+            Some("layer"),
+        )
+    };
     let item = |ic: char, label: String, msg: Message| -> El<'a> {
-        button(
+        entry(
             row![i(ic, 16.0).color(theme::SUB), theme::ell(&label, W - 64.0, 14.0, Weight::Normal)]
                 .spacing(12)
-                .align_y(Alignment::Center),
+                .align_y(Alignment::Center)
+                .into(),
+            msg,
         )
-        .padding([0, 12])
-        .height(40)
-        .width(Fill)
-        .style(theme::menu_item)
-        .on_press(msg)
-        .into()
     };
     let more = |ic: char, label: &str, sub: u8| -> El<'a> {
-        button(
+        entry(
             row![
                 i(ic, 16.0).color(theme::SUB),
                 theme::txt(label, 14.0, Weight::Normal).width(Fill),
                 i(icon::RIGHT, 16.0)
             ]
             .spacing(12)
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Center)
+            .into(),
+            Message::MenuSub(sub),
         )
-        .padding([0, 12])
-        .height(40)
-        .width(Fill)
-        .style(theme::menu_item)
-        .on_press(Message::MenuSub(sub))
-        .into()
     };
     let star = |id: &str, on: bool, yes: &str, no: &str| {
         let on = app.is_starred(id, on);
@@ -1573,13 +1605,18 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 2 => {
             let cur = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
             let stars = Row::with_children((1..=5u8).map(|n| {
-                button(i(icon::STAR, 20.0).center())
-                    .width(36)
-                    .height(36)
-                    .padding(0)
-                    .style(theme::link(if n <= cur { theme::ACCENT } else { theme::SUB }))
-                    .on_press(Message::Rate(s.id.clone(), if n == cur { 0 } else { n }))
-                    .into()
+                let m = Message::Rate(s.id.clone(), if n == cur { 0 } else { n });
+                focusable(
+                    button(i(icon::STAR, 20.0).center())
+                        .width(36)
+                        .height(36)
+                        .padding(0)
+                        .style(theme::link(if n <= cur { theme::ACCENT } else { theme::SUB }))
+                        .on_press(m.clone()),
+                    Some(m),
+                    18.0,
+                    Some("layer"),
+                )
             }));
             return (container(stars).padding(6).style(theme::menu).into(), 192.0, 48.0);
         }
@@ -1667,6 +1704,7 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
         column![
             theme::bold(label, 14.0),
             text_input("", v)
+                .id(format!("login{n}"))
                 .on_input(move |s| Message::LField(n, s))
                 .on_submit(Message::LSubmit)
                 .secure(secure)
@@ -1681,7 +1719,7 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
     };
     let saved = app.cfg.servers.iter().map(|s| -> El<'a> {
         let initial = s.user.chars().next().unwrap_or('?').to_ascii_uppercase();
-        button(
+        let row = button(
             row![
                 container(theme::bold(initial, 16.0).color(theme::BG).center())
                     .center(40)
@@ -1692,7 +1730,12 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
                 ]
                 .spacing(2)
                 .width(Fill),
-                icon_btn(icon::X, 14.0, Message::DropServer(s.id.clone())),
+                focusable(
+                    icon_btn(icon::X, 14.0, Message::DropServer(s.id.clone())),
+                    Some(Message::DropServer(s.id.clone())),
+                    14.0,
+                    None,
+                ),
             ]
             .spacing(12)
             .align_y(Alignment::Center),
@@ -1700,8 +1743,8 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
         .padding(8)
         .width(Fill)
         .style(theme::track(false))
-        .on_press(Message::UseServer(s.id.clone()))
-        .into()
+        .on_press(Message::UseServer(s.id.clone()));
+        focusable(row, Some(Message::UseServer(s.id.clone())), 4.0, None)
     });
     let form = column![
         container(i(icon::MUSIC, 36.0).color(theme::TEXT)).padding(8),
@@ -1727,22 +1770,38 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
             field("Server address", &l.url, 0, false),
             field("Username", &l.user, 1, false),
             field("Password", &l.pass, 2, true),
-            row![
-                toggler(l.remember).on_toggle(Message::LRemember).style(theme::tog).size(20),
-                theme::txt("Remember password", 14.0, Weight::Normal),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-            button(
-                theme::bold(if l.busy { "Logging in" } else { "Log In" }, 16.0)
-                    .color(theme::BG)
-                    .center()
-                    .width(Fill)
-            )
-            .style(theme::accent)
-            .width(Fill)
-            .padding(14)
-            .on_press_maybe((!l.busy).then_some(Message::LSubmit)),
+            focusable(
+                btn(
+                    row![
+                        toggler(l.remember)
+                            .on_toggle(Message::LRemember)
+                            .style(theme::tog)
+                            .size(20),
+                        theme::txt("Remember password", 14.0, Weight::Normal),
+                    ]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+                    Message::LRemember(!l.remember),
+                ),
+                Some(Message::LRemember(!l.remember)),
+                4.0,
+                None,
+            ),
+            focusable(
+                button(
+                    theme::bold(if l.busy { "Logging in" } else { "Log In" }, 16.0)
+                        .color(theme::BG)
+                        .center()
+                        .width(Fill)
+                )
+                .style(theme::accent)
+                .width(Fill)
+                .padding(14)
+                .on_press_maybe((!l.busy).then_some(Message::LSubmit)),
+                (!l.busy).then_some(Message::LSubmit),
+                500.0,
+                None,
+            ),
         ]
         .spacing(16)
         .width(W),
@@ -1750,15 +1809,21 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
     .spacing(32)
     .align_x(Alignment::Center);
     container(
-        container(form)
-            .padding([40, 32])
-            .width((app.cfg.settings.window.0 - 64.0).clamp(W + 64.0, 734.0))
+        scrollable(
+            container(
+                container(form)
+                    .padding([40, 32])
+                    .width((app.cfg.settings.window.0 - 64.0).clamp(W + 64.0, 734.0))
+                    .center_x(Fill)
+                    .max_width(734)
+                    .style(theme::panel),
+            )
             .center_x(Fill)
-            .max_width(734)
-            .style(theme::panel),
+            .padding([32, 32]),
+        )
+        .style(theme::scroll)
+        .height(Fill),
     )
-    .center_x(Fill)
-    .padding([32, 32])
     .height(Fill)
     .style(theme::grad(color!(0x2a2a2a), theme::BG))
     .into()

@@ -25,6 +25,138 @@ pub fn icon_btn<'a>(c: char, size: f32, msg: Message) -> button::Button<'a, Mess
         .style(theme::link(theme::SUB))
 }
 
+pub fn focusable<'a>(
+    c: impl Into<Element<'a, Message>>,
+    msg: Option<Message>,
+    radius: f32,
+    id: Option<&'static str>,
+) -> Element<'a, Message> {
+    use iced::advanced::widget::{Id, Operation, Tree, Widget, operation::Focusable, tree};
+    use iced::advanced::{Clipboard, Layout, Shell, layout, renderer};
+    use iced::keyboard::{Event::KeyPressed, Key, key::Named};
+    use iced::{Event, Rectangle, Size, mouse};
+    struct Focus<'a>(Element<'a, Message>, Option<Message>, f32, Option<Id>);
+    #[derive(Default)]
+    struct Ring(bool);
+    impl Focusable for Ring {
+        fn is_focused(&self) -> bool {
+            self.0
+        }
+        fn focus(&mut self) {
+            self.0 = true;
+        }
+        fn unfocus(&mut self) {
+            self.0 = false;
+        }
+    }
+    impl Widget<Message, iced::Theme, iced::Renderer> for Focus<'_> {
+        fn size(&self) -> Size<Length> {
+            self.0.as_widget().size()
+        }
+        fn layout(&mut self, t: &mut Tree, r: &iced::Renderer, l: &layout::Limits) -> layout::Node {
+            self.0.as_widget_mut().layout(&mut t.children[0], r, l)
+        }
+        fn draw(
+            &self,
+            t: &Tree,
+            r: &mut iced::Renderer,
+            th: &iced::Theme,
+            s: &renderer::Style,
+            l: Layout<'_>,
+            c: mouse::Cursor,
+            v: &Rectangle,
+        ) {
+            use iced::advanced::Renderer;
+            self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
+            if t.state.downcast_ref::<Ring>().0 {
+                r.fill_quad(
+                    renderer::Quad {
+                        bounds: l.bounds().expand(self.2.min(4.0)),
+                        border: iced::Border {
+                            color: Color::WHITE,
+                            width: 2.0,
+                            radius: (self.2 + self.2.min(4.0)).into(),
+                        },
+                        ..Default::default()
+                    },
+                    Color::TRANSPARENT,
+                );
+            }
+        }
+        fn tag(&self) -> tree::Tag {
+            tree::Tag::of::<Ring>()
+        }
+        fn state(&self) -> tree::State {
+            tree::State::new(Ring::default())
+        }
+        fn children(&self) -> Vec<Tree> {
+            vec![Tree::new(&self.0)]
+        }
+        fn diff(&self, t: &mut Tree) {
+            t.diff_children(std::slice::from_ref(&self.0));
+        }
+        fn operate(
+            &mut self,
+            t: &mut Tree,
+            l: Layout<'_>,
+            r: &iced::Renderer,
+            op: &mut dyn Operation,
+        ) {
+            op.focusable(self.3.as_ref(), l.bounds(), t.state.downcast_mut::<Ring>());
+            op.traverse(&mut |op| self.0.as_widget_mut().operate(&mut t.children[0], l, r, op));
+        }
+        fn update(
+            &mut self,
+            t: &mut Tree,
+            e: &Event,
+            l: Layout<'_>,
+            c: mouse::Cursor,
+            r: &iced::Renderer,
+            cb: &mut dyn Clipboard,
+            sh: &mut Shell<'_, Message>,
+            v: &Rectangle,
+        ) {
+            self.0.as_widget_mut().update(&mut t.children[0], e, l, c, r, cb, sh, v);
+            let ring = t.state.downcast_mut::<Ring>();
+            if !ring.0 {
+                return;
+            }
+            match e {
+                Event::Mouse(mouse::Event::ButtonPressed(_)) => {
+                    ring.0 = false;
+                    sh.request_redraw();
+                }
+                Event::Keyboard(KeyPressed { key: Key::Named(Named::Escape), .. }) => {
+                    ring.0 = false;
+                    sh.request_redraw();
+                    sh.capture_event();
+                }
+                Event::Keyboard(KeyPressed {
+                    key: Key::Named(Named::Enter | Named::Space),
+                    ..
+                }) if !sh.is_event_captured() => {
+                    if let Some(m) = &self.1 {
+                        sh.publish(m.clone());
+                    }
+                    sh.capture_event();
+                }
+                _ => {}
+            }
+        }
+        fn mouse_interaction(
+            &self,
+            t: &Tree,
+            l: Layout<'_>,
+            c: mouse::Cursor,
+            v: &Rectangle,
+            r: &iced::Renderer,
+        ) -> mouse::Interaction {
+            self.0.as_widget().mouse_interaction(&t.children[0], l, c, v, r)
+        }
+    }
+    Element::new(Focus(c.into(), msg, radius, id.map(Id::from)))
+}
+
 pub fn cover(app: &App, id: &str, size: u32, px: f32, round: bool) -> Element<'static, Message> {
     let r = if round {
         px / 2.0
@@ -47,6 +179,15 @@ pub fn cover(app: &App, id: &str, size: u32, px: f32, round: bool) -> Element<'s
         .style(theme::fill(theme::ELEVATED, r))
         .into(),
     }
+}
+
+pub const SONGS_BG: Color = Color::from_rgb8(0x00, 0x64, 0x50);
+
+pub fn pin_art<'a>(px: f32, c: char, bg: Color, fg: Color) -> Element<'a, Message> {
+    container(i(c, px * 0.38).color(fg).center())
+        .center(px)
+        .style(theme::fill(bg, if px < 100.0 { 4.0 } else { 6.0 }))
+        .into()
 }
 
 pub fn liked_art<'a>(px: f32) -> Element<'a, Message> {
@@ -82,6 +223,17 @@ pub fn artists_line<'a>(artists: &[Artist], size: f32, w: f32) -> Element<'a, Me
 pub fn fmt_dur(s: f32) -> String {
     let s = s as u64;
     format!("{}:{:02}", s / 60, s % 60)
+}
+
+pub fn fmt_n(n: usize) -> String {
+    let s = n.to_string();
+    s.char_indices().fold(String::new(), |mut o, (i, c)| {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            o.push(',');
+        }
+        o.push(c);
+        o
+    })
 }
 
 pub fn fmt_long(s: f32) -> String {
@@ -171,8 +323,8 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
 fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
     let w = app.lib_w();
     let item = |art: Element<'a, Message>, title: &str, sub: String, route: String| {
-        let on = app.route == route;
-        let playing = !app.source.is_empty() && app.source == route;
+        let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
+        let (on, playing) = (same(&app.route), !app.ctx.is_empty() && same(&app.ctx));
         let body: Element<'a, Message> = if app.lib_collapsed {
             art
         } else {
@@ -239,10 +391,25 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
         .padding([0, 8])
     });
     let f = app.lib_filter;
-    let mut list = Column::new();
-    if f < 2 {
-        list = list.push(item(liked_art(48.0), "Liked Songs", "Playlist".into(), "liked".into()));
-    }
+    let pin = |c: char, bg: Color, fg: Color, title: &str, route: &str| {
+        item(pin_art(48.0, c, bg, fg), title, "Library".into(), route.into())
+    };
+    let mut list = Column::new()
+        .push(
+            (f < 2)
+                .then(|| item(liked_art(48.0), "Liked Songs", "Playlist".into(), "liked".into())),
+        )
+        .push((f == 0).then(|| pin(icon::MUSIC, SONGS_BG, theme::ACCENT, "Songs", "songs")))
+        .push(
+            (f == 2).then(|| pin(icon::ALBUM, theme::ELEVATED, theme::SUB, "All albums", "albums")),
+        )
+        .push(
+            (f == 3)
+                .then(|| pin(icon::USER, theme::ELEVATED, theme::SUB, "All artists", "artists")),
+        )
+        .push(
+            (f == 0).then(|| pin(icon::FOLDER, theme::ELEVATED, theme::SUB, "Folders", "folders")),
+        );
     if let Some(l) = app.data::<crate::app::Lib>("lib") {
         list = list
             .extend(l.playlists.iter().filter(|_| f < 2).map(|p| {
@@ -417,8 +584,10 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
     };
     let mut layers = Vec::new();
     if let Some((id, kind)) = &app.modal {
+        let named = !app.new_pl.trim().is_empty();
         let input = |hint: &'a str, v: &'a str, n: u8, ok: &Message| {
             text_input(hint, v)
+                .id("layer")
                 .on_input(move |v| Message::LField(n, v))
                 .on_submit(ok.clone())
                 .style(theme::modal_field)
@@ -426,38 +595,52 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
                 .padding(10)
                 .size(14)
         };
+        let name =
+            |ok: &Message| -> Element<'a, Message> {
+                column![input("Name", &app.new_pl, 3, ok)]
+                    .push((!named).then(|| {
+                        theme::txt("Enter a name.", 12.0, Weight::Normal).color(theme::ERR)
+                    }))
+                    .spacing(6)
+                    .into()
+            };
         let pl = app
             .data::<crate::app::Lib>("lib")
             .and_then(|l| l.playlists.iter().find(|p| &p.id == id));
-        let (title, ok, label, body): (&str, Message, &str, Element<'a, Message>) = match kind {
-            0 => {
-                let ok = Message::PlNew(app.new_pl.clone());
-                ("Make a playlist", ok.clone(), "Save", input("Name", &app.new_pl, 3, &ok).into())
-            }
-            1 => {
-                let ok = Message::Edit(id.clone(), app.new_pl.clone(), app.new_pl_desc.clone());
-                let body = row![
-                    cover(app, pl.map_or("", |p| p.cover.as_str()), 300, 180.0, false),
-                    column![
-                        input("Name", &app.new_pl, 3, &ok),
-                        input("Add an optional description", &app.new_pl_desc, 4, &ok),
+        let (title, ok, label, body): (&str, Option<Message>, &str, Element<'a, Message>) =
+            match kind {
+                0 => {
+                    let ok = Message::PlNew(app.new_pl.clone());
+                    ("Make a playlist", named.then(|| ok.clone()), "Save", name(&ok))
+                }
+                1 => {
+                    let ok = Message::Edit(id.clone(), app.new_pl.clone(), app.new_pl_desc.clone());
+                    let body = row![
+                        cover(app, pl.map_or("", |p| p.cover.as_str()), 300, 180.0, false),
+                        column![
+                            name(&ok),
+                            input("Add an optional description", &app.new_pl_desc, 4, &ok)
+                        ]
+                        .spacing(16),
                     ]
-                    .spacing(16),
-                ]
-                .spacing(16)
-                .into();
-                ("Edit details", ok, "Save", body)
-            }
-            _ => {
-                let body = row![
-                    theme::txt("This will delete ", 14.0, Weight::Normal),
-                    theme::bold(pl.map_or("", |p| p.name.as_str()), 14.0),
-                    theme::txt(" from Your Library.", 14.0, Weight::Normal)
-                ]
-                .into();
-                ("Delete from Your Library?", Message::PlDel(id.clone()), "Delete", body)
-            }
-        };
+                    .spacing(16)
+                    .into();
+                    ("Edit details", named.then_some(ok), "Save", body)
+                }
+                _ => {
+                    let body = text::Rich::<(), Message>::with_spans(vec![
+                        text::Span::new("This will delete "),
+                        text::Span::new(pl.map_or("", |p| p.name.as_str()))
+                            .font(theme::fw(Weight::Bold)),
+                        text::Span::new(" from Your Library."),
+                    ])
+                    .size(14)
+                    .font(theme::fw(Weight::Normal))
+                    .width(Fill)
+                    .into();
+                    ("Delete from Your Library?", Some(Message::PlDel(id.clone())), "Delete", body)
+                }
+            };
         layers.push(
             stack![
                 scrim(Color { a: 0.7, ..theme::BG }),
@@ -466,20 +649,39 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
                         column![
                             row![
                                 theme::bold(title, 24.0).width(Fill),
-                                icon_btn(icon::X, 16.0, Message::MenuClose)
+                                focusable(
+                                    icon_btn(icon::X, 16.0, Message::MenuClose),
+                                    Some(Message::MenuClose),
+                                    16.0,
+                                    Some("layer"),
+                                )
                             ]
                             .align_y(Alignment::Center),
                             body,
                             row![
                                 Space::new().width(Fill),
-                                button(theme::bold("Cancel", 16.0))
-                                    .style(theme::link(theme::SUB))
-                                    .padding([12, 16])
-                                    .on_press(Message::MenuClose),
-                                button(theme::bold(label, 16.0))
-                                    .style(if *kind == 2 { theme::accent } else { theme::white })
-                                    .padding([12, 32])
-                                    .on_press(ok),
+                                focusable(
+                                    button(theme::bold("Cancel", 16.0))
+                                        .style(theme::link(theme::SUB))
+                                        .padding([12, 16])
+                                        .on_press(Message::MenuClose),
+                                    Some(Message::MenuClose),
+                                    500.0,
+                                    Some("layer"),
+                                ),
+                                focusable(
+                                    button(theme::bold(label, 16.0))
+                                        .style(if *kind == 2 {
+                                            theme::accent
+                                        } else {
+                                            theme::white
+                                        })
+                                        .padding([12, 32])
+                                        .on_press_maybe(ok.clone()),
+                                    ok,
+                                    500.0,
+                                    Some("layer"),
+                                ),
                             ]
                             .spacing(8)
                             .align_y(Alignment::Center),
