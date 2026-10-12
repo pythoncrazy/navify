@@ -6,6 +6,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 
 - Concise code, no filler, no comments, no doc comments unless a public API is genuinely non-obvious.
 - No tiny one-use helper functions; inline them. Prefer fewer, meatier functions.
+- No fallbacks that hide bugs. Use `assert!` or `expect` for internal invariants. Show real errors in the UI.
 - Functional style: iterator chains, `Option`/`Result` combinators, early returns. Few enums (only where iced/protocol forces them), few types: one model struct per entity that deserializes from both Navidrome-native and Subsonic JSON via `#[serde(alias)]`.
 - Use std and existing dependency features before writing code. Continuously look for LOC reductions.
 - No `unwrap()` on network/IO data paths; errors bubble to a single boundary and show in the UI.
@@ -43,7 +44,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 - Build: `cargo build` · Run: `cargo run` · Test: `cargo test --workspace`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings` · Format: `cargo fmt --all`
 - Hooks: install prek with `cargo install --locked prek`. Make sure `~/.cargo/bin` is on PATH. Then run `prek install` and `prek run --all-files`.
-- Live API tests read `.env` (`NAVIDROME_HOST`, `NAVIDROME_USERNAME`, `NAVIDROME_PASSWORD`) and are skipped when absent. Never print or commit credentials.
+- Server tests are `#[ignore]`. Run them with `cargo test --workspace -- --include-ignored`. Live tests read `.env` (`NAVIDROME_HOST`, `NAVIDROME_USERNAME`, `NAVIDROME_PASSWORD`). Local tests read `NAVIFY_TEST_LOCAL_URL`, `NAVIFY_TEST_LOCAL_USERNAME`, and `NAVIFY_TEST_LOCAL_PASSWORD`. A missing value makes the test fail. Never print or commit credentials.
 - Dependencies: only versions published ≥7 days ago.
 - Tools: install all developer tools with `cargo install --locked` (not uv, pip, or system packages).
 - Linux build deps: `libasound2-dev libdbus-1-dev pkg-config` (Arch: `alsa-lib dbus pkgconf`).

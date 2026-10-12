@@ -1,15 +1,8 @@
 use navify::api::{self, Session, Song};
 
-fn creds() -> Option<(String, String, String)> {
+fn env(k: &str) -> String {
     let _ = dotenvy::dotenv();
-    match (
-        std::env::var("NAVIDROME_HOST"),
-        std::env::var("NAVIDROME_USERNAME"),
-        std::env::var("NAVIDROME_PASSWORD"),
-    ) {
-        (Ok(h), Ok(u), Ok(p)) if !h.is_empty() => Some((h, u, p)),
-        _ => None,
-    }
+    std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set"))
 }
 
 fn rt() -> &'static tokio::runtime::Runtime {
@@ -17,67 +10,31 @@ fn rt() -> &'static tokio::runtime::Runtime {
     RT.get_or_init(|| tokio::runtime::Runtime::new().expect("runtime"))
 }
 
-static SESSION: tokio::sync::OnceCell<Option<Session>> = tokio::sync::OnceCell::const_new();
+async fn login(cell: &'static tokio::sync::OnceCell<Session>, vars: [&str; 3]) -> Session {
+    cell.get_or_init(|| async {
+        let [h, u, p] = vars.map(env);
+        Session::login(&h, &u, &p).await.unwrap_or_else(|e| panic!("login to {h} failed: {e}"))
+    })
+    .await
+    .clone()
+}
 
-async fn session() -> Option<Session> {
-    SESSION
-        .get_or_init(|| async {
-            let (h, u, p) = creds()?;
-            Session::login(&h, &u, &p).await.ok()
-        })
+async fn live() -> Session {
+    static S: tokio::sync::OnceCell<Session> = tokio::sync::OnceCell::const_new();
+    login(&S, ["NAVIDROME_HOST", "NAVIDROME_USERNAME", "NAVIDROME_PASSWORD"]).await
+}
+
+async fn local() -> Session {
+    static S: tokio::sync::OnceCell<Session> = tokio::sync::OnceCell::const_new();
+    login(&S, ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"])
         .await
-        .clone()
-}
-
-macro_rules! live {
-    () => {
-        match session().await {
-            Some(s) => s,
-            None => {
-                eprintln!("skip: no server credentials in .env");
-                return;
-            }
-        }
-    };
-}
-
-static LOCAL: tokio::sync::OnceCell<Option<Session>> = tokio::sync::OnceCell::const_new();
-
-async fn local() -> Option<Session> {
-    LOCAL
-        .get_or_init(|| async {
-            match (
-                std::env::var("NAVIFY_TEST_LOCAL_URL"),
-                std::env::var("NAVIFY_TEST_LOCAL_USERNAME"),
-                std::env::var("NAVIFY_TEST_LOCAL_PASSWORD"),
-            ) {
-                (Ok(h), Ok(u), Ok(p)) => match Session::login(&h, &u, &p).await {
-                    Ok(s) => Some(s),
-                    Err(e) => panic!("local login failed: {e}"),
-                },
-                _ => None,
-            }
-        })
-        .await
-        .clone()
-}
-
-macro_rules! local {
-    () => {
-        match local().await {
-            Some(s) => s,
-            None => {
-                eprintln!("skip: no NAVIFY_TEST_LOCAL_* vars");
-                return;
-            }
-        }
-    };
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn login_detects_navidrome() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         assert!(s.server.native);
         assert!(!s.server.token.is_empty());
         assert!(!s.jwt().is_empty());
@@ -85,9 +42,10 @@ fn login_detects_navidrome() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn albums_page_and_total() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         let (page, total) = s.albums("name", &[], 0, 25).await.expect("albums");
         assert_eq!(page.len(), 25);
         assert!(total > 100);
@@ -98,9 +56,10 @@ fn albums_page_and_total() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn album_detail_has_songs_with_gain() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         let (albums, _) = s.albums("frequent", &[], 0, 5).await.expect("albums");
         let (album, songs) = s.album(&albums[0].id).await.expect("album");
         assert_eq!(album.id, albums[0].id);
@@ -112,9 +71,10 @@ fn album_detail_has_songs_with_gain() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn artist_page() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         let (artists, total) = s.artists(0, 5).await.expect("artists");
         assert!(total > 10);
         let (artist, albums, top, info) = s.artist(&artists[0].id).await.expect("artist");
@@ -127,9 +87,10 @@ fn artist_page() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn playlists_and_tracks() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         let playlists = s.playlists().await.expect("playlists");
         assert!(!playlists.is_empty());
         let (pl, songs) = s.playlist(&playlists[0].id).await.expect("playlist");
@@ -141,9 +102,10 @@ fn playlists_and_tracks() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn search_returns_results() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         let (albums, _) = s.albums("name", &[], 0, 1).await.expect("albums");
         let word: String = albums[0].name.chars().filter(|c| c.is_alphabetic()).take(4).collect();
         let (artists, albums, songs) = s.search(&word, 5).await.expect("search");
@@ -152,9 +114,10 @@ fn search_returns_results() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn lyrics_call_succeeds() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         let (songs, _) = s.songs("frequent", &[], 0, 10).await.expect("songs");
         for song in &songs {
             if s.lyrics(&song.id).await.is_ok_and(|l| !l.is_empty()) {
@@ -166,9 +129,10 @@ fn lyrics_call_succeeds() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn cover_caches_on_disk() {
     rt().block_on(async {
-        let s = live!();
+        let s = live().await;
         let (albums, _) = s.albums("name", &[], 0, 1).await.expect("albums");
         let id = albums[0].cover.clone();
         let first = s.cover(&id, 128).await.expect("cover fetch");
@@ -181,9 +145,10 @@ fn cover_caches_on_disk() {
 }
 
 #[test]
+#[ignore = "needs the .env server"]
 fn subsonic_fallback_lists_albums() {
     rt().block_on(async {
-        let mut s = live!();
+        let mut s = live().await;
         s.server.native = false;
         let (albums, _) = s.albums("name", &[], 0, 10).await.expect("subsonic albums");
         assert_eq!(albums.len(), 10);
@@ -270,9 +235,10 @@ fn song_deserializes_native_and_subsonic() {
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn local_star_rate_scrobble() {
     rt().block_on(async {
-        let s = local!();
+        let s = local().await;
         let (songs, _) = s.songs("name", &[], 0, 5).await.expect("songs");
         assert!(!songs.is_empty());
         let id = songs[0].id.clone();
@@ -289,9 +255,10 @@ fn local_star_rate_scrobble() {
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn local_playlist_roundtrip() {
     rt().block_on(async {
-        let s = local!();
+        let s = local().await;
         let (songs, _) = s.songs("name", &[], 0, 5).await.expect("songs");
         let ids: Vec<String> = songs.iter().take(3).map(|x| x.id.clone()).collect();
         let pl = s.playlist_create("navify test", &ids[..2]).await.expect("create");
@@ -311,9 +278,10 @@ fn local_playlist_roundtrip() {
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn local_play_queue_roundtrip() {
     rt().block_on(async {
-        let s = local!();
+        let s = local().await;
         let (songs, _) = s.songs("name", &[], 0, 4).await.expect("songs");
         let ids: Vec<String> = songs.iter().map(|x| x.id.clone()).collect();
         s.save_play_queue(&ids, &ids[1], 1234).await.expect("save queue");
@@ -325,10 +293,20 @@ fn local_play_queue_roundtrip() {
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn local_subsonic_read_suite() {
     rt().block_on(async {
-        let mut s = local!();
-        s.server.native = false;
+        let mut s = local().await;
+        for native in [true, false] {
+            s.server.native = native;
+            for k in ["recent", "newest", "frequent", "random", "name", "artist", "year", "rating"]
+            {
+                s.albums(k, &[], 0, 5).await.unwrap_or_else(|e| panic!("albums {k} {native}: {e}"));
+            }
+            for k in ["name", "artist", "album", "newest", "recent", "frequent", "year", "rating"] {
+                s.songs(k, &[], 0, 5).await.unwrap_or_else(|e| panic!("songs {k} {native}: {e}"));
+            }
+        }
         let (albums, _) = s.albums("name", &[], 0, 10).await.expect("albums");
         assert!(!albums.is_empty());
         let (album, songs) = s.album(&albums[0].id).await.expect("album");

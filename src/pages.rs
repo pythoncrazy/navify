@@ -92,16 +92,10 @@ fn table_head<'a>(c: Cols) -> El<'a> {
 fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'a> {
     let hk = format!("{key}#{n}");
     let hot = app.hover.as_deref() == Some(hk.as_str());
-    let sel = app.sel.as_deref() == Some(hk.as_str());
+    let sel = app.sel.as_ref().is_some_and(|x| x.0 == key) && app.picked.contains(&n);
     let cur = app.current_song().is_some_and(|x| x.id == s.id);
     let starred = app.is_starred(&s.id, s.starred);
     let art = !key.starts_with("album:");
-    let kind = || {
-        Box::new(match key.strip_prefix("playlist:") {
-            Some(_) => MenuKind::SongIn(s.clone(), n),
-            None => MenuKind::Song(s.clone()),
-        })
-    };
     let idx: El = match (hot, cur && app.playing) {
         (true, true) => btn(i(icon::PAUSE, 16.0).center(), Message::Toggle).width(16).into(),
         (true, false) => {
@@ -140,12 +134,13 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'
             .height(32)
             .padding(0)
             .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
-            .on_press(Message::Star(s.id.clone(), !starred))
+            .on_press(Message::Star(vec![s.id.clone()], !starred))
     });
     let last = row![
         container(heart).width(32),
         theme::sub(fmt_dur(s.duration), 14.0).width(56).align_x(Alignment::End),
-        container(hot.then(|| icon_btn(icon::DOTS, 16.0, Message::Menu(kind())))).width(32),
+        container(hot.then(|| icon_btn(icon::DOTS, 16.0, Message::RowMenu(key.into(), n))))
+            .width(32),
     ]
     .align_y(Alignment::Center);
     let r = row![
@@ -178,9 +173,9 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'
         0.0
     };
     mouse_area(container(r).style(theme::fill(theme::tint(a), 4.0)))
-        .on_press(Message::Select(hk.clone()))
+        .on_press(Message::Select(key.into(), n))
         .on_double_click(Message::PlayAt(key.into(), n))
-        .on_right_press(Message::Menu(kind()))
+        .on_right_press(Message::RowMenu(key.into(), n))
         .on_enter(Message::Hover(hk.clone(), true))
         .on_exit(Message::Hover(hk, false))
         .into()
@@ -556,7 +551,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
         button(i(icon::HEART, 32.0).center())
             .padding(0)
             .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
-            .on_press(Message::Star(id.into(), !on))
+            .on_press(Message::Star(vec![id.into()], !on))
             .into()
     };
     let dots =
@@ -588,7 +583,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             ),
             color: head_color(app, &a.cover),
             songs,
-            extra: vec![star(&a.id, a.starred), dots(MenuKind::Album(a.clone()))],
+            extra: vec![star(&a.id, a.starred), dots(MenuKind::Album(Box::new(a.clone())))],
             cols: cols(app, false, false),
         });
     }
@@ -642,7 +637,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             |l| {
                 Message::Nav(format!(
                     "songs:{}",
-                    SORTS.iter().find(|(_, x)| *x == l).map_or("name", |(k, _)| *k)
+                    SORTS.iter().find(|(_, x)| *x == l).expect("the label is a sort").0
                 ))
             },
         )
@@ -775,7 +770,7 @@ fn artist<'a>(app: &'a App) -> El<'a> {
                         button(theme::bold(if on { "Following" } else { "Follow" }, 14.0))
                             .style(theme::pill)
                             .padding([7, 15])
-                            .on_press(Message::Star(a.id.clone(), !on))
+                            .on_press(Message::Star(vec![a.id.clone()], !on))
                             .into(),
                         icon_btn(
                             icon::DOTS,
@@ -1033,9 +1028,9 @@ fn albums<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
                 ("newest", "Recently added"),
                 ("recent", "Recently played"),
                 ("frequent", "Most played"),
-                ("alphabeticalByName", "Name"),
-                ("alphabeticalByArtist", "Artist"),
-                ("byYear", "Year"),
+                ("name", "Name"),
+                ("artist", "Artist"),
+                ("year", "Year"),
                 ("random", "Random"),
             ]
             .map(|(k, name)| {
@@ -1166,23 +1161,26 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             .height(48)
             .into()
     };
-    let pick = |opts: &'static [(&'static str, &'static str)],
-                cur: &str,
-                f: fn(&'static str) -> Message|
-     -> El<'a> {
-        pick_list(
-            opts.iter().map(|o| o.1).collect::<Vec<_>>(),
-            opts.iter().find(|o| o.0 == cur).map(|o| o.1),
-            move |l| f(opts.iter().find(|o| o.1 == l).map_or(opts[0].0, |o| o.0)),
-        )
+    fn pick<'a, T: Clone + 'a>(
+        opts: impl IntoIterator<Item = (T, impl ToString)>,
+        cur: impl PartialEq<T>,
+        f: impl Fn(T) -> Message + 'a,
+    ) -> El<'a> {
+        let opts: Vec<(T, String)> = opts.into_iter().map(|(v, l)| (v, l.to_string())).collect();
+        let on = opts.iter().find(|o| cur == o.0).map(|o| o.1.clone());
+        let labels = opts.iter().map(|o| o.1.clone()).collect::<Vec<_>>();
+        pick_list(labels, on, move |l| {
+            f(opts.iter().find(|o| o.1 == l).expect("the label is an option").0.clone())
+        })
+        .placeholder("The saved value is not available")
         .text_size(14)
         .font(theme::fw(Weight::Normal))
         .padding([8, 12])
-        .width(200)
+        .width(268)
         .style(theme::pick)
         .menu_style(theme::pick_menu)
         .into()
-    };
+    }
     let num = |v: f32,
                r: std::ops::RangeInclusive<f32>,
                f: fn(f32) -> Message,
@@ -1199,6 +1197,12 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let tog = |v: bool, f: fn(bool) -> Message| -> El<'a> {
         toggler(v).on_toggle(f).style(theme::tog).size(20).into()
     };
+    let device = pick(
+        std::iter::once((String::new(), "System default".to_string()))
+            .chain(app.data::<Vec<(String, String)>>("devices").into_iter().flatten().cloned()),
+        st.device.as_str(),
+        |v| Message::Set(Set::Device(v)),
+    );
     let servers = app.cfg.servers.iter().map(|s| -> El<'a> {
         row![
             column![
@@ -1222,12 +1226,13 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         column![
             theme::bold("Settings", 32.0),
             section("Playback"),
+            line("Output device", device),
             line(
                 "ReplayGain",
                 pick(
-                    &[("off", "Off"), ("track", "Track"), ("album", "Album")],
+                    [("off", "Off"), ("track", "Track"), ("album", "Album")],
                     &st.replaygain,
-                    |v| { Message::Set(Set::Rg(v.into())) }
+                    |v: &str| Message::Set(Set::Rg(v.into()))
                 )
             ),
             line(
@@ -1237,6 +1242,15 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                     -15.0..=15.0,
                     |v| Message::Set(Set::Preamp(v)),
                     format!("{:+.1} dB", st.preamp_db)
+                )
+            ),
+            line(
+                "Gain for tracks without ReplayGain",
+                num(
+                    st.fallback_db,
+                    -15.0..=15.0,
+                    |v| Message::Set(Set::Fallback(v)),
+                    format!("{:+.1} dB", st.fallback_db)
                 )
             ),
             line(
@@ -1261,30 +1275,38 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             line(
                 "Transcode format",
                 pick(
-                    &[("original", "Original"), ("mp3", "MP3"), ("opus", "Opus"), ("aac", "AAC")],
-                    if st.transcode_format.is_empty() { "original" } else { &st.transcode_format },
-                    |v| Message::Set(Set::Trans(v.into()))
+                    [("", "Original"), ("mp3", "MP3"), ("opus", "Opus"), ("aac", "AAC")],
+                    &st.transcode_format,
+                    |v: &str| Message::Set(Set::Trans(v.into()))
                 )
             ),
             line(
                 "Maximum bitrate",
                 pick(
-                    &[
-                        ("0", "No limit"),
-                        ("320", "320 kbps"),
-                        ("256", "256 kbps"),
-                        ("192", "192 kbps"),
-                        ("128", "128 kbps"),
-                        ("96", "96 kbps"),
-                    ],
-                    &st.transcode_max_bitrate.to_string(),
-                    |v| Message::Set(Set::Bitrate(v.parse().unwrap_or(0)))
+                    [0, 320, 256, 192, 128, 96].map(|b| {
+                        (b, if b == 0 { "No limit".into() } else { format!("{b} kbps") })
+                    }),
+                    st.transcode_max_bitrate,
+                    |v| Message::Set(Set::Bitrate(v))
                 )
             ),
             section("Library"),
             line(
                 "Sync the play queue with the server",
                 tog(st.queue_sync, |b| Message::Set(Set::Qsync(b)))
+            ),
+            line(
+                "Send played tracks to the server (scrobble)",
+                tog(st.scrobble, |b| Message::Set(Set::Scrobble(b)))
+            ),
+            section("Display"),
+            line(
+                "Zoom",
+                pick(
+                    [0.8, 0.9, 1.0, 1.1, 1.25, 1.5].map(|z| (z, format!("{:.0}%", z * 100.0))),
+                    st.zoom,
+                    |v| Message::Set(Set::Zoom(v))
+                )
             ),
             section("Servers"),
         ]
@@ -1293,7 +1315,10 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         .push(line(
             "Cover cache",
             row![
-                theme::sub(format!("{} MB in memory", app.covers.bytes / 1_048_576), 14.0),
+                theme::sub(
+                    format!("{:.1} MB in memory", app.covers.bytes as f32 / 1_048_576.0),
+                    14.0
+                ),
                 button(theme::bold("Clear", 14.0))
                     .style(theme::pill)
                     .padding([7, 15])
@@ -1342,7 +1367,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
                         .padding(0)
                         .width(32)
                         .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
-                        .on_press(Message::Star(s.id.clone(), !starred)),
+                        .on_press(Message::Star(vec![s.id.clone()], !starred)),
                 ]
                 .align_y(Alignment::Center),
                 container(
@@ -1413,7 +1438,7 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: usize, w: f32) -> El<'a> {
         .style(theme::fill(Color::TRANSPARENT, 4.0)),
     )
     .on_double_click(Message::PlayQueue(n))
-    .on_right_press(Message::Menu(Box::new(MenuKind::Song(s.clone()))))
+    .on_right_press(Message::Menu(Box::new(MenuKind::Song(vec![s.clone()]))))
     .into()
 }
 
@@ -1512,7 +1537,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     };
     let star = |id: &str, on: bool, yes: &str, no: &str| {
         let on = app.is_starred(id, on);
-        item(icon::HEART, if on { yes } else { no }.into(), Message::Star(id.into(), !on))
+        item(icon::HEART, if on { yes } else { no }.into(), Message::Star(vec![id.into()], !on))
     };
     let ctx = |kind: &str, id: &str| {
         let r = format!("{kind}:{id}");
@@ -1585,7 +1610,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                     item(
                         icon::MUSIC,
                         p.name.clone(),
-                        Message::PlAdd(p.id.clone(), vec![s.id.clone()]),
+                        Message::PlAdd(p.id.clone(), s.iter().map(|s| s.id.clone()).collect()),
                     )
                 })
             }))
@@ -1602,7 +1627,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 h,
             );
         }
-        MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 2 => {
+        MenuKind::Song(v) | MenuKind::SongIn(v, _) if m.sub == 2 && v.len() == 1 => {
+            let s = &v[0];
             let cur = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
             let stars = Row::with_children((1..=5u8).map(|n| {
                 let m = Message::Rate(s.id.clone(), if n == cur { 0 } else { n });
@@ -1620,10 +1646,11 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             }));
             return (container(stars).padding(6).style(theme::menu).into(), 192.0, 48.0);
         }
-        MenuKind::Song(s) | MenuKind::SongIn(s, _) => {
+        MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
+            let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
             let mut v = vec![
-                item(icon::LISTPLUS, "Add to queue".into(), Message::QEnd(vec![s.clone()])),
-                item(icon::QUEUE, "Play next".into(), Message::QNext(vec![s.clone()])),
+                item(icon::LISTPLUS, "Add to queue".into(), Message::QEnd(songs.clone())),
+                item(icon::QUEUE, "Play next".into(), Message::QNext(songs.clone())),
                 sep(),
                 more(icon::PLUS, "Add to playlist", 1),
             ];
@@ -1631,30 +1658,37 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 v.push(item(
                     icon::MINUS,
                     "Remove from this playlist".into(),
-                    Message::PlRemove(*n),
+                    Message::PlRemove(n.clone()),
                 ));
             }
-            v.extend([
-                star(&s.id, s.starred, "Remove from your Liked Songs", "Save to your Liked Songs"),
-                more(icon::STAR, "Rate", 2),
-                sep(),
-                item(icon::RADIO, "Go to song radio".into(), Message::Radio(s.id.clone())),
-            ]);
-            v.extend((!s.artist_id.is_empty()).then(|| {
-                item(
-                    icon::USER,
-                    "Go to artist".into(),
-                    Message::Nav(format!("artist:{}", s.artist_id)),
-                )
-            }));
-            v.extend((!s.album_id.is_empty()).then(|| {
-                item(
-                    icon::ALBUM,
-                    "Go to album".into(),
-                    Message::Nav(format!("album:{}", s.album_id)),
-                )
-            }));
-            (v, 2)
+            v.push(item(
+                icon::HEART,
+                if on { "Remove from your Liked Songs" } else { "Save to your Liked Songs" }.into(),
+                Message::Star(songs.iter().map(|s| s.id.clone()).collect(), !on),
+            ));
+            if let [s] = &songs[..] {
+                v.extend([
+                    more(icon::STAR, "Rate", 2),
+                    sep(),
+                    item(icon::RADIO, "Go to song radio".into(), Message::Radio(s.id.clone())),
+                ]);
+                v.extend((!s.artist_id.is_empty()).then(|| {
+                    item(
+                        icon::USER,
+                        "Go to artist".into(),
+                        Message::Nav(format!("artist:{}", s.artist_id)),
+                    )
+                }));
+                v.extend((!s.album_id.is_empty()).then(|| {
+                    item(
+                        icon::ALBUM,
+                        "Go to album".into(),
+                        Message::Nav(format!("album:{}", s.album_id)),
+                    )
+                }));
+            }
+            let seps = if songs.len() == 1 { 2 } else { 1 };
+            (v, seps)
         }
         MenuKind::Album(a) => (
             ctx("album", &a.id)

@@ -26,9 +26,10 @@ impl iced::Executor for Rt {
 
 fn main() -> iced::Result {
     let cfg = Config::load();
-    let (w, h) = cfg.settings.window;
+    let ((w, h), z) = (cfg.settings.window, cfg.settings.zoom);
     application(App::boot, App::update, App::view)
         .subscription(App::subscription)
+        .scale_factor(|a: &App| a.cfg.settings.zoom)
         .executor::<Rt>()
         .theme(|_: &App| Theme::Dark)
         .default_font(Font::with_name("Figtree"))
@@ -40,7 +41,7 @@ fn main() -> iced::Result {
         .title(App::title)
         .window(window::Settings {
             size: Size::new(w.max(800.0), h.max(600.0)),
-            min_size: Some(Size::new(800.0, 600.0)),
+            min_size: Some(Size::new(800.0, 600.0) * z),
             ..window::Settings::default()
         })
         .run()

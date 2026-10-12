@@ -250,11 +250,11 @@ fn de_genres<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<Genre>,
     Ok(match Value::deserialize(d)? {
         Value::Array(a) => a
             .into_iter()
-            .filter_map(|v| match v {
-                Value::String(name) => Some(Genre { name, ..Genre::default() }),
-                v => serde_json::from_value(v).ok(),
+            .map(|v| match v {
+                Value::String(name) => Ok(Genre { name, ..Genre::default() }),
+                v => serde_json::from_value(v).map_err(serde::de::Error::custom),
             })
-            .collect(),
+            .collect::<std::result::Result<_, _>>()?,
         Value::String(s) => {
             s.split(',').map(|n| Genre { name: n.trim().to_string(), ..Genre::default() }).collect()
         }
@@ -373,7 +373,7 @@ impl Session {
     }
 
     fn lock(&self) -> MutexGuard<'_, String> {
-        self.jwt.lock().unwrap_or_else(|e| e.into_inner())
+        self.jwt.lock().expect("JWT lock")
     }
 
     pub fn jwt(&self) -> String {
@@ -576,11 +576,7 @@ impl Session {
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
-        dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("navify/covers")
-            .join(&self.server.id)
-            .join(format!("{id}-{size}"))
+        covers_dir().join(&self.server.id).join(format!("{id}-{size}"))
     }
 
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
@@ -621,7 +617,7 @@ impl Session {
         size: usize,
     ) -> Result<(Vec<Album>, usize)> {
         if self.server.native {
-            let (field, order) = sort_key(sort, ALBUM_SORTS, "importedAt");
+            let (field, order) = sort_key(sort, ALBUM_SORTS);
             let mut q = vec![
                 ("_start", offset.to_string()),
                 ("_end", (offset + size).to_string()),
@@ -634,12 +630,15 @@ impl Session {
             }
             self.nd(Method::GET, "album", &q).await
         } else {
-            let t = ALBUM_SORTS.iter().find(|(k, ..)| *k == sort).map_or("newest", |(_, t, _)| *t);
+            let t = ALBUM_SORTS.iter().find(|(k, ..)| *k == sort).expect("a known sort").1;
             let mut q = vec![
                 ("type", t.to_string()),
                 ("size", size.to_string()),
                 ("offset", offset.to_string()),
             ];
+            if t == "byYear" && !filter.iter().any(|(k, _)| *k == "year") {
+                q.extend([("fromYear", "0".to_string()), ("toYear", "9999".to_string())]);
+            }
             for (k, v) in filter {
                 if *k == "year" {
                     q.push(("fromYear", v.clone()));
@@ -778,7 +777,7 @@ impl Session {
         size: usize,
     ) -> Result<(Vec<Song>, usize)> {
         if self.server.native {
-            let (field, order) = sort_key(sort, SONG_SORTS, "title");
+            let (field, order) = sort_key(sort, SONG_SORTS);
             let mut q = vec![
                 ("_start", offset.to_string()),
                 ("_end", (offset + size).to_string()),
@@ -959,12 +958,8 @@ fn md5_hex(s: &str) -> String {
     md5::Md5::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn sort_key<'a>(
-    sort: &str,
-    map: &'a [(&'a str, &'a str, &'a str)],
-    default: &'a str,
-) -> (&'a str, &'a str) {
-    let field = map.iter().find(|(k, ..)| *k == sort).map_or(default, |(.., f)| *f);
+fn sort_key<'a>(sort: &str, map: &'a [(&'a str, &'a str, &'a str)]) -> (&'a str, &'a str) {
+    let field = map.iter().find(|(k, ..)| *k == sort).expect("a known sort").2;
     let order =
         if matches!(sort, "name" | "artist" | "album" | "genre" | "year") { "ASC" } else { "DESC" };
     (field, order)
@@ -1009,10 +1004,13 @@ fn cache_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+pub fn covers_dir() -> PathBuf {
+    dirs::cache_dir().expect("The system has no cache directory.").join("navify/covers")
+}
+
 pub fn prune_covers() {
-    let dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join("navify/covers");
     let mut files = Vec::new();
-    cache_files(&dir, &mut files);
+    cache_files(&covers_dir(), &mut files);
     let mut metas: Vec<(PathBuf, std::time::SystemTime, u64)> = files
         .into_iter()
         .filter_map(|p| {

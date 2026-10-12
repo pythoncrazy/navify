@@ -8,18 +8,18 @@ fn rt() -> &'static tokio::runtime::Handle {
     RT.get_or_init(|| tokio::runtime::Runtime::new().expect("runtime")).handle()
 }
 
-fn server() -> Option<(String, String)> {
-    let host = std::env::var("NAVIFY_TEST_LOCAL_URL").ok()?;
-    let user = std::env::var("NAVIFY_TEST_LOCAL_USERNAME").ok()?;
-    let pass = std::env::var("NAVIFY_TEST_LOCAL_PASSWORD").ok()?;
+fn server() -> (String, String) {
+    let [host, user, pass] =
+        ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"]
+            .map(|k| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set")));
     let salt = "navifytest";
     let token: String =
         Md5::digest(format!("{pass}{salt}")).iter().map(|b| format!("{b:02x}")).collect();
-    Some((host, format!("u={user}&t={token}&s={salt}&v=1.16.1&c=navify-test&f=json")))
+    (host, format!("u={user}&t={token}&s={salt}&v=1.16.1&c=navify-test&f=json"))
 }
 
-fn tracks(titles: &[&str], format: Option<&str>) -> Option<Vec<Track>> {
-    let (host, auth) = server()?;
+fn tracks(titles: &[&str], format: Option<&str>) -> Vec<Track> {
+    let (host, auth) = server();
     let v: serde_json::Value = reqwest::blocking::get(format!(
         "{host}/rest/search3?{auth}&query=&songCount=100&albumCount=0&artistCount=0"
     ))
@@ -27,35 +27,21 @@ fn tracks(titles: &[&str], format: Option<&str>) -> Option<Vec<Track>> {
     .json()
     .expect("json");
     let songs = v["subsonic-response"]["searchResult3"]["song"].as_array().expect("songs").clone();
-    Some(
-        titles
-            .iter()
-            .map(|t| {
-                let s = songs.iter().find(|s| s["title"] == *t).expect("song");
-                let id = s["id"].as_str().expect("id");
-                let fmt = format.map(|f| format!("&format={f}")).unwrap_or_default();
-                Track {
-                    id: id.into(),
-                    url: format!("{host}/rest/stream?{auth}&id={id}{fmt}"),
-                    gain: 1.0,
-                    transcoded: format.is_some(),
-                    duration: s["duration"].as_f64().unwrap_or(0.0) as f32,
-                }
-            })
-            .collect(),
-    )
-}
-
-macro_rules! local {
-    ($titles:expr, $format:expr) => {
-        match tracks($titles, $format) {
-            Some(t) => t,
-            None => {
-                eprintln!("skip: no NAVIFY_TEST_LOCAL_* vars");
-                return;
+    titles
+        .iter()
+        .map(|t| {
+            let s = songs.iter().find(|s| s["title"] == *t).expect("song");
+            let id = s["id"].as_str().expect("id");
+            let fmt = format.map(|f| format!("&format={f}")).unwrap_or_default();
+            Track {
+                id: id.into(),
+                url: format!("{host}/rest/stream?{auth}&id={id}{fmt}"),
+                gain: 1.0,
+                transcoded: format.is_some(),
+                duration: s["duration"].as_f64().expect("duration") as f32,
             }
-        }
-    };
+        })
+        .collect()
 }
 
 fn secs(pcm: &[f32]) -> f32 {
@@ -67,41 +53,47 @@ fn near(got: f32, want: f32, tol: f32) {
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn gapless_across_sample_rates() {
-    let t = local!(&["One", "Two"], None);
+    let t = tracks(&["One", "Two"], None);
     near(secs(&render(rt(), t, RATE, 0.0, 0.0).expect("render")), 5.0, 0.005);
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn seek_in_raw_stream() {
-    let t = local!(&["One"], None);
+    let t = tracks(&["One"], None);
     near(secs(&render(rt(), t, RATE, 1.0, 0.0).expect("render")), 2.0, 0.005);
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn crossfade_overlaps_tracks() {
-    let t = local!(&["One", "Two"], None);
+    let t = tracks(&["One", "Two"], None);
     near(secs(&render(rt(), t, RATE, 0.0, 1.0).expect("render")), 4.0, 0.02);
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn mp3_and_opus_trim_padding() {
-    let t = local!(&["Three", "Four"], None);
+    let t = tracks(&["Three", "Four"], None);
     near(secs(&render(rt(), t, RATE, 0.0, 0.0).expect("render")), 5.0, 0.03);
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn seek_in_transcoded_stream() {
-    let t = local!(&["One"], Some("mp3"));
+    let t = tracks(&["One"], Some("mp3"));
     near(secs(&render(rt(), t, RATE, 1.0, 0.0).expect("render")), 2.0, 0.08);
 }
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "needs the local test server"]
 fn player_sends_events_on_null_device() {
     use navify_audio::{Event, Player};
     use std::time::{Duration, Instant};
-    let t = local!(&["One", "Two"], None);
+    let t = tracks(&["One", "Two"], None);
     let conf = std::env::temp_dir().join("navify-null-asound.conf");
     std::fs::write(&conf, "</usr/share/alsa/alsa.conf>\npcm.!default { type null }\n")
         .expect("conf");
@@ -123,8 +115,9 @@ fn player_sends_events_on_null_device() {
 }
 
 #[test]
+#[ignore = "needs the local test server"]
 fn gain_scales_samples() {
-    let t = local!(&["One"], None);
+    let t = tracks(&["One"], None);
     let peak = |g: f32| {
         let t = vec![Track { gain: g, ..t[0].clone() }];
         render(rt(), t, RATE, 0.0, 0.0).expect("render").iter().fold(0f32, |m, s| m.max(s.abs()))

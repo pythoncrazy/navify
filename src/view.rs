@@ -489,7 +489,7 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
                     artists_line(&s.artists, 12.0, 200.0),
                 ]
                 .spacing(2),
-                side(icon::HEART, starred, Message::Star(s.id.clone(), !starred)),
+                side(icon::HEART, starred, Message::Star(vec![s.id.clone()], !starred)),
             ]
             .spacing(12)
             .align_y(Alignment::Center)
@@ -589,7 +589,7 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
             text_input(hint, v)
                 .id("layer")
                 .on_input(move |v| Message::LField(n, v))
-                .on_submit(ok.clone())
+                .on_submit_maybe(named.then(|| ok.clone()))
                 .style(theme::modal_field)
                 .font(theme::fw(Weight::Normal))
                 .padding(10)

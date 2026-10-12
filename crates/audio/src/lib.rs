@@ -51,7 +51,16 @@ enum Cmd {
     Next(Option<Track>),
     Seek(f32),
     Gain(f32),
+    Device(String),
     Stop,
+}
+
+pub fn devices() -> Result<Vec<(String, String)>, String> {
+    cpal::default_host()
+        .output_devices()
+        .map_err(|e| e.to_string())?
+        .map(|d| Ok((d.id().map_err(|e| e.to_string())?.to_string(), d.to_string())))
+        .collect()
 }
 
 #[derive(Default)]
@@ -84,7 +93,7 @@ impl Player {
     }
 
     fn send(&self, cmd: Cmd) {
-        let _ = self.tx.send(cmd);
+        self.tx.send(cmd).expect("audio engine is running");
         self.th.unpark();
     }
 
@@ -114,6 +123,10 @@ impl Player {
 
     pub fn set_gain(&self, gain: f32) {
         self.send(Cmd::Gain(gain));
+    }
+
+    pub fn set_device(&self, id: &str) {
+        self.send(Cmd::Device(id.to_string()));
     }
 
     pub fn set_volume(&self, v: f32) {
@@ -377,7 +390,7 @@ struct Mixer {
     inc: Option<Source>,
     fade: (usize, usize),
     next: Option<Track>,
-    pre: Option<JoinHandle<Result<Source, String>>>,
+    pre: Option<(Track, JoinHandle<Result<Source, String>>)>,
     b: Vec<f32>,
 }
 
@@ -397,8 +410,7 @@ impl Mixer {
 
     fn reopen(&mut self, rate: u32, pos: f32) -> Result<(), String> {
         self.rate = rate;
-        self.next =
-            self.pre.take().and_then(|h| h.join().ok()?.ok()).map(|s| s.track).or(self.next.take());
+        self.next = self.pre.take().map(|p| p.0).or(self.next.take());
         self.cur = self
             .inc
             .take()
@@ -444,15 +456,15 @@ impl Mixer {
             && let Some(t) = self.next.take()
         {
             let (h, r) = (self.rt.clone(), self.rate);
-            self.pre = Some(thread::spawn(move || Source::open(t, &h, r, 0.0)));
+            self.pre = Some((t.clone(), thread::spawn(move || Source::open(t, &h, r, 0.0))));
         }
         let mut ev = None;
         if cf > 0.0
             && self.inc.is_none()
             && rem <= cf
-            && self.pre.as_ref().is_some_and(JoinHandle::is_finished)
+            && self.pre.as_ref().is_some_and(|p| p.1.is_finished())
         {
-            match self.pre.take().map(|h| h.join().unwrap_or_else(|_| Err("open failed".into()))) {
+            match self.pre.take().map(|p| p.1.join().expect("open thread")) {
                 Some(Ok(mut s)) => {
                     s.rs.set_resample_ratio_relative(rel, false)?;
                     ev = Some(Event::Started(s.track.id.clone()));
@@ -490,7 +502,7 @@ impl Mixer {
         let next = self
             .pre
             .take()
-            .map(|h| h.join().unwrap_or_else(|_| Err("open failed".into())))
+            .map(|p| p.1.join().expect("open thread"))
             .or_else(|| self.next.take().map(|t| Source::open(t, &self.rt, self.rate, 0.0)));
         self.cur = None;
         match next {
@@ -521,7 +533,7 @@ pub fn render(
     mix.next = it.next();
     let (mut out, mut buf) = (Vec::new(), vec![0.0; CHUNK * 2]);
     while mix.cur.is_some() {
-        while mix.pre.as_ref().is_some_and(|h| !h.is_finished()) {
+        while mix.pre.as_ref().is_some_and(|p| !p.1.is_finished()) {
             thread::sleep(Duration::from_millis(1));
         }
         let (n, ev) = mix.step(&mut buf, 1.0, crossfade).map_err(|e| e.to_string())?;
@@ -537,9 +549,14 @@ pub fn render(
 
 fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Handle) {
     let me = thread::current();
-    let open = || -> Option<(cpal::Stream, Producer<f32>, u32)> {
-        let dev = cpal::default_host().default_output_device()?;
-        let rate = dev.default_output_config().ok()?.sample_rate();
+    let open = |id: &str| -> Result<(cpal::Stream, Producer<f32>, u32), String> {
+        let host = cpal::default_host();
+        let dev = match id {
+            "" => host.default_output_device(),
+            id => host.device_by_id(&id.parse().map_err(|e: cpal::Error| e.to_string())?),
+        }
+        .ok_or("The audio output device is not available. Select a device in Settings.")?;
+        let rate = dev.default_output_config().map_err(|e| e.to_string())?.sample_rate();
         let (prod, mut cons) = RingBuffer::<f32>::new(rate as usize / 2);
         let (csh, etx, me, half) = (sh.clone(), tx.clone(), me.clone(), rate as usize / 4);
         let (mut read, mut vol) = (0u64, 0f32);
@@ -576,12 +593,13 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Ha
                 move |e| drop(etx.send(Event::Error(e.to_string()))),
                 None,
             )
-            .ok()?;
-        Some((stream, prod, rate))
+            .map_err(|e| e.to_string())?;
+        Ok((stream, prod, rate))
     };
     let mut mix = Mixer::new(rt, 0);
     let mut out: Option<(cpal::Stream, Producer<f32>)> = None;
-    let (mut written, mut running, mut idle) = (0u64, false, None::<Instant>);
+    let (mut written, mut running, mut idle, mut dev) =
+        (0u64, false, None::<Instant>, String::new());
     let mut buf = vec![0f32; CHUNK * 2];
     let (mut marks, mut events) = (VecDeque::<(u64, f32)>::new(), VecDeque::<(u64, Event)>::new());
     loop {
@@ -601,6 +619,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Ha
                 Cmd::Play(t, at) => (mix.cur, mix.inc, play) = (None, None, Some((t, at))),
                 Cmd::Next(t) => (mix.next, mix.pre) = (t, None),
                 Cmd::Gain(g) => mix.cur.iter_mut().for_each(|c| c.track.gain = g),
+                Cmd::Device(d) => (dev, out) = (d, None),
                 Cmd::Seek(s) => {
                     if let Err(e) = mix.seek(s) {
                         (mix.cur, mix.inc) = (None, None);
@@ -616,10 +635,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Ha
         let paused = sh.paused.load(Relaxed);
         if out.is_none() && !paused && (play.is_some() || mix.cur.is_some()) {
             let pos = f32::from_bits(sh.pos.load(Relaxed));
-            match open()
-                .ok_or_else(|| "no audio output device".to_string())
-                .and_then(|(s, p, rate)| mix.reopen(rate, pos).map(|_| (s, p)))
-            {
+            match open(&dev).and_then(|(s, p, rate)| mix.reopen(rate, pos).map(|_| (s, p))) {
                 Ok(o) => {
                     (written, running, idle) = (0, false, None);
                     sh.read.store(0, Relaxed);
@@ -650,7 +666,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Ha
                     (mix.cur, mix.inc) = (None, None);
                     (0, Some(Event::Error(e.to_string())))
                 });
-                let _ = prod.push_entire_slice(&buf[..n * 2]);
+                prod.push_entire_slice(&buf[..n * 2]).expect("ring buffer has room");
                 written += n as u64 * 2;
                 marks.extend(mix.inc.as_ref().or(mix.cur.as_ref()).map(|s| (written, s.pos())));
                 events.extend(ev.map(|e| (written, e)));
@@ -669,7 +685,9 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, rt: Ha
             && want != running
         {
             running = want;
-            let _ = if want { s.play() } else { s.pause() };
+            if let Err(e) = if want { s.play() } else { s.pause() } {
+                let _ = tx.send(Event::Error(e.to_string()));
+            }
         }
         let left = idle.get_or_insert_with(Instant::now).elapsed();
         match (&out, want) {

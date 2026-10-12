@@ -24,6 +24,10 @@ pub struct Settings {
     pub transcode_format: String,
     pub transcode_max_bitrate: u32,
     pub queue_sync: bool,
+    pub scrobble: bool,
+    pub fallback_db: f32,
+    pub device: String,
+    pub zoom: f32,
     pub window: (f32, f32),
 }
 
@@ -38,6 +42,10 @@ impl Default for Settings {
             transcode_format: String::new(),
             transcode_max_bitrate: 0,
             queue_sync: true,
+            scrobble: true,
+            fallback_db: 0.0,
+            device: String::new(),
+            zoom: 1.0,
             window: (1280.0, 800.0),
         }
     }
@@ -45,14 +53,22 @@ impl Default for Settings {
 
 impl Config {
     pub fn path() -> PathBuf {
-        dirs::config_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join("navify/config.json")
+        dirs::config_dir()
+            .expect("The system has no configuration directory.")
+            .join("navify/config.json")
     }
 
     pub fn load() -> Self {
-        std::fs::read_to_string(Self::path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let p = Self::path();
+        match std::fs::read_to_string(&p) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            r => r
+                .map_err(anyhow::Error::from)
+                .and_then(|s| Ok(serde_json::from_str(&s)?))
+                .unwrap_or_else(|e| {
+                    panic!("Cannot read the configuration file {}: {e}", p.display())
+                }),
+        }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -111,5 +127,8 @@ pub fn remember(server_id: &str, password: &str) -> Result<()> {
 }
 
 pub fn forget(server_id: &str) -> Result<()> {
-    entry(server_id)?.delete_credential().context("Could not delete the password.")
+    match entry(server_id)?.delete_credential() {
+        Err(keyring_core::Error::NoEntry) => Ok(()),
+        r => r.context("Could not delete the password."),
+    }
 }

@@ -18,6 +18,7 @@ fn main() {
     }
     let app = application(App::boot, App::update, App::view)
         .subscription(App::subscription)
+        .scale_factor(|a: &App| a.cfg.settings.zoom)
         .theme(|_: &App| Theme::Dark)
         .default_font(Font::with_name("Figtree"))
         .font(fonts[0])
@@ -45,7 +46,12 @@ fn main() {
     let steps = std::env::var("NAVIFY_STEPS").unwrap_or_default();
     let mut steps = steps.split(';').map(str::trim).filter(|s| !s.is_empty());
     let (tx, mut rx) = iced_test::futures::futures::channel::mpsc::channel(100);
-    let mut emu = Emulator::new(tx, &app, Mode::Immediate, Size::new(1280.0, 800.0));
+    let (w, h) = std::env::var("NAVIFY_SHOT_SIZE")
+        .ok()
+        .and_then(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
+        .unwrap_or((1280.0, 800.0));
+    let mut emu = Emulator::new(tx, &app, Mode::Immediate, Size::new(w, h));
+    emu.update(&app, Message::Resize(w, h));
     let mut next = Instant::now() + Duration::from_secs(secs);
     loop {
         while let Ok(e) = rx.try_recv() {
@@ -62,6 +68,7 @@ fn main() {
                 "down" => emu.update(&app, Message::Arrow(false)),
                 "enter" => emu.update(&app, Message::Enter),
                 "escape" => emu.update(&app, Message::MenuClose),
+                "select-all" => emu.update(&app, Message::SelectAll),
                 _ => emu.run(&app, iced_test::Instruction::parse(s).expect("step")),
             }
             next = Instant::now() + Duration::from_millis(700);
