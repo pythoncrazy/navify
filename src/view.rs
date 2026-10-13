@@ -7,7 +7,7 @@ use iced::widget::{
 use iced::{Background, Center, Color, Element, Fill, FillPortion, color, padding};
 
 use crate::api::Artist;
-use crate::app::{App, Lib, MenuKind, Message, act, set};
+use crate::app::{App, Lib, MenuKind, Message, act, set, task};
 use crate::pages;
 use crate::theme::{
     self, ACCENT, BG, Btn, CHIP, ELEVATED, PANEL, SUB, TEXT, Txt, bold, fill, icon as i, sub, txt,
@@ -267,6 +267,9 @@ fn top_bar(app: &App) -> El<'_> {
 
 fn lib_panel(app: &App) -> El<'_> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.cfg.settings.lib_collapsed);
+    let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
+    let hit = |name: &str| name.to_lowercase().contains(&q);
+    let sort = app.cfg.settings.lib_sort;
     let item = |art: El<'static>, title: &str, sub: &str, route: String| -> El<'static> {
         let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
         let on = !app.ctx.is_empty() && same(&app.ctx);
@@ -306,7 +309,7 @@ fn lib_panel(app: &App) -> El<'_> {
         (f == 3, i::USER, dim, "All artists", "artists"),
         (f == 0, i::FOLDER, dim, "Folders", "folders"),
     ];
-    let pins = pins.into_iter().filter(|p| p.0);
+    let pins = pins.into_iter().filter(|p| p.0 && hit(p.3));
     let pins = pins.map(|(_, c, (bg, fg), t, r)| {
         let art = art(48.0, i(c, 0.0).color(fg), bg);
         item(art, t, "Library", r.into())
@@ -314,24 +317,69 @@ fn lib_panel(app: &App) -> El<'_> {
     let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
         let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
             let s = format!("Playlist \u{2022} {}", p.owner);
-            (&p.cover, &p.name, s, format!("playlist:{}", p.id), false)
+            (&p.cover, &p.name, s, format!("playlist:{}", p.id), &p.owner)
         });
         let als = l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
             let s = format!("Album \u{2022} {}", a.artist);
-            (&a.cover, &a.name, s, format!("album:{}", a.id), false)
+            (&a.cover, &a.name, s, format!("album:{}", a.id), &a.artist)
         });
         let ars = l.artists.iter().filter(|_| matches!(f, 0 | 3)).map(|a| {
             let r = format!("artist:{}", a.id);
-            (&a.cover, &a.name, "Artist".into(), r, true)
+            (&a.cover, &a.name, "Artist".into(), r, &a.name)
         });
         pls.chain(als).chain(ars)
     });
-    let rows = rows.map(|(c, n, s, r, round)| item(cover(app, c, 128, 48.0, round), n, &s, r));
-    let liked = (f < 2).then(|| item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into()));
+    let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();
+    match sort {
+        1 => rows.sort_by_cached_key(|r| r.1.to_lowercase()),
+        2 => rows.sort_by_cached_key(|r| (r.4.to_lowercase(), r.1.to_lowercase())),
+        _ => {}
+    }
+    let rows = rows.into_iter().map(|(c, n, s, r, _)| {
+        let round = r.starts_with("artist:");
+        item(cover(app, c, 128, 48.0, round), n, &s, r)
+    });
+    let liked = (f < 2 && hit("Liked Songs"))
+        .then(|| item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into()));
     let list = Column::new().push(liked).extend(pins).extend(rows);
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
+    let find = task(|a| {
+        a.lib_find = a.lib_find.is_none().then(String::new);
+        iced::widget::operation::focus("libfind")
+    });
+    let find = tip(
+        icon_btn(i::SEARCH, 16.0, find),
+        "Search in Your Library",
+        Bottom,
+    );
+    let field = app.lib_find.as_ref().map(|v| {
+        let style = theme::input([CHIP, CHIP], [CHIP, CHIP], [0.0, 0.0], 4.0);
+        let t = text_input("Search in Your Library", v).id("libfind");
+        let t = t.on_input(|v| act(move |a| a.lib_find = Some(v.clone())));
+        t.style(style)
+            .font(theme::fw(Normal))
+            .size(14)
+            .padding([6, 8])
+            .width(Fill)
+    });
+    let names = ["Custom order", "Alphabetical", "Creator"];
+    let order = row![txt(names[sort as usize], 14.0), i(i::LIST, 16.0)].spacing(8);
+    let order = theme::link_btn(
+        order.align_y(Center),
+        SUB,
+        set(|s, n| s.lib_sort = n, (sort + 1) % 3),
+    );
+    let order = tip(order.padding([4, 8]), "Change the sort order", Bottom);
+    let gap = field.is_none().then(|| Space::new().width(Fill));
+    let tools = row![find]
+        .push(field)
+        .push(gap)
+        .push(order)
+        .spacing(8)
+        .align_y(Center);
+    let tools = (!mini).then(|| container(tools).padding([0, 4]));
     let list = scrollable(list).style(theme::scroll).height(Fill);
-    let body = column![container(head).padding([4, 8]), chips, list];
+    let body = column![container(head).padding([4, 8]), chips, tools, list];
     let body = container(body.spacing(12).padding(8)).width(w).height(Fill);
     body.style(fill(PANEL, 8.0)).into()
 }
@@ -371,7 +419,9 @@ fn player_bar(app: &App) -> El<'_> {
         None => {
             let rail = Space::new().width(Fill).height(4);
             let rail = container(rail).style(fill(theme::TRACK, 2.0));
-            container(rail).center_y(16).padding([0, 48]).into()
+            let none = || sub("-:--", 12.0).width(48);
+            let row = row![none().align_x(iced::Right), rail, none()].spacing(8);
+            container(row.align_y(Center)).center_y(16).into()
         }
         Some(_) => row![at, seek, total].spacing(8).align_y(Center).into(),
     };

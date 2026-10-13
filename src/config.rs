@@ -35,6 +35,7 @@ pub struct Settings {
     pub panels: (f32, f32),
     pub lib_collapsed: bool,
     pub banners: bool,
+    pub lib_sort: u8,
 }
 
 impl Default for Settings {
@@ -59,6 +60,7 @@ impl Default for Settings {
             panels: (300.0, 320.0),
             lib_collapsed: false,
             banners: false,
+            lib_sort: 0,
         }
     }
 }

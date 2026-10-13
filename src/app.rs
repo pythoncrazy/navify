@@ -286,6 +286,7 @@ pub struct App {
     pub save_seq: u64,
     pub panel: u8,
     pub lib_filter: u8,
+    pub lib_find: Option<String>,
     pub drag: Option<u8>,
     pub volume: f32,
     pub muted: bool,
