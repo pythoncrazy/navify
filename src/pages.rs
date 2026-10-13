@@ -19,8 +19,8 @@ type Cols = (f32, f32, f32);
 pub const PAD: f32 = 24.0;
 pub const ROW: f32 = 56.0;
 pub const GRID_Y: f32 = 136.0;
-pub const BAR: f32 = 104.0;
-pub const HEAD: f32 = 45.0;
+pub const BAR: f32 = 84.0;
+pub const HEAD: f32 = 53.0;
 const GREY: Color = color!(0x535353);
 
 pub fn head_color(app: &App, id: &str) -> Color {
@@ -94,7 +94,7 @@ fn table_head<'a>(c: Cols) -> El<'a> {
             .align_y(Alignment::Center),
         sep(),
     ])
-    .padding(theme::pad(0.0, PAD, 8.0, PAD))
+    .padding(theme::pad(0.0, PAD, 16.0, PAD))
     .into()
 }
 
@@ -380,24 +380,18 @@ pub fn disc_view(app: &App) -> Vec<&Album> {
         .collect()
 }
 
-fn discography<'a>(app: &'a App, arg: &str) -> El<'a> {
-    let (id, f) = arg.split_once(':').unwrap_or((arg, "all"));
-    let Some((a, albums)) = app.data::<(Artist, Vec<Album>)>(&format!("artist:{id}")) else {
-        return Space::new().into();
-    };
+fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
     let grid_on = app.cfg.settings.disc_grid;
-    let chips = Row::with_children(
-        GROUPS.iter().filter(|(g, _)| *g == "all" || albums.iter().any(|x| group(x) == *g)).map(
-            |(g, l)| {
-                button(theme::txt(if *g == "all" { "All" } else { l }, 14.0, Weight::Normal))
-                    .on_press(Message::Nav(format!("discography:{id}:{g}")))
-                    .style(theme::chip(f == *g))
-                    .padding([6, 12])
-                    .into()
-            },
-        ),
-    )
-    .spacing(8);
+    let chips = GROUPS
+        .iter()
+        .filter(|(g, _)| *g == "all" || albums.iter().any(|x| group(x) == *g))
+        .map(|(g, l)| -> El<'a> {
+            button(theme::txt(if *g == "all" { "All" } else { l }, 14.0, Weight::Normal))
+                .on_press(Message::Nav(format!("discography:{id}:{g}")))
+                .style(theme::chip(f == *g))
+                .padding([6, 12])
+                .into()
+        });
     let tool = |c: char, on: bool, m: Message| -> El<'a> {
         button(i(c, 20.0).center())
             .width(32)
@@ -418,21 +412,27 @@ fn discography<'a>(app: &'a App, arg: &str) -> El<'a> {
     .padding(0)
     .style(theme::link(theme::SUB))
     .on_press(Message::DiscOrder);
+    row![Row::with_children(chips).spacing(8), Space::new().width(Fill), order]
+        .push(tool(icon::LIST, !grid_on, Message::Set(Set::DiscGrid(false))))
+        .push(tool(icon::GRID, grid_on, Message::Set(Set::DiscGrid(true))))
+        .spacing(16)
+        .align_y(Alignment::Center)
+        .into()
+}
+
+fn discography<'a>(app: &'a App, arg: &str) -> El<'a> {
+    let (id, f) = arg.split_once(':').unwrap_or((arg, "all"));
+    let Some((a, albums)) = app.data::<(Artist, Vec<Album>)>(&format!("artist:{id}")) else {
+        return Space::new().into();
+    };
+    let grid_on = app.cfg.settings.disc_grid;
     let head = container(
         column![
             button(theme::ell(&a.name, app.main_w() - 2.0 * PAD, 32.0, Weight::Bold))
                 .padding(0)
                 .style(theme::link(theme::TEXT))
                 .on_press(Message::Nav(format!("artist:{id}"))),
-            row![
-                chips,
-                Space::new().width(Fill),
-                order,
-                tool(icon::LIST, !grid_on, Message::Set(Set::DiscGrid(false))),
-                tool(icon::GRID, grid_on, Message::Set(Set::DiscGrid(true))),
-            ]
-            .spacing(16)
-            .align_y(Alignment::Center),
+            disc_tools(app, albums, id, f),
         ]
         .spacing(16),
     )
@@ -800,7 +800,7 @@ fn actions<'a>(app: &App, play: Message, shuffle: Message, extra: Vec<El<'a>>) -
             .spacing(PAD)
             .align_y(Alignment::Center),
     )
-    .padding(PAD)
+    .padding(theme::pad(12.0, PAD, 16.0, PAD))
     .height(BAR)
     .into()
 }
@@ -952,14 +952,34 @@ fn detail<'a>(app: &'a App) -> El<'a> {
 
 pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let off = app.scrolls.get(&app.route).map_or(0.0, |s| s.0);
-    let d = detail_of(app)?;
+    if let Some(arg) = app.route.strip_prefix("discography:") {
+        let (id, f) = arg.split_once(':').unwrap_or((arg, "all"));
+        let (_, albums) = app.data::<(Artist, Vec<Album>)>(&format!("artist:{id}"))?;
+        return (off > GRID_Y - 64.0).then(|| {
+            container(disc_tools(app, albums, id, f))
+                .padding([0.0, PAD])
+                .center_y(64)
+                .width(Fill)
+                .style(theme::fill(theme::PANEL, 0.0))
+                .into()
+        });
+    }
+    let (title, color, cols, play) = match app.data::<(Artist, Vec<Album>)>(&app.route) {
+        Some((a, _)) => {
+            (&a.name[..], head_color(app, &a.cover), None, Message::PlayCtx(app.route.clone(), 0))
+        }
+        None => {
+            let d = detail_of(app)?;
+            (d.title, d.color, Some(d.cols), Message::PlayAt(app.route.clone(), 0))
+        }
+    };
     let top = art_px(app) + 2.0 * PAD;
     (off > top - 64.0).then(|| {
         column![
             container(
                 row![
-                    play_btn(app, 48.0, &app.route, Message::PlayAt(app.route.clone(), 0)),
-                    theme::ell(d.title, app.main_w() - 120.0, 24.0, Weight::Bold)
+                    play_btn(app, 48.0, &app.route, play),
+                    theme::ell(title, app.main_w() - 120.0, 24.0, Weight::Bold)
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center)
@@ -967,11 +987,11 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
             .padding([0.0, PAD])
             .center_y(64)
             .width(Fill)
-            .style(theme::fill(theme::shade(d.color, 0.5), 0.0)),
+            .style(theme::fill(theme::shade(color, 0.5), 0.0)),
         ]
         .push(
-            (off > top + BAR - 64.0)
-                .then(|| container(table_head(d.cols)).style(theme::fill(color!(0x1a1a1a), 0.0))),
+            cols.filter(|_| off > top + BAR - 64.0)
+                .map(|c| container(table_head(c)).style(theme::fill(color!(0x1a1a1a), 0.0))),
         )
         .into()
     })
