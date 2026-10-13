@@ -65,6 +65,12 @@ fn blk<'a>(w: f32, h: f32, r: f32) -> El<'a> {
     b.style(fill(theme::CHIP, r)).into()
 }
 
+fn fade<'a>(top: Color, h: f32, body: impl Into<El<'a>>) -> El<'a> {
+    let g = container(Space::new()).width(Fill).height(h);
+    let g = g.style(theme::down(&[(0.0, top), (1.0, theme::PANEL)]));
+    stack![body.into()].push_under(g).into()
+}
+
 fn rule<'a>() -> El<'a> {
     let line = container(Space::new().width(Fill).height(1));
     line.style(fill(theme::tint(0.1), 0.0)).into()
@@ -207,13 +213,18 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let r = r.spacing(16).padding([0, 16]).height(ROW).align_y(Center);
     let a = [[0.0, 0.1], [0.3; 2]][usize::from(sel)][usize::from(hot)];
     let (k, enter) = (key.to_string(), hk.clone());
-    mouse_area(container(r).style(fill(theme::tint(a), 4.0)))
-        .on_press(act(move |a| a.pick(k.clone(), n)))
-        .on_double_click(at)
-        .on_right_press(Message::RowMenu(key.into(), n))
-        .on_enter(act(move |a| a.hover = Some(enter.clone())))
-        .on_exit(act(move |a| a.hover = a.hover.take().filter(|h| *h != hk)))
-        .into()
+    let r = container(r);
+    mouse_area(if a > 0.0 {
+        r.style(fill(theme::tint(a), 4.0))
+    } else {
+        r
+    })
+    .on_press(act(move |a| a.pick(k.clone(), n)))
+    .on_double_click(at)
+    .on_right_press(Message::RowMenu(key.into(), n))
+    .on_enter(act(move |a| a.hover = Some(enter.clone())))
+    .on_exit(act(move |a| a.hover = a.hover.take().filter(|h| *h != hk)))
+    .into()
 }
 
 fn span(top: f32, bottom: f32, row_h: f32, n: usize, extra: usize) -> (usize, usize) {
@@ -532,14 +543,11 @@ fn home(app: &App) -> Option<El<'_>> {
         shelf(t, Some(format!("albums:{s}")), cards)
     });
     let c = h[0].first().map_or(GREY, |a| head_color(app, &a.cover));
-    let height = 200.0 + 5.0 * (app.grid().1 + 100.0);
     let pls = pls.iter().take(k).map(|p| playlist_card(app, p));
     let pls = shelf("Your playlists", None, pls);
     let tiles = container(Column::from_vec(rows.collect()).spacing(8)).padding([0.0, PAD]);
     let col = column![tiles].extend(shelves).push(pls).spacing(40);
-    let col = col.padding([PAD, 0.0]);
-    let fade = theme::fade(theme::shade(c, 0.7), 332.0 / height);
-    Some(container(col).width(Fill).style(fade).into())
+    Some(fade(theme::shade(c, 0.7), 332.0, col.padding([PAD, 0.0])))
 }
 
 struct Page<'a> {
@@ -559,7 +567,7 @@ fn play_all(route: &str) -> Message {
     }
 }
 
-fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
+fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let px = art_px(app);
     let title = |tw: f32| {
         let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
@@ -597,8 +605,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
     let bar = row![play, shuffle].extend(p.extra).spacing(PAD);
     let bar = container(bar.align_y(Center)).height(BAR);
     let bar = bar.padding(Padding::new(PAD).top(12).bottom(16));
-    let fade = theme::fade(theme::shade(p.color, 0.4), 232.0 / height);
-    let rest = container(column![bar, body]).width(Fill).style(fade);
+    let rest = fade(theme::shade(p.color, 0.4), 232.0, column![bar, body]);
     column![hero, rest].into()
 }
 
@@ -702,8 +709,7 @@ fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
     let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
     let body = column![table_head(c), vlist(app, songs, &app.route, c, y0)];
-    let height = BAR + HEAD + songs.len() as f32 * ROW + PAD;
-    Some(page(app, p, body.into(), height))
+    Some(page(app, p, body.into()))
 }
 
 pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
@@ -810,8 +816,7 @@ fn artist(app: &App) -> Option<El<'_>> {
         extra: vec![follow.into(), dots(MenuKind::Artist(a.clone()))],
         banner,
     };
-    let height = BAR + 600.0 + 2.0 * (app.grid().1 + 100.0);
-    Some(page(app, p, body.into(), height))
+    Some(page(app, p, body.into()))
 }
 
 fn strip_html(s: &str) -> String {

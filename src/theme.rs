@@ -233,10 +233,6 @@ pub fn down(stops: &[(f32, Color)]) -> impl Fn(&Theme) -> container::Style + use
     fill(stops.iter().fold(g, |g, s| g.add_stop(s.0, s.1)), 0.0)
 }
 
-pub fn fade(top: Color, stop: f32) -> impl Fn(&Theme) -> container::Style {
-    down(&[(0.0, top), (stop.clamp(0.0, 1.0), PANEL), (1.0, PANEL)])
-}
-
 pub fn color_of(s: &str) -> Color {
     const P: [u32; 12] = [
         0xdc148c, 0x006450, 0x8400e7, 0x1e3264, 0xe8115b, 0x27856a, 0x477d95, 0xe13300, 0xba5d07,
