@@ -739,6 +739,17 @@ impl Session {
     }
 
     pub async fn top_songs(&self, id: &str) -> Result<Vec<Song>> {
+        if self.server.native {
+            let q = [
+                ("artists_id", id.to_string()),
+                ("_sort", "play_count".into()),
+                ("_order", "DESC".into()),
+                ("_start", "0".into()),
+                ("_end", "10".into()),
+            ];
+            let (v, _) = self.nd::<Vec<Song>>(Method::GET, "song", &q).await?;
+            return Ok(v);
+        }
         let by = if self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
             ("id", id.to_string())
         } else {

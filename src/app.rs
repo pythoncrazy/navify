@@ -1962,7 +1962,7 @@ impl App {
                 self.want_covers(ids)
             }
             Message::Popular => {
-                self.popular_all = true;
+                self.popular_all = !self.popular_all;
                 Task::none()
             }
             Message::DiscChip(n) => {
