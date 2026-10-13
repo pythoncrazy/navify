@@ -1914,7 +1914,8 @@ fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
     let (w, h, px) = (img.width(), img.height(), img.into_rgba8().into_raw());
-    Ok((color, image::Handle::from_rgba(w, h, px), (w * h * 4) as usize))
+    let n = (w * h * 4) as usize;
+    Ok((color, image::Handle::from_rgba(w, h, px), n))
 }
 
 fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {
