@@ -30,6 +30,7 @@ pub struct Settings {
     pub zoom: f32,
     pub window: (f32, f32),
     pub remaining: bool,
+    pub disc_grid: bool,
 }
 
 impl Default for Settings {
@@ -49,6 +50,7 @@ impl Default for Settings {
             zoom: 1.0,
             window: (1280.0, 800.0),
             remaining: false,
+            disc_grid: false,
         }
     }
 }

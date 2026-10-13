@@ -98,7 +98,8 @@ fn table_head<'a>(c: Cols) -> El<'a> {
     .into()
 }
 
-fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'a> {
+fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> {
+    let pop = key.starts_with("artist:");
     let hk = format!("{key}#{n}");
     let hot = app.hover.as_deref() == Some(hk.as_str());
     let sel = app.sel.as_ref().is_some_and(|x| x.0 == key) && app.picked.contains(&n);
@@ -122,14 +123,12 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'
             .into(),
     };
     let tw = c.0 - if art { 52.0 } else { 0.0 };
-    let title = column![
-        theme::ell(&s.title, tw, 16.0, Weight::Normal).color(if cur {
-            theme::ACCENT
-        } else {
-            theme::TEXT
-        }),
-        artists_line(&s.artists, 14.0, tw),
-    ]
+    let title = column![theme::ell(&s.title, tw, 16.0, Weight::Normal).color(if cur {
+        theme::ACCENT
+    } else {
+        theme::TEXT
+    }),]
+    .push((!pop).then(|| artists_line(&s.artists, 14.0, tw)))
     .spacing(2);
     let date = || {
         const M: [&str; 12] =
@@ -163,14 +162,23 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &'a str, c: Cols) -> El<'
             .align_y(Alignment::Center)
             .width(c.0)
     ]
-    .push((c.1 > 0.0).then(|| {
-        container(
-            button(theme::ell(&s.album, c.1, 14.0, Weight::Normal))
-                .padding(0)
-                .style(theme::link(theme::SUB))
-                .on_press(Message::Nav(format!("album:{}", s.album_id))),
-        )
-        .width(c.1)
+    .push((c.1 > 0.0).then(|| -> El<'a> {
+        match pop {
+            true => theme::sub(
+                if s.play_count > 0 { fmt_n(s.play_count as usize) } else { String::new() },
+                14.0,
+            )
+            .width(c.1)
+            .into(),
+            false => container(
+                button(theme::ell(&s.album, c.1, 14.0, Weight::Normal))
+                    .padding(0)
+                    .style(theme::link(theme::SUB))
+                    .on_press(Message::Nav(format!("album:{}", s.album_id))),
+            )
+            .width(c.1)
+            .into(),
+        }
     }))
     .push((c.2 > 0.0).then(|| theme::sub(date(), 14.0).width(c.2)))
     .push(last)
@@ -281,6 +289,244 @@ fn album_card<'a>(app: &App, a: &Album, sub: String) -> El<'a> {
     card(app, &a.cover, &a.name, sub, r.clone(), false, Some(Message::PlayCtx(r, 0)))
 }
 
+pub fn kind(a: &Album) -> &'static str {
+    let t = |k: &str| a.release_types.iter().any(|x| x.eq_ignore_ascii_case(k));
+    match () {
+        _ if a.compilation || t("compilation") => "Compilation",
+        _ if t("single") => "Single",
+        _ if t("ep") => "EP",
+        _ => "Album",
+    }
+}
+
+const GROUPS: [(&str, &str); 4] = [
+    ("all", "Popular releases"),
+    ("album", "Albums"),
+    ("single", "Singles and EPs"),
+    ("compilation", "Compilations"),
+];
+
+fn group(a: &Album) -> &'static str {
+    match kind(a) {
+        "Album" => "album",
+        "Compilation" => "compilation",
+        _ => "single",
+    }
+}
+
+fn released(a: &Album) -> String {
+    a.release_date.clone().max(format!("{:04}", a.year))
+}
+
+fn year_kind(a: &Album) -> String {
+    match a.year {
+        0 => kind(a).into(),
+        y => format!("{y} \u{2022} {}", kind(a)),
+    }
+}
+
+pub fn disc_shelf<'a>(app: &App, albums: &'a [Album]) -> Vec<&'a Album> {
+    let mut v: Vec<&Album> = albums.iter().collect();
+    v.sort_by_key(|a| std::cmp::Reverse(released(a)));
+    match app.disc_chip {
+        0 if v.len() > 1 => v[1..].sort_by_key(|a| std::cmp::Reverse(a.play_count)),
+        0 => {}
+        n => v.retain(|a| group(a) == GROUPS[n as usize].0),
+    }
+    v.truncate(app.grid().0);
+    v
+}
+
+fn disc_list<'a>(app: &'a App, id: &str, f: &str) -> Vec<&'a Album> {
+    app.data::<(Artist, Vec<Album>)>(&format!("artist:{id}")).map_or_else(Vec::new, |(_, al)| {
+        let mut v: Vec<&Album> = al.iter().filter(|a| f == "all" || group(a) == f).collect();
+        v.sort_by_key(|a| std::cmp::Reverse(released(a)));
+        if app.disc_old {
+            v.reverse();
+        }
+        v
+    })
+}
+
+const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
+
+fn disc_h(app: &App, a: &Album) -> f32 {
+    let n = app
+        .data::<(Album, Vec<Song>)>(&format!("album:{}", a.id))
+        .map(|x| x.1.len())
+        .filter(|n| *n > 0)
+        .unwrap_or(a.song_count as usize);
+    DISC_HEAD + n as f32 * ROW + 48.0
+}
+
+pub fn disc_view(app: &App) -> Vec<&Album> {
+    let Some(arg) = app.route.strip_prefix("discography:") else { return Vec::new() };
+    let (id, f) = arg.split_once(':').unwrap_or((arg, "all"));
+    let list = disc_list(app, id, f);
+    let (off, view) = app.scroll();
+    if app.cfg.settings.disc_grid {
+        let (cols, cw) = app.grid();
+        let row = |y: f32| ((y - GRID_Y) / (cw + 52.0)).max(0.0) as usize;
+        let (lo, hi) = (row(off).saturating_sub(1) * cols, (row(off + view) + 2) * cols);
+        return list[lo.min(list.len())..hi.min(list.len())].to_vec();
+    }
+    let mut y = GRID_Y;
+    list.into_iter()
+        .filter(|a| {
+            let h = disc_h(app, a);
+            y += h;
+            y > off - view && y - h < off + 2.0 * view
+        })
+        .collect()
+}
+
+fn discography<'a>(app: &'a App, arg: &str) -> El<'a> {
+    let (id, f) = arg.split_once(':').unwrap_or((arg, "all"));
+    let Some((a, albums)) = app.data::<(Artist, Vec<Album>)>(&format!("artist:{id}")) else {
+        return Space::new().into();
+    };
+    let grid_on = app.cfg.settings.disc_grid;
+    let chips = Row::with_children(
+        GROUPS.iter().filter(|(g, _)| *g == "all" || albums.iter().any(|x| group(x) == *g)).map(
+            |(g, l)| {
+                button(theme::txt(if *g == "all" { "All" } else { l }, 14.0, Weight::Normal))
+                    .on_press(Message::Nav(format!("discography:{id}:{g}")))
+                    .style(theme::chip(f == *g))
+                    .padding([6, 12])
+                    .into()
+            },
+        ),
+    )
+    .spacing(8);
+    let tool = |c: char, on: bool, m: Message| -> El<'a> {
+        button(i(c, 20.0).center())
+            .width(32)
+            .height(32)
+            .padding(0)
+            .style(theme::link(if on { theme::TEXT } else { theme::SUB }))
+            .on_press(m)
+            .into()
+    };
+    let order = button(
+        row![
+            theme::txt("Release date", 14.0, Weight::Normal),
+            i(if app.disc_old { icon::UP } else { icon::DOWN }, 16.0)
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
+    )
+    .padding(0)
+    .style(theme::link(theme::SUB))
+    .on_press(Message::DiscOrder);
+    let head = container(
+        column![
+            button(theme::ell(&a.name, app.main_w() - 2.0 * PAD, 32.0, Weight::Bold))
+                .padding(0)
+                .style(theme::link(theme::TEXT))
+                .on_press(Message::Nav(format!("artist:{id}"))),
+            row![
+                chips,
+                Space::new().width(Fill),
+                order,
+                tool(icon::LIST, !grid_on, Message::Set(Set::DiscGrid(false))),
+                tool(icon::GRID, grid_on, Message::Set(Set::DiscGrid(true))),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(16),
+    )
+    .padding(theme::pad(PAD, PAD, 0.0, PAD))
+    .height(GRID_Y);
+    let list = disc_list(app, id, f);
+    if grid_on {
+        let (cols, cw) = app.grid();
+        let g = grid(app, list.len(), cols, cw + 52.0, GRID_Y, |n| {
+            album_card(app, list[n], year_kind(list[n]))
+        });
+        return column![head, g].into();
+    }
+    let c = cols(app, false, false);
+    let (off, view) = app.scroll();
+    let (mut y, mut gap, mut col) = (GRID_Y, 0.0, Column::new().push(head));
+    for al in list {
+        let h = disc_h(app, al);
+        if y + h < off - 200.0 || y > off + view + 200.0 {
+            gap += h;
+        } else {
+            col = col.push(Space::new().height(gap)).push(release(app, al, y, c));
+            gap = 0.0;
+        }
+        y += h;
+    }
+    col.push(Space::new().height(gap)).into()
+}
+
+fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
+    let key = format!("album:{}", al.id);
+    let songs = app.data::<(Album, Vec<Song>)>(&key).map(|x| &x.1[..]).filter(|s| !s.is_empty());
+    let n = songs.map_or(al.song_count as usize, <[Song]>::len);
+    let (off, view) = app.scroll();
+    let top = y + DISC_HEAD;
+    let lo = (((off - top) / ROW).max(0.0) as usize).saturating_sub(6).min(n);
+    let hi = ((((off + view - top) / ROW).max(0.0)) as usize + 7).clamp(lo, n);
+    let on = app.is_starred(&al.id, al.starred);
+    let count = format!("{} song{}", al.song_count, if al.song_count == 1 { "" } else { "s" });
+    let meta =
+        [Some(kind(al).to_string()), (al.year > 0).then(|| al.year.to_string()), Some(count)]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" \u{2022} ");
+    let tw = app.main_w() - 3.0 * PAD - 136.0;
+    let head = row![
+        button(cover(app, &al.cover, 300, 136.0, false))
+            .padding(0)
+            .style(theme::link(theme::TEXT))
+            .on_press(Message::Nav(key.clone())),
+        column![
+            button(theme::ell(&al.name, tw, 32.0, Weight::Bold))
+                .padding(0)
+                .style(theme::link(theme::TEXT))
+                .on_press(Message::Nav(key.clone())),
+            theme::sub(meta, 14.0),
+            Space::new().height(Fill),
+            row![
+                play_btn(app, 40.0, &key, Message::PlayCtx(key.clone(), 0)),
+                button(theme::heart(on, 24.0).center())
+                    .width(32)
+                    .height(32)
+                    .padding(0)
+                    .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
+                    .on_press(Message::Star(vec![al.id.clone()], !on)),
+                bar_btn(icon::DOTS, Message::Menu(Box::new(MenuKind::Album(Box::new(al.clone()))))),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(8)
+        .height(136),
+    ]
+    .spacing(PAD)
+    .padding([0.0, PAD])
+    .height(136);
+    let blk =
+        |w: f32| container(Space::new()).width(w).height(14).style(theme::fill(theme::CHIP, 4.0));
+    let rows = (lo..hi).map(|k| -> El<'a> {
+        match songs {
+            Some(s) => container(track(app, &s[k], k, &key, c)).padding([0.0, PAD]).into(),
+            None => container(row![blk(16.0), blk(240.0)].spacing(16).align_y(Alignment::Center))
+                .padding([0.0, PAD + 16.0])
+                .center_y(ROW)
+                .into(),
+        }
+    });
+    column![head, Space::new().height(16), table_head(c), Space::new().height(lo as f32 * ROW)]
+        .extend(rows)
+        .push(Space::new().height((n - hi) as f32 * ROW + 48.0))
+        .into()
+}
+
 fn artist_card<'a>(app: &App, a: &Artist) -> El<'a> {
     card(app, &a.cover, &a.name, "Artist".into(), format!("artist:{}", a.id), true, None)
 }
@@ -384,7 +630,7 @@ pub fn route<'a>(app: &'a App) -> El<'a> {
     let (kind, arg) = app.route.split_once(':').unwrap_or((app.route.as_str(), ""));
     if (!matches!(kind, "settings" | "lyrics" | "search" | "genres" | "login")
         || (kind == "search" && !arg.is_empty()))
-        && let Some(s) = state(app, &app.route)
+        && let Some(s) = state(app, &app.key_of(&app.route))
     {
         return s;
     }
@@ -392,6 +638,7 @@ pub fn route<'a>(app: &'a App) -> El<'a> {
         "home" => home(app),
         "album" | "playlist" | "liked" | "songs" => detail(app),
         "artist" => artist(app),
+        "discography" => discography(app, arg),
         "search" | "genres" => search(app, arg),
         "albums" | "genre" => albums(app, kind, arg),
         "artists" => artists(app),
@@ -604,7 +851,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
         let year = if a.year > 0 { format!(" \u{2022} {}", a.year) } else { String::new() };
         return Some(Detail {
             art: cover(app, &a.cover, 300, px, false),
-            kind: if a.song_count <= 6 && a.duration < 1800.0 { "EP" } else { "Album" },
+            kind: kind(a),
             title: &a.name,
             meta: meta_line(
                 lead.into(),
@@ -755,7 +1002,7 @@ fn artist<'a>(app: &'a App) -> El<'a> {
     );
     let on = app.is_starred(&a.id, a.starred);
     let n = if app.popular_all { 10 } else { 5 }.min(top.len());
-    let c3 = cols(app, false, false);
+    let c3 = cols(app, true, false);
     let popular = (!top.is_empty()).then(|| {
         column![heading("Popular", None)]
             .extend(
@@ -779,8 +1026,42 @@ fn artist<'a>(app: &'a App) -> El<'a> {
             .spacing(8)
     });
     let k = app.grid().0;
-    let mut disc: Vec<&Album> = albums.iter().collect();
-    disc.sort_by_key(|x| std::cmp::Reverse(x.year));
+    let appears = app.data::<Vec<Album>>(&format!("appears:{id}"));
+    let chips = Row::with_children(
+        GROUPS
+            .iter()
+            .enumerate()
+            .filter(|(n, (g, _))| *n == 0 || albums.iter().any(|x| group(x) == *g))
+            .map(|(n, (_, l))| {
+                button(theme::txt(*l, 14.0, Weight::Normal))
+                    .on_press(Message::DiscChip(n as u8))
+                    .style(theme::chip(app.disc_chip as usize == n))
+                    .padding([6, 12])
+                    .into()
+            }),
+    )
+    .spacing(8);
+    let latest = |n: usize, x: &Album| match (n, app.disc_chip) {
+        (0, 0) => format!("Latest Release \u{2022} {}", kind(x)),
+        _ => year_kind(x),
+    };
+    let discog: El = column![
+        heading(
+            "Discography",
+            Some(format!("discography:{id}:{}", GROUPS[app.disc_chip as usize].0))
+        ),
+        container(chips).padding([0.0, PAD]),
+        container(Row::with_children(
+            disc_shelf(app, albums).into_iter().enumerate().map(|(n, x)| album_card(
+                app,
+                x,
+                latest(n, x)
+            ))
+        ))
+        .padding([0, 12]),
+    ]
+    .spacing(12)
+    .into();
     let h = BAR + 600.0 + 2.0 * (app.grid().1 + 100.0);
     column![
         hero,
@@ -801,33 +1082,19 @@ fn artist<'a>(app: &'a App) -> El<'a> {
                 ),
                 column![]
                     .push(popular)
-                    .push((!disc.is_empty()).then(|| {
-                        shelf(
-                            "Discography",
-                            None,
-                            disc.iter()
-                                .take(k)
-                                .map(|x| {
-                                    let kind = if x.song_count <= 6 && x.duration < 1800.0 {
-                                        "EP"
-                                    } else {
-                                        "Album"
-                                    };
-                                    let year = if x.year > 0 {
-                                        format!("{} \u{2022} ", x.year)
-                                    } else {
-                                        String::new()
-                                    };
-                                    album_card(app, x, format!("{year}{kind}"))
-                                })
-                                .collect(),
-                        )
-                    }))
+                    .push((!albums.is_empty()).then_some(discog))
                     .push(info.filter(|i| !i.similar.is_empty()).map(|i| {
                         shelf(
                             "Fans also like",
                             None,
                             i.similar.iter().take(k).map(|x| artist_card(app, x)).collect(),
+                        )
+                    }))
+                    .push(appears.filter(|v| !v.is_empty()).map(|v| {
+                        shelf(
+                            "Appears On",
+                            None,
+                            v.iter().take(k).map(|x| album_card(app, x, year_kind(x))).collect(),
                         )
                     }))
                     .push(info.filter(|i| !i.biography.is_empty()).map(|info| {

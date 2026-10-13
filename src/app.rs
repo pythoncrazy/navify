@@ -79,6 +79,7 @@ pub enum Set {
     Device(String),
     Zoom(f32),
     Remaining(bool),
+    DiscGrid(bool),
 }
 
 #[derive(Clone, Debug)]
@@ -154,6 +155,8 @@ pub enum Message {
     PlayAt(String, usize),
     Retry,
     Popular,
+    DiscChip(u8),
+    DiscOrder,
     FocusSearch,
     FocusMove(bool),
     Arrow(bool),
@@ -271,6 +274,8 @@ pub struct App {
     anchor: usize,
     pub hover: Option<String>,
     pub popular_all: bool,
+    pub disc_chip: u8,
+    pub disc_old: bool,
     pub seek_preview: Option<f32>,
 }
 
@@ -479,6 +484,7 @@ impl App {
                 v.downcast_ref::<Pager<Album>>().map(|p| &p.items[..]),
                 v.downcast_ref::<SearchRes>().map(|r| &r.albums[..]),
                 v.downcast_ref::<(Artist, Vec<Album>)>().map(|x| &x.1[..]),
+                v.downcast_ref::<Vec<Album>>().map(|x| &x[..]),
                 v.downcast_ref::<(Album, Vec<Song>)>().map(|x| std::slice::from_ref(&x.0)),
             ]
             .into_iter()
@@ -610,6 +616,8 @@ impl App {
             anchor: 0,
             hover: None,
             popular_all: false,
+            disc_chip: 0,
+            disc_old: false,
             seek_preview: None,
         };
         if app.route == "login" {
@@ -652,6 +660,7 @@ impl App {
             }
             artists.extend(v.downcast_ref::<Info>().into_iter().flat_map(|i| &i.similar));
             albums.extend(v.downcast_ref::<Pager<Album>>().into_iter().flat_map(|p| &p.items));
+            albums.extend(v.downcast_ref::<Vec<Album>>().into_iter().flatten());
             artists.extend(v.downcast_ref::<Pager<Artist>>().into_iter().flat_map(|p| &p.items));
         }
         let v: Option<AnyData> = match kind {
@@ -961,6 +970,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 "artist" => Arc::new(s.artist(arg).await?),
                 "top" => Arc::new(s.top_songs(arg).await?),
                 "info" => Arc::new(s.artist_info(arg).await?),
+                "appears" => Arc::new(s.appears(arg).await?),
                 "playlist" => Arc::new(s.playlist(arg).await?),
                 "liked" => {
                     let (v, t) = s.songs("starred", &[], offset, PAGE).await?;
@@ -1027,19 +1037,38 @@ impl App {
         self.show()
     }
 
+    pub fn key_of(&self, route: &str) -> String {
+        match (route.split_once(':'), self.current_song()) {
+            (None, _) if matches!(route, "settings" | "login" | "search" | "genres") => {
+                "genres".into()
+            }
+            (None, Some(s)) if route == "lyrics" => format!("lyrics:{}", s.id),
+            (None, None) if route == "lyrics" => "lib".into(),
+            (Some(("discography", a)), _) => format!("artist:{}", a.split(':').next().unwrap_or(a)),
+            _ => route.into(),
+        }
+    }
+
+    fn disc_load(&mut self) -> Task<Message> {
+        let keys: Vec<String> = crate::pages::disc_view(self)
+            .iter()
+            .filter(|_| !self.cfg.settings.disc_grid)
+            .map(|a| format!("album:{}", a.id))
+            .collect();
+        let ids = self.visible_covers();
+        let covers = self.want_covers(ids);
+        Task::batch(keys.iter().map(|k| self.request(k)).chain([covers]).collect::<Vec<_>>())
+    }
+
     fn show(&mut self) -> Task<Message> {
         let route = self.history[self.hi].clone();
         self.route = route.clone();
         (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
-        self.popular_all = false;
-        let key = match (route.as_str(), self.current_song()) {
-            ("settings" | "login" | "search" | "genres", _) => "genres".to_string(),
-            ("lyrics", Some(s)) => format!("lyrics:{}", s.id),
-            ("lyrics", None) => "lib".to_string(),
-            (r, _) => r.to_string(),
-        };
-        let parts =
-            route.strip_prefix("artist:").map(|id| [format!("top:{id}"), format!("info:{id}")]);
+        (self.popular_all, self.disc_chip) = (false, 0);
+        let key = self.key_of(&route);
+        let parts = route
+            .strip_prefix("artist:")
+            .map(|id| [format!("top:{id}"), format!("info:{id}"), format!("appears:{id}")]);
         let parts = parts.as_ref().map_or(&[][..], |p| &p[..]);
         self.cache.retain(|k, (t, _)| {
             t.elapsed() < STALE || *k == key || k == "lib" || parts.contains(k)
@@ -1049,6 +1078,7 @@ impl App {
         tasks.extend(parts.iter().map(|k| self.request(k)));
         let ids = self.visible_covers();
         tasks.push(self.want_covers(ids));
+        tasks.push(self.disc_load());
         let target = self.scrolls.get(&route).map(|(o, _)| *o).unwrap_or(0.0);
         tasks.push(iced::widget::operation::scroll_to(
             crate::view::SCROLL,
@@ -1116,7 +1146,7 @@ impl App {
                         }
                         if self.cache.contains_key(&key)
                             || self.seeds.contains_key(&key)
-                            || key != self.route
+                            || key != self.key_of(&self.route)
                         {
                             return self.toast(&e);
                         }
@@ -1132,8 +1162,7 @@ impl App {
                 } else {
                     Task::none()
                 };
-                let ids = self.visible_covers();
-                Task::batch([self.want_covers(ids), setup])
+                Task::batch([self.disc_load(), setup])
             }
             Message::Cover(id, size, r) => {
                 self.covers.want.remove(&(id.clone(), size));
@@ -1162,8 +1191,7 @@ impl App {
                         t = self.request_page(&key, len);
                     }
                 }
-                let ids = self.visible_covers();
-                Task::batch([t, self.want_covers(ids)])
+                Task::batch([t, self.disc_load()])
             }
             Message::Search(q) => {
                 self.search_q = q;
@@ -1658,6 +1686,10 @@ impl App {
                     }
                     Set::Scrobble(b) => self.cfg.settings.scrobble = b,
                     Set::Remaining(b) => self.cfg.settings.remaining = b,
+                    Set::DiscGrid(b) => {
+                        self.cfg.settings.disc_grid = b;
+                        extra = self.disc_load();
+                    }
                     Set::Fallback(v) => self.cfg.settings.fallback_db = v,
                     Set::Device(d) => {
                         if let Some(p) = &self.player {
@@ -1853,10 +1885,7 @@ impl App {
                 None => self.update(Message::PlayCtx(key, 0)),
             },
             Message::Retry => {
-                let key = match (self.route.as_str(), self.current_song()) {
-                    ("lyrics", Some(s)) => format!("lyrics:{}", s.id),
-                    (r, _) => r.to_string(),
-                };
+                let key = self.key_of(&self.route);
                 self.cache.remove(&key);
                 self.request(&key)
             }
@@ -1935,6 +1964,15 @@ impl App {
             Message::Popular => {
                 self.popular_all = true;
                 Task::none()
+            }
+            Message::DiscChip(n) => {
+                self.disc_chip = n;
+                let ids = self.visible_covers();
+                self.want_covers(ids)
+            }
+            Message::DiscOrder => {
+                self.disc_old = !self.disc_old;
+                self.disc_load()
             }
             Message::SeekPreview(v) => {
                 self.seek_preview = Some(v);
@@ -2144,17 +2182,22 @@ impl App {
             out.extend(rows(&p.items).map(|c| (c, 128)));
         } else if let Some(s) = self.data::<Vec<Song>>(key) {
             out.extend(rows(s).map(|c| (c, 128)));
+        } else if key.starts_with("discography:") {
+            out.extend(crate::pages::disc_view(self).iter().map(|a| (a.cover.as_str(), 300)));
         } else if let Some((a, albums)) = self.data::<(Artist, Vec<Album>)>(key) {
-            let mut disc: Vec<&Album> = albums.iter().collect();
-            disc.sort_by_key(|x| std::cmp::Reverse(x.year));
             let id = &key["artist:".len()..];
             let top = self.data::<Vec<Song>>(&format!("top:{id}")).map_or(&[][..], |v| &v[..]);
             let similar =
                 self.data::<Info>(&format!("info:{id}")).map_or(&[][..], |i| &i.similar[..]);
+            let appears =
+                self.data::<Vec<Album>>(&format!("appears:{id}")).map_or(&[][..], |v| &v[..]);
             out.push((&a.cover, 300));
             out.extend(top.iter().take(10).map(|s| (s.cover.as_str(), 128)));
-            out.extend(disc.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
+            out.extend(
+                crate::pages::disc_shelf(self, albums).iter().map(|x| (x.cover.as_str(), 300)),
+            );
             out.extend(similar.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
+            out.extend(appears.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
         } else if let Some(p) = self.data::<Pager<Album>>(key) {
             out.extend(
                 p.items[span(p.items.len(), cw + 52.0, cols)]
