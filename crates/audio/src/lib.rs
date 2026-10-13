@@ -784,16 +784,12 @@ impl Source {
         let target = secs as f64 + self.delay;
         let preroll = if self.delay > 0.0 { 0.08 } else { 0.0 };
         let time = Time::try_from_secs_f64((target - preroll).max(0.0)).ok_or("invalid seek")?;
-        let mode = {
-            let st = self.net.st();
-            let len = st.len.unwrap_or(0);
-            let need = len.min((len as f64 * secs as f64 / self.dur) as u64 + (256 << 10));
-            if st.start == 0 && st.end() >= need {
-                SeekMode::Accurate
-            } else {
-                SeekMode::Coarse
-            }
-        };
+        let st = self.net.st();
+        let len = st.len.unwrap_or(0);
+        let need = len.min((len as f64 * secs as f64 / self.dur) as u64 + (256 << 10));
+        let have = usize::from(st.start == 0 && st.end() >= need);
+        drop(st);
+        let mode = [SeekMode::Coarse, SeekMode::Accurate][have];
         let ts = self.tb.calc_timestamp(time).ok_or("invalid seek")?;
         let to = self.demux.seek(ts, mode)?;
         let at = self.tb.calc_time_saturating(to).as_secs_f64();
@@ -882,10 +878,9 @@ impl Source {
             if m == 0 {
                 break;
             }
-            out[k..k + m]
-                .iter_mut()
-                .zip(src)
-                .for_each(|(o, s)| *o = s * gain);
+            for (o, s) in out[k..k + m].iter_mut().zip(src) {
+                *o = s * gain;
+            }
             k += m;
             if self.out.is_empty() {
                 (self.off, self.done) = (self.off + m, self.done + m as u64 / 2);
@@ -978,13 +973,8 @@ impl Mixer {
 
 #[doc(hidden)]
 pub fn render(io: Io, tracks: Vec<Track>, rate: u32, at: f32, cf: f32) -> Res<Vec<f32>> {
-    let (mut mix, mut it) = (
-        Mixer {
-            rate,
-            ..Default::default()
-        },
-        tracks.into_iter(),
-    );
+    let (mut mix, mut it) = (Mixer::default(), tracks.into_iter());
+    mix.rate = rate;
     mix.cur = Some(Source::open(it.next().ok_or("no tracks")?, &io, rate, at)?);
     mix.queue(&io, it.next());
     let (mut out, mut buf) = (Vec::new(), vec![0.0; CHUNK * 2]);
@@ -1090,9 +1080,8 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 Cmd::Play(t, at) => {
                     let pre = mix.pre.take_if(|p| at == 0.0 && p.0 == t).map(|p| p.1);
                     let mut was = [mix.cur.take(), mix.old.take()];
-                    let hit = was
-                        .iter_mut()
-                        .find_map(|s| s.take_if(|s| !t.transcoded && s.track.url == t.url));
+                    let same = |s: &mut Source| !t.transcoded && s.track.url == t.url;
+                    let hit = was.iter_mut().find_map(|s| s.take_if(|s| same(s)));
                     mix.old = was.into_iter().flatten().next();
                     (mix.inc, play) = (None, Some((t, at, pre, hit)));
                 }
@@ -1110,10 +1099,10 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         let (paused, fresh) = (sh.paused.load(Relaxed), play.is_some());
         if let Some((t, at, pre, hit)) = play {
             let s = match (hit, pre) {
-                (Some(mut s), _) => s
-                    .seek(at)
-                    .map(|()| (s.track = t, s).1)
-                    .map_err(|e| e.to_string()),
+                (Some(mut s), _) => {
+                    s.track = t;
+                    s.seek(at).map(|()| s).map_err(|e| e.to_string())
+                }
                 (None, Some(h)) => h.join().expect("open thread"),
                 (None, None) => Source::open(t, &io, mix.rate, at),
             };
