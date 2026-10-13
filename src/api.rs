@@ -207,7 +207,10 @@ fn normalize(v: &mut Value) {
                 m.insert("id".into(), id);
             }
             let has = m.get("hasCoverArt") != Some(&false.into());
-            let id = m.get("id").filter(|id| has && id.is_string()).cloned();
+            let id = m
+                .get(if has { "id" } else { "albumId" })
+                .filter(|id| id.is_string())
+                .cloned();
             if let Some(c) = m.remove("coverArt").filter(|c| c != "").or(id) {
                 m.insert("cover".into(), c);
             }
