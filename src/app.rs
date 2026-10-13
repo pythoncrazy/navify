@@ -934,7 +934,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 ),
                 "genres" => Arc::new(s.genres().await?),
                 "genre" => {
-                    pager(s.albums("newest", &[("genre", arg.into())], offset, PAGE).await?, offset)
+                    pager(s.albums("newest", &[("genre", arg)], offset, PAGE).await?, offset)
                 }
                 "folders" => Arc::new(s.indexes().await?),
                 "folder" => Arc::new(s.directory(arg).await?),

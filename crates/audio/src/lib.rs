@@ -146,10 +146,6 @@ impl Player {
     pub fn position(&self) -> f32 {
         f32::from_bits(self.sh.pos.load(Relaxed))
     }
-
-    pub fn is_paused(&self) -> bool {
-        self.sh.paused.load(Relaxed)
-    }
 }
 
 type Io = (Handle, reqwest::Client);

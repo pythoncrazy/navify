@@ -425,24 +425,23 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
             (f == 0).then(|| pin(icon::FOLDER, theme::ELEVATED, theme::SUB, "Folders", "folders")),
         );
     if let Some(l) = app.data::<crate::app::Lib>("lib") {
+        let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
+            (
+                &p.cover,
+                &p.name,
+                format!("Playlist \u{2022} {}", p.owner),
+                format!("playlist:{}", p.id),
+            )
+        });
+        let als = l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
+            (&a.cover, &a.name, format!("Album \u{2022} {}", a.artist), format!("album:{}", a.id))
+        });
+        let ars = l.artists.iter().filter(|_| f == 0 || f == 3);
         list = list
-            .extend(l.playlists.iter().filter(|_| f < 2).map(|p| {
-                item(
-                    cover(app, &p.cover, 128, 48.0, false),
-                    &p.name,
-                    format!("Playlist \u{2022} {}", p.owner),
-                    format!("playlist:{}", p.id),
-                )
-            }))
-            .extend(l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
-                item(
-                    cover(app, &a.cover, 128, 48.0, false),
-                    &a.name,
-                    format!("Album \u{2022} {}", a.artist),
-                    format!("album:{}", a.id),
-                )
-            }))
-            .extend(l.artists.iter().filter(|_| f == 0 || f == 3).map(|a| {
+            .extend(
+                pls.chain(als).map(|(c, n, s, r)| item(cover(app, c, 128, 48.0, false), n, s, r)),
+            )
+            .extend(ars.map(|a| {
                 item(
                     cover(app, &a.cover, 128, 48.0, true),
                     &a.name,
