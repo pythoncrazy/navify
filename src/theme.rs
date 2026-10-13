@@ -21,7 +21,7 @@ pub const ERR: Color = color!(0xf3727f);
 pub const RED: Color = color!(0xed2c3f);
 pub const CLEAR: Color = Color::TRANSPARENT;
 pub const LUCIDE: Font = Font::with_name("lucide");
-const SHADOW: Shadow = Shadow {
+pub const SHADOW: Shadow = Shadow {
     color: Color { a: 0.5, ..BG },
     offset: iced::Vector::ZERO,
     blur_radius: 24.0,
