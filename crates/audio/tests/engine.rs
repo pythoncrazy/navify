@@ -1,6 +1,5 @@
-use navify_audio::{Event, Player, Track, render};
+use navify_audio::{Track, render};
 use std::sync::OnceLock;
-use std::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 
 const RATE: u32 = 48_000;
@@ -75,6 +74,8 @@ fn render_gives_exact_length_and_gain() {
 #[test]
 #[ignore = "needs the local test server"]
 fn player_sends_events_on_null_device() {
+    use navify_audio::{Event, Player};
+    use std::time::Duration;
     let alsa = std::env::var_os("ALSA_CONFIG_PATH");
     assert!(
         alsa.is_some(),
