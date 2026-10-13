@@ -1746,7 +1746,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        use iced::keyboard::{Event as K, key::Named};
+        use iced::keyboard::Event as K;
         use iced::mouse::{Button, Event as M};
         use iced::{Event, event, window::Event as W};
         let mut subs = vec![
@@ -1763,14 +1763,8 @@ impl App {
                 Event::Window(W::Unfocused) => Some(Message::Focus(false)),
                 Event::Window(W::CloseRequested) => Some(Message::CloseWindow),
                 Event::Window(W::Resized(s)) => Some(Message::Resize(s.width, s.height)),
-                Event::Keyboard(K::KeyPressed {
-                    key: Key::Named(Named::Escape),
-                    ..
-                }) => Some(Message::MenuClose),
-                Event::Keyboard(K::KeyPressed { key, modifiers, .. })
-                    if status == event::Status::Ignored =>
-                {
-                    keys(&key, modifiers)
+                Event::Keyboard(K::KeyPressed { key, modifiers, .. }) => {
+                    keys(&key, modifiers, status)
                 }
                 Event::Mouse(M::ButtonPressed(Button::Back)) => Some(Message::Back),
                 Event::Mouse(M::ButtonPressed(Button::Forward)) => Some(Message::Fwd),
@@ -1800,7 +1794,7 @@ impl App {
     }
 }
 
-fn keys(key: &Key, m: Modifiers) -> Option<Message> {
+fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message> {
     let k = match key {
         Key::Named(n) => format!("{n:?}"),
         Key::Character(c) => c.to_lowercase(),
@@ -1821,6 +1815,8 @@ fn keys(key: &Key, m: Modifiers) -> Option<Message> {
         Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
     };
     Some(match ((m.command(), m.alt(), m.shift()), k.as_str()) {
+        (_, "Escape") => Message::MenuClose,
+        _ if status == iced::event::Status::Captured => return None,
         ((true, ..), "k" | "l") => task(|_| op::focus("search")),
         ((true, ..), "s") => Message::Shuffle,
         ((true, ..), "r") => Message::Repeat,
