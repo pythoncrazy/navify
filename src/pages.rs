@@ -581,7 +581,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
     });
     let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
     let hero: El = if let Some(url) = p.banner {
-        let bh = (app.view_size().1 * 0.4).clamp(280.0, 480.0);
+        let bh = app.main_w() / 3.0;
         let tw = app.main_w() - 2.0 * PAD;
         let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
         let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
@@ -590,7 +590,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
             image(h)
                 .width(Fill)
                 .height(bh)
-                .content_fit(iced::ContentFit::Cover)
+                .content_fit(iced::ContentFit::Fill)
         });
         let dim = [
             (0.0, CLEAR),

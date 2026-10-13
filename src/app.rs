@@ -812,12 +812,9 @@ impl App {
             let (s, k) = (s.clone(), id.clone());
             let load = async move {
                 let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
-                let px = if k.starts_with("https://") {
-                    1280
-                } else {
-                    size
-                };
-                let d = tokio::task::spawn_blocking(move || decode(&b, px));
+                let wide = k.starts_with("https://");
+                let px = if wide { 1280 } else { size };
+                let d = tokio::task::spawn_blocking(move || decode(&b, px, wide));
                 d.await.expect("decode task")
             };
             let done = move |r| Message::Cover(id.clone(), size, r);
@@ -1858,9 +1855,14 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
     })
 }
 
-fn decode(b: &[u8], size: u32) -> Result<Decoded, String> {
+fn decode(b: &[u8], size: u32, wide: bool) -> Result<Decoded, String> {
     use ::image::imageops::FilterType;
     let img = ::image::load_from_memory(b).map_err(|e| e.to_string())?;
+    let h = (img.width() / 3).min(img.height());
+    let img = match wide {
+        true => img.crop_imm(0, (img.height() - h) * 3 / 10, img.width(), h),
+        false => img,
+    };
     let big = img.width() > size || img.height() > size;
     let img = match big {
         true => img.resize(size, size, FilterType::Lanczos3),
