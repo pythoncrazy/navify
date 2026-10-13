@@ -1,20 +1,12 @@
-use md5::{Digest, Md5};
-use navify_audio::{Track, render};
+use navify_audio::{Event, Player, Track, render};
+use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::runtime::{Handle, Runtime};
 
 const RATE: u32 = 48_000;
 
-fn rt() -> &'static tokio::runtime::Handle {
-    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-    RT.get_or_init(|| tokio::runtime::Runtime::new().expect("runtime"))
-        .handle()
-}
-
-fn io() -> (tokio::runtime::Handle, reqwest::Client) {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    (rt().clone(), reqwest::Client::new())
-}
-
-fn server() -> (String, String) {
+fn setup(titles: &str, format: Option<&str>) -> ((Handle, reqwest::Client), Vec<Track>) {
+    static RT: OnceLock<Runtime> = OnceLock::new();
     let _ = rustls::crypto::ring::default_provider().install_default();
     let [host, user, pass] = [
         "NAVIFY_TEST_LOCAL_URL",
@@ -22,19 +14,8 @@ fn server() -> (String, String) {
         "NAVIFY_TEST_LOCAL_PASSWORD",
     ]
     .map(|k| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set")));
-    let salt = "navifytest";
-    let token: String = Md5::digest(format!("{pass}{salt}"))
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    (
-        host,
-        format!("u={user}&t={token}&s={salt}&v=1.16.1&c=navify-test&f=json"),
-    )
-}
-
-fn tracks(titles: &[&str], format: Option<&str>) -> Vec<Track> {
-    let (host, auth) = server();
+    let hex: String = pass.bytes().map(|b| format!("{b:02x}")).collect();
+    let auth = format!("u={user}&p=enc:{hex}&v=1.16.1&c=navify-test&f=json");
     let v: serde_json::Value = reqwest::blocking::get(format!(
         "{host}/rest/search3?{auth}&query=&songCount=100&albumCount=0&artistCount=0"
     ))
@@ -43,12 +24,11 @@ fn tracks(titles: &[&str], format: Option<&str>) -> Vec<Track> {
     .expect("json");
     let songs = v["subsonic-response"]["searchResult3"]["song"]
         .as_array()
-        .expect("songs")
-        .clone();
-    titles
-        .iter()
+        .expect("songs");
+    let tracks = titles
+        .split(' ')
         .map(|t| {
-            let s = songs.iter().find(|s| s["title"] == *t).expect("song");
+            let s = songs.iter().find(|s| s["title"] == t).expect("song");
             let id = s["id"].as_str().expect("id");
             let fmt = format.map(|f| format!("&format={f}")).unwrap_or_default();
             Track {
@@ -59,140 +39,68 @@ fn tracks(titles: &[&str], format: Option<&str>) -> Vec<Track> {
                 duration: s["duration"].as_f64().expect("duration") as f32,
             }
         })
-        .collect()
-}
-
-fn secs(pcm: &[f32]) -> f32 {
-    pcm.len() as f32 / 2.0 / RATE as f32
-}
-
-fn near(got: f32, want: f32, tol: f32) {
-    assert!(
-        (got - want).abs() <= tol,
-        "length {got:.4} s, expected {want:.4} s"
-    );
+        .collect();
+    let rt = RT.get_or_init(|| Runtime::new().expect("runtime"));
+    ((rt.handle().clone(), reqwest::Client::new()), tracks)
 }
 
 #[test]
 #[ignore = "needs the local test server"]
-fn gapless_across_sample_rates() {
-    let t = tracks(&["One", "Two"], None);
-    near(
-        secs(&render(io(), t, RATE, 0.0, 0.0, 1.0).expect("render")),
-        5.0,
-        0.005,
-    );
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn seek_in_raw_stream() {
-    let t = tracks(&["One"], None);
-    near(
-        secs(&render(io(), t, RATE, 1.0, 0.0, 1.0).expect("render")),
-        2.0,
-        0.005,
-    );
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn speed_changes_length() {
-    for v in [0.5, 3.5] {
-        let t = tracks(&["One"], None);
-        near(
-            secs(&render(io(), t, RATE, 0.0, 0.0, v).expect("render")),
-            3.0 / v,
-            0.01,
+fn render_gives_exact_length() {
+    for (titles, format, seek, fade, speed, want, tol) in [
+        ("One Two", None, 0.0, 0.0, 1.0, 5.0, 0.005),
+        ("Three Four", None, 0.0, 0.0, 1.0, 5.0, 0.03),
+        ("One Two", None, 0.0, 1.0, 1.0, 4.0, 0.02),
+        ("One", None, 1.0, 0.0, 1.0, 2.0, 0.005),
+        ("Three", None, 1.0, 0.0, 1.0, 2.0, 0.03),
+        ("Four", None, 1.0, 0.0, 1.0, 1.0, 0.03),
+        ("One", Some("mp3"), 1.0, 0.0, 1.0, 2.0, 0.08),
+        ("One", None, 0.0, 0.0, 0.5, 6.0, 0.01),
+        ("One", None, 0.0, 0.0, 3.5, 3.0 / 3.5, 0.01),
+    ] {
+        let (io, t) = setup(titles, format);
+        let pcm = render(io, t, RATE, seek, fade, speed).expect("render");
+        let got = pcm.len() as f32 / 2.0 / RATE as f32;
+        assert!(
+            (got - want).abs() <= tol,
+            "{titles} {format:?} seek {seek} crossfade {fade} speed {speed}: \
+             length {got:.4} s, expected {want:.4} s"
         );
     }
 }
 
 #[test]
 #[ignore = "needs the local test server"]
-fn crossfade_overlaps_tracks() {
-    let t = tracks(&["One", "Two"], None);
-    near(
-        secs(&render(io(), t, RATE, 0.0, 1.0, 1.0).expect("render")),
-        4.0,
-        0.02,
-    );
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn mp3_and_opus_trim_padding() {
-    let t = tracks(&["Three", "Four"], None);
-    near(
-        secs(&render(io(), t, RATE, 0.0, 0.0, 1.0).expect("render")),
-        5.0,
-        0.03,
-    );
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn seek_in_raw_mp3_and_opus() {
-    for (title, len) in [("Three", 3.0), ("Four", 2.0)] {
-        let t = tracks(&[title], None);
-        near(
-            secs(&render(io(), t, RATE, 1.0, 0.0, 1.0).expect("render")),
-            len - 1.0,
-            0.03,
-        );
-    }
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn seek_in_transcoded_stream() {
-    let t = tracks(&["One"], Some("mp3"));
-    near(
-        secs(&render(io(), t, RATE, 1.0, 0.0, 1.0).expect("render")),
-        2.0,
-        0.08,
-    );
+fn gain_scales_samples() {
+    let (io, t) = setup("One", None);
+    let peak = |gain| {
+        let t = vec![Track {
+            gain,
+            ..t[0].clone()
+        }];
+        let pcm = render(io.clone(), t, RATE, 0.0, 0.0, 1.0).expect("render");
+        pcm.iter().fold(0f32, |m, s| m.max(s.abs()))
+    };
+    let ratio = peak(0.25) / peak(1.0);
+    assert!((ratio - 0.25).abs() <= 0.001, "gain ratio {ratio}");
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "needs the local test server"]
 fn player_sends_events_on_null_device() {
-    use navify_audio::{Event, Player};
-    use std::time::{Duration, Instant};
-    let t = tracks(&["One", "Two"], None);
+    let ((rt, http), t) = setup("One Two", None);
     let conf = std::env::temp_dir().join("navify-null-asound.conf");
     std::fs::write(&conf, "pcm.!default { type null }\n").expect("conf");
     unsafe { std::env::set_var("ALSA_CONFIG_PATH", &conf) };
-    let (p, mut rx) = Player::new(io().0, io().1);
+    let (p, mut rx) = Player::new(rt.clone(), http);
     p.play(t[0].clone(), 0.0);
     p.queue_next(Some(t[1].clone()));
-    let start = Instant::now();
     let mut got = Vec::new();
-    while got.last() != Some(&Event::Ended) && start.elapsed() < Duration::from_secs(20) {
-        match rt().block_on(async { tokio::time::timeout(Duration::from_secs(1), rx.recv()).await })
-        {
-            Ok(Some(e)) => got.push(e),
-            Ok(None) => break,
-            Err(_) => {}
-        }
+    while got.last() != Some(&Event::Ended) {
+        let e =
+            rt.block_on(async { tokio::time::timeout(Duration::from_secs(20), rx.recv()).await });
+        got.push(e.expect("event in 20 s").expect("engine is running"));
     }
     assert_eq!(got, [Event::Started(t[1].id.clone()), Event::Ended]);
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn gain_scales_samples() {
-    let t = tracks(&["One"], None);
-    let peak = |g: f32| {
-        let t = vec![Track {
-            gain: g,
-            ..t[0].clone()
-        }];
-        render(io(), t, RATE, 0.0, 0.0, 1.0)
-            .expect("render")
-            .iter()
-            .fold(0f32, |m, s| m.max(s.abs()))
-    };
-    near(peak(0.25) / peak(1.0), 0.25, 0.001);
 }

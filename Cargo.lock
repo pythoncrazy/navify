@@ -2372,8 +2372,6 @@ name = "navify-audio"
 version = "0.1.0"
 dependencies = [
  "cpal",
- "dotenvy",
- "md-5",
  "reqwest",
  "rtrb",
  "rubato",

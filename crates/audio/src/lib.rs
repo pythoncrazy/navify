@@ -27,6 +27,7 @@ use symphonia::core::packet::Packet;
 use symphonia::core::units::{Time, TimeBase, Timestamp};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::task::JoinSet;
 
 const CHUNK: usize = 512;
 const CLOSE: Duration = Duration::from_secs(30);
@@ -297,19 +298,16 @@ async fn fetch(
             }
         }
         Ok::<_, reqwest::Error>(())
-    };
-    let res = res.await;
-    let mut st = net.0.lock().expect("net lock");
-    if let Err(e) = res {
-        st.err = Some(e.without_url().to_string());
     }
+    .await;
+    net.0.lock().expect("net lock").err = res.err().map(|e| e.without_url().to_string());
     net.1.notify_all();
 }
 
 struct Http {
     net: Arc<Net>,
     pos: u64,
-    task: tokio::task::AbortHandle,
+    _task: JoinSet<()>,
 }
 
 impl Read for Http {
@@ -352,18 +350,13 @@ impl Read for Http {
 
 impl Seek for Http {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let len = || {
-            self.net
-                .0
-                .lock()
-                .expect("net lock")
-                .len
-                .ok_or(ErrorKind::Unsupported)
-        };
         self.pos = match pos {
             SeekFrom::Start(p) => p,
             SeekFrom::Current(d) => self.pos.saturating_add_signed(d),
-            SeekFrom::End(d) => len()?.saturating_add_signed(d),
+            SeekFrom::End(d) => self
+                .byte_len()
+                .ok_or(ErrorKind::Unsupported)?
+                .saturating_add_signed(d),
         };
         Ok(self.pos)
     }
@@ -378,13 +371,6 @@ impl MediaSource for Http {
         self.net.0.lock().expect("net lock").len
     }
 }
-
-impl Drop for Http {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
 trait Demux: Send + Sync {
     fn next(&mut self) -> Result<Option<Packet>, SymError>;
     fn seek(&mut self, ts: Timestamp, mode: SeekMode) -> Result<Timestamp, SymError>;
@@ -401,16 +387,11 @@ impl Demux for (Box<dyn FormatReader>, u32) {
     }
 
     fn seek(&mut self, ts: Timestamp, mode: SeekMode) -> Result<Timestamp, SymError> {
-        Ok(self
-            .0
-            .seek(
-                mode,
-                SeekTo::Timestamp {
-                    ts,
-                    track_id: self.1,
-                },
-            )?
-            .actual_ts)
+        let to = SeekTo::Timestamp {
+            ts,
+            track_id: self.1,
+        };
+        Ok(self.0.seek(mode, to)?.actual_ts)
     }
 }
 
@@ -442,8 +423,47 @@ impl Raw {
         flac: bool,
     ) -> Result<(Raw, Vec<u8>, u32), Box<dyn Error>> {
         let len = r.byte_len().unwrap_or(0);
-        let raw = |r, block, serial, end| Raw {
-            data: 0,
+        let (block, serial, end, head, sr) = if flac {
+            let (mut h, mut si) = ([0u8; 4], vec![0u8; 34]);
+            r.read_exact(&mut h)?;
+            while h[0] & 128 == 0 {
+                r.read_exact(&mut h)?;
+                match h[0] & 127 {
+                    0 => r.read_exact(&mut si)?,
+                    _ => r.ignore_bytes((u32::from_be_bytes(h) & 0xFFFFFF).into())?,
+                }
+            }
+            let sr = u32::from_be_bytes([0, si[10], si[11], si[12]]) >> 4;
+            let end = u64::from_be_bytes([0, 0, 0, si[13] & 15, si[14], si[15], si[16], si[17]]);
+            let block = u16::from_be_bytes([si[2], si[3]]) as u64;
+            (Some(block), 0, end, si, sr)
+        } else {
+            let head = Raw::page(&mut r)?.ok_or("The Ogg stream is empty.")?;
+            loop {
+                let p = Raw::page(&mut r)?.ok_or("The Ogg stream has no audio.")?;
+                if p.serial == head.serial && p.lace.iter().any(|&l| l < 255) {
+                    break;
+                }
+            }
+            let (data, mut end) = (r.pos(), u64::MAX);
+            if len > 0 {
+                let mut tail = Vec::new();
+                r.seek(SeekFrom::Start(len.saturating_sub(TAIL)))?;
+                r.read_to_end(&mut tail)?;
+                let ok = |p: &[u8]| {
+                    p.len() >= 27 && p[..4] == *b"OggS" && p[14..18] == head.serial.to_le_bytes()
+                };
+                let i = (0..tail.len())
+                    .rev()
+                    .find(|&i| ok(&tail[i..]))
+                    .ok_or("The Ogg stream has no end.")?;
+                end = u64::from_le_bytes(tail[i + 6..i + 14].try_into()?);
+                r.seek(SeekFrom::Start(data))?;
+            }
+            (None, head.serial, end, head.data, 48_000)
+        };
+        let raw = Raw {
+            data: r.pos(),
             r,
             block,
             serial,
@@ -454,67 +474,7 @@ impl Raw {
             prev: Some(0),
             big: 8192,
         };
-        if flac {
-            let mut h = [0u8; 4];
-            r.read_exact(&mut h)?;
-            let mut si = vec![0u8; 34];
-            loop {
-                r.read_exact(&mut h)?;
-                match h[0] & 127 {
-                    0 => r.read_exact(&mut si)?,
-                    _ => {
-                        _ = r.seek(SeekFrom::Current(
-                            u32::from_be_bytes([0, h[1], h[2], h[3]]) as i64
-                        ))?
-                    }
-                }
-                if h[0] & 128 != 0 {
-                    break;
-                }
-            }
-            let sr = u32::from_be_bytes([0, si[10], si[11], si[12]]) >> 4;
-            let end = u64::from_be_bytes([0, 0, 0, si[13] & 15, si[14], si[15], si[16], si[17]]);
-            let block = u16::from_be_bytes([si[2], si[3]]) as u64;
-            let data = r.pos();
-            return Ok((
-                Raw {
-                    data,
-                    ..raw(r, Some(block), 0, end)
-                },
-                si,
-                sr,
-            ));
-        }
-        let head = Raw::page(&mut r)?.ok_or("The Ogg stream is empty.")?;
-        loop {
-            let p = Raw::page(&mut r)?.ok_or("The Ogg stream has no audio.")?;
-            if p.serial == head.serial && p.lace.iter().any(|&l| l < 255) {
-                break;
-            }
-        }
-        let (data, mut end) = (r.pos(), u64::MAX);
-        if len > 0 {
-            let mut tail = Vec::new();
-            r.seek(SeekFrom::Start(len.saturating_sub(TAIL)))?;
-            r.read_to_end(&mut tail)?;
-            let ok = |p: &[u8]| {
-                p.len() >= 27 && p[..4] == *b"OggS" && p[14..18] == head.serial.to_le_bytes()
-            };
-            let i = (0..tail.len())
-                .rev()
-                .find(|&i| ok(&tail[i..]))
-                .ok_or("The Ogg stream has no end.")?;
-            end = u64::from_le_bytes(tail[i + 6..i + 14].try_into()?);
-            r.seek(SeekFrom::Start(data))?;
-        }
-        Ok((
-            Raw {
-                data,
-                ..raw(r, None, head.serial, end)
-            },
-            head.data,
-            48_000,
-        ))
+        Ok((raw, head, sr))
     }
 
     fn page(r: &mut MediaSourceStream<'static>) -> std::io::Result<Option<Page>> {
@@ -592,15 +552,11 @@ impl Raw {
             .prev
             .filter(|_| eos)
             .unwrap_or(p.gran.saturating_sub(sum));
+        let end = if eos { p.gran } else { u64::MAX };
         for d in got {
             let n = dur(&d);
             let mut pk = Packet::new(0, Timestamp::new(t as i64), n.into(), d);
-            pk.trim_end = if eos {
-                (t + n).saturating_sub(p.gran).min(n)
-            } else {
-                0
-            }
-            .into();
+            pk.trim_end = (t + n).saturating_sub(end).min(n).into();
             self.pk.push_back(pk);
             t += n;
         }
@@ -623,19 +579,16 @@ impl Raw {
                 num = num << 6 | (c & 0x3F) as u64;
             }
             let i = 4 + k;
-            let n = match b[2] >> 4 {
-                1 => 192,
-                c @ 2..=5 => 576 << (c - 2),
-                6 => b[i] as u64 + 1,
-                7 => u16::from_be_bytes([b[i], b[i + 1]]) as u64 + 1,
-                c => 256 << (c - 8),
+            let (n, x) = match b[2] >> 4 {
+                1 => (192, 0),
+                c @ 2..=5 => (576 << (c - 2), 0),
+                6 => (b[i] as u64 + 1, 1),
+                7 => (u16::from_be_bytes([b[i], b[i + 1]]) as u64 + 1, 2),
+                c => (256 << (c - 8), 0),
             };
-            let i =
-                i + match b[2] >> 4 {
-                    6 => 1,
-                    7 => 2,
-                    _ => 0,
-                } + match b[2] & 15 {
+            let i = i
+                + x
+                + match b[2] & 15 {
                     12 => 1,
                     13 | 14 => 2,
                     _ => 0,
@@ -664,10 +617,9 @@ impl Raw {
             i += j;
             if let Some((s, n)) = head(&buf[i..]) {
                 match first {
-                    Some((j, s0, n0)) if s == s0 + n0 => {
+                    Some((_, s0, n0)) if s == s0 + n0 => {
                         self.r.seek(SeekFrom::Start(at + i as u64))?;
                         buf.truncate(i);
-                        first = Some((j, s0, n0));
                         break;
                     }
                     Some(_) if self.prev.is_some() => {}
@@ -796,42 +748,40 @@ impl Source {
         let safe = url.as_str().to_string();
         (|| -> Result<Source, Box<dyn Error>> {
             let net = Arc::new(Net::default());
-            let get = |r: Option<String>| match r {
-                Some(r) => http.get(url.clone()).header(RANGE, r).send(),
-                None => http.get(url.clone()).send(),
-            };
-            let task = rt.block_on(async {
-                let t = Instant::now();
-                let head = match track.transcoded {
-                    true => get(None).await?.error_for_status()?,
-                    false => {
-                        let (head, tail) = tokio::try_join!(
-                            get(Some("bytes=0-".into())),
-                            get(Some(format!("bytes=-{TAIL}")))
-                        )?;
-                        let (head, tail) = (head.error_for_status()?, tail.error_for_status()?);
-                        let ttfb = t.elapsed().as_secs_f64();
-                        let len = range(&head).map(|r| r.1).or(head.content_length());
-                        let len = len.ok_or("The server did not send the stream length.")?;
-                        let at = range(&tail).map_or(0, |r| r.0);
-                        let body = tail.bytes().await?;
-                        let mut st = net.0.lock().expect("net lock");
-                        (st.ttfb, st.len) = (ttfb, Some(len));
-                        st.add(at, &body);
-                        head
-                    }
-                };
-                {
-                    let mut st = net.0.lock().expect("net lock");
-                    st.cur = (0, st.gap().map_or(u64::MAX, |g| g.1));
+            let head = rt.block_on(async {
+                let (t, get) = (Instant::now(), http.get(url.clone()));
+                if track.transcoded {
+                    return Ok::<_, Box<dyn Error>>(get.send().await?.error_for_status()?);
                 }
-                let (net, http, url) = (net.clone(), http.clone(), url.clone());
-                Ok::<_, Box<dyn Error>>(rt.spawn(fetch(net, http, url, Some(head))).abort_handle())
+                let tail = http
+                    .get(url.clone())
+                    .header(RANGE, format!("bytes=-{TAIL}"))
+                    .send();
+                let (head, tail) = tokio::try_join!(get.header(RANGE, "bytes=0-").send(), tail)?;
+                let (head, tail) = (head.error_for_status()?, tail.error_for_status()?);
+                let ttfb = t.elapsed().as_secs_f64();
+                let len = range(&head).map(|r| r.1).or(head.content_length());
+                let len = len.ok_or("The server did not send the stream length.")?;
+                let at = range(&tail).map_or(0, |r| r.0);
+                let body = tail.bytes().await?;
+                let mut st = net.0.lock().expect("net lock");
+                (st.ttfb, st.len) = (ttfb, Some(len));
+                st.add(at, &body);
+                Ok(head)
             })?;
+            {
+                let mut st = net.0.lock().expect("net lock");
+                st.cur = (0, st.gap().map_or(u64::MAX, |g| g.1));
+            }
+            let mut task = JoinSet::new();
+            task.spawn_on(
+                fetch(net.clone(), http.clone(), url.clone(), Some(head)),
+                rt,
+            );
             let mut src: Box<dyn MediaSource> = Box::new(Http {
                 net: net.clone(),
                 pos: 0,
-                task,
+                _task: task,
             });
             let mut h = [0u8; 42];
             let ok = src.read_exact(&mut h).is_ok();
@@ -846,27 +796,16 @@ impl Source {
                 b.get(i..i + 2)
                     .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
             };
-            let (demux, params, head, sr, tb, frames): (Box<dyn Demux>, _, _, _, _, _) = match ogg
-                || flac
-            {
-                true => {
+            let (demux, params, head, sr, tb, frames): (Box<dyn Demux>, _, _, _, _, _) =
+                if ogg || flac {
                     let (o, head, sr) = Raw::open(mss, flac)?;
-                    let tb = TimeBase::try_from_recip(sr).ok_or("no time base")?;
-                    let (frames, params) = match flac {
-                        true => {
-                            let mut p = AudioCodecParameters::new();
-                            p.for_codec(CODEC_ID_FLAC)
-                                .with_extra_data(head.clone().into());
-                            (Some(o.end), Some(p))
-                        }
-                        false => (
-                            (o.end != u64::MAX).then(|| o.end.saturating_sub(le(&head, 10) as u64)),
-                            None,
-                        ),
-                    };
-                    (Box::new(o), params, head, sr, tb, frames)
-                }
-                false => {
+                    let mut p = AudioCodecParameters::new();
+                    p.for_codec(CODEC_ID_FLAC)
+                        .with_extra_data(head.clone().into());
+                    let pre = if flac { 0 } else { le(&head, 10) as u64 };
+                    let frames = (o.end != u64::MAX).then(|| o.end.saturating_sub(pre));
+                    (Box::new(o), flac.then_some(p), head, sr, None, frames)
+                } else {
                     let format = symphonia::default::get_probe().probe(
                         &Hint::new(),
                         mss,
@@ -882,33 +821,20 @@ impl Source {
                         .and_then(|p| p.audio())
                         .ok_or("no audio codec")?
                         .clone();
+                    let (id, tb, frames) = (t.id, t.time_base, t.num_frames);
+                    let head = p.extra_data.clone().unwrap_or_default().into();
                     let sr = p.sample_rate.ok_or("unknown sample rate")?;
-                    let tb = t
-                        .time_base
-                        .or(TimeBase::try_from_recip(sr))
-                        .ok_or("no time base")?;
-                    let (id, frames, head) = (
-                        t.id,
-                        t.num_frames,
-                        p.extra_data.clone().unwrap_or_default().into(),
-                    );
-                    (
-                        Box::new((format, id)),
-                        Some(p).filter(|p| p.codec != CODEC_ID_OPUS),
-                        head,
-                        sr,
-                        tb,
-                        frames,
-                    )
-                }
-            };
+                    let p = Some(p).filter(|p| p.codec != CODEC_ID_OPUS);
+                    (Box::new((format, id)), p, head, sr, tb, frames)
+                };
+            let tb = tb.or(TimeBase::try_from_recip(sr)).ok_or("no time base")?;
             let base = if track.transcoded {
                 offset.trunc() as f64
             } else {
                 0.0
             };
             let dur = frames.map_or(track.duration as f64, |n| base + n as f64 / sr as f64);
-            let (opus, pre) = (params.is_none(), le(&head, 10));
+            let pre = if params.is_none() { le(&head, 10) } else { 0 };
             let dec: Decode = match params {
                 None => {
                     if head.get(9).is_some_and(|&c| c > 2) {
@@ -965,11 +891,11 @@ impl Source {
                 direct: false,
                 tb,
                 rate: sr as f64,
-                delay: if opus { pre as f64 / 48_000.0 } else { 0.0 },
+                delay: pre as f64 / 48_000.0,
                 dur,
                 base,
                 done: 0,
-                skip: if opus { pre as usize } else { 0 },
+                skip: pre as usize,
                 owed: 0.0,
                 eof: false,
                 pcm: Vec::new(),
@@ -996,18 +922,14 @@ impl Source {
         )?)
     }
 
-    fn speed(&mut self, rel: f64, ramp: bool) -> Result<(), Box<dyn Error>> {
-        self.rel = rel;
-        Ok(self.rs.set_resample_ratio_relative(rel, ramp)?)
-    }
-
-    fn retarget(&mut self, rate: u32) -> Result<(), String> {
+    fn tune(&mut self, rate: u32, rel: f64, ramp: bool) -> Result<(), Box<dyn Error>> {
         if rate != self.orate {
-            self.rs = Source::resampler(rate, self.rate).map_err(|e| e.to_string())?;
+            self.rs = Source::resampler(rate, self.rate)?;
             (self.orate, self.lead, self.owed, self.direct) =
                 (rate, self.rs.output_delay(), 0.0, false);
         }
-        Ok(())
+        self.rel = rel;
+        Ok(self.rs.set_resample_ratio_relative(rel, ramp)?)
     }
 
     fn seek(&mut self, secs: f32) -> Result<(), Box<dyn Error>> {
@@ -1143,28 +1065,14 @@ impl Mixer {
         }
     }
 
-    fn take_pre(
-        pre: &mut Option<(Track, JoinHandle<Result<Source, String>>)>,
-        rate: u32,
-    ) -> Option<Result<Source, String>> {
-        let s = pre.take()?.1.join().expect("open thread");
-        Some(s.and_then(|mut s| s.retarget(rate).map(|()| s)))
-    }
-
     fn seek(&mut self, secs: f32) -> Result<(), String> {
-        if let Some(i) = self.inc.take() {
-            self.cur = Some(i);
-        }
-        match self.cur.take() {
+        self.cur = match self.inc.take().or(self.cur.take()) {
             Some(c) if c.track.transcoded => {
-                self.cur = Some(Source::open(c.track, &self.io, self.rate, secs)?)
+                Some(Source::open(c.track, &self.io, self.rate, secs)?)
             }
-            Some(mut c) => {
-                c.seek(secs).map_err(|e| e.to_string())?;
-                self.cur = Some(c);
-            }
-            None => {}
-        }
+            Some(mut c) => Some(c.seek(secs).map(|()| c).map_err(|e| e.to_string())?),
+            None => None,
+        };
         Ok(())
     }
 
@@ -1178,7 +1086,7 @@ impl Mixer {
         self.cur
             .iter_mut()
             .chain(self.inc.iter_mut())
-            .try_for_each(|s| s.speed(rel, true))?;
+            .try_for_each(|s| s.tune(self.rate, rel, true))?;
         let Some(cur) = &mut self.cur else {
             return Ok((0, None));
         };
@@ -1199,9 +1107,9 @@ impl Mixer {
             && rem <= cf
             && self.pre.as_ref().is_some_and(|p| p.1.is_finished())
         {
-            match Mixer::take_pre(&mut self.pre, self.rate) {
+            match self.pre.take().map(|p| p.1.join().expect("open thread")) {
                 Some(Ok(mut s)) => {
-                    s.speed(rel, false)?;
+                    s.tune(self.rate, rel, false)?;
                     ev = Some(Event::Started(s.track.id.clone()));
                     self.fade = (0, (rem.max(0.05) * rel * self.rate as f64) as usize);
                     self.inc = Some(s);
@@ -1234,7 +1142,8 @@ impl Mixer {
         if n == out.len() / 2 {
             return Ok((n, ev));
         }
-        let next = Mixer::take_pre(&mut self.pre, self.rate).or_else(|| {
+        let next = self.pre.take().map(|p| p.1.join().expect("open thread"));
+        let next = next.or_else(|| {
             self.next
                 .take()
                 .map(|t| Source::open(t, &self.io, self.rate, 0.0))
@@ -1242,7 +1151,7 @@ impl Mixer {
         self.cur = None;
         match next {
             Some(Ok(mut s)) => {
-                s.speed(rel, false)?;
+                s.tune(self.rate, rel, false)?;
                 let m = s.fill(&mut out[n * 2..])?;
                 let id = s.track.id.clone();
                 self.cur = Some(s);
@@ -1306,8 +1215,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             .find(|c| {
                 c.channels() == 2 && (c.min_sample_rate()..=c.max_sample_rate()).contains(&want)
             })
-            .map(|c| c.with_sample_rate(want));
-        let sup = sup
+            .map(|c| c.with_sample_rate(want))
             .map_or_else(|| dev.default_output_config(), Ok)
             .map_err(|e| e.to_string())?;
         let rate = sup.sample_rate();
@@ -1361,10 +1269,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
     let (mut written, mut running, mut idle, mut dev) =
         (0u64, false, None::<Instant>, String::new());
     let mut buf = vec![0f32; CHUNK * 2];
-    let (mut marks, mut events) = (
-        VecDeque::<(u64, f32)>::new(),
-        VecDeque::<(u64, Event)>::new(),
-    );
+    let (mut marks, mut events) = (VecDeque::new(), VecDeque::new());
     loop {
         let mut play = None;
         loop {
@@ -1382,14 +1287,9 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 Cmd::Play(t, at) => {
                     let pre = mix.pre.take_if(|p| at == 0.0 && p.0 == t).map(|p| p.1);
                     let mut was = [mix.cur.take(), mix.old.take()];
-                    let hit = was
-                        .iter_mut()
-                        .find(|s| {
-                            s.as_ref().is_some_and(|s| {
-                                !t.transcoded && s.track.id == t.id && s.track.url == t.url
-                            })
-                        })
-                        .and_then(Option::take);
+                    let hit = was.iter_mut().find_map(|s| {
+                        s.take_if(|s| !t.transcoded && s.track.id == t.id && s.track.url == t.url)
+                    });
                     mix.old = was.into_iter().flatten().next();
                     (mix.inc, play) = (None, Some((t, at, pre, hit)));
                 }
@@ -1433,10 +1333,6 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             let pos = f32::from_bits(sh.pos.load(Relaxed));
             let r = open(&dev, want).and_then(|(s, p, rate)| {
                 mix.rate = rate;
-                mix.cur
-                    .iter_mut()
-                    .chain(mix.inc.iter_mut())
-                    .try_for_each(|c| c.retarget(rate))?;
                 if !fresh {
                     mix.seek(pos)?;
                 }
@@ -1456,13 +1352,6 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     let _ = tx.send(Event::Error(e));
                 }
             }
-        }
-        if out.is_some()
-            && let Some(c) = &mut mix.cur
-            && let Err(e) = c.retarget(mix.rate)
-        {
-            mix.cur = None;
-            let _ = tx.send(Event::Error(e));
         }
         if let Some((_, prod)) = &mut out {
             while !paused && mix.cur.is_some() && prod.slots() >= buf.len() {
