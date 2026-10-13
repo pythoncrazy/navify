@@ -28,13 +28,7 @@ pub struct Pager<T> {
     pub offset: usize,
 }
 
-#[derive(Debug)]
-pub struct Home {
-    pub recent: Vec<Album>,
-    pub added: Vec<Album>,
-    pub frequent: Vec<Album>,
-    pub random: Vec<Album>,
-}
+pub type Home = [Vec<Album>; 4];
 
 #[derive(Clone, Debug)]
 pub struct Lib {
@@ -397,7 +391,7 @@ impl App {
                     self.panel = if s == "queue" { 2 } else { 1 };
                     let first = songs.first().map(|s| format!("lyrics:{}", s.id));
                     task = Task::batch(first.map(|k| self.request(&k, 0)));
-                    let recent = self.data::<Home>("home").and_then(|h| h.recent.first());
+                    let recent = self.data::<Home>("home").and_then(|h| h[0].first());
                     if let Some(a) = recent.filter(|_| songs.is_empty()) {
                         task = self.update(Message::PlayCtx(format!("album:{}", a.id), 0));
                     }
@@ -551,8 +545,7 @@ impl App {
 
     fn find_album(&self, id: &str) -> Option<Album> {
         self.cache.values().find_map(|(_, v)| {
-            let h = v.downcast_ref::<Home>();
-            let home = h.map(|h| [&h.recent[..], &h.added[..], &h.frequent[..], &h.random[..]]);
+            let home = v.downcast_ref::<Home>().into_iter().flatten();
             let lists = [
                 v.downcast_ref::<Pager<Album>>().map(|p| &p.items[..]),
                 v.downcast_ref::<SearchRes>().map(|r| &r.albums[..]),
@@ -563,7 +556,7 @@ impl App {
                     .map(|x| std::slice::from_ref(&x.0)),
             ];
             let all = lists.into_iter().flatten();
-            let mut all = all.chain(home.into_iter().flatten()).flatten();
+            let mut all = all.chain(home.map(|v| &v[..])).flatten();
             all.find(|a| a.id == id).cloned()
         })
     }
@@ -1732,23 +1725,14 @@ impl App {
             let appears = self.data::<Vec<Album>>(&format!("appears:{id}"));
             let shelf = crate::pages::disc_shelf(self, albums);
             head.push(&a.cover);
-            let banner = self
-                .data::<String>(&a.banner_key())
-                .filter(|u| !u.is_empty());
-            huge.extend(banner.filter(|_| self.cfg.settings.banners));
+            let banner = self.data::<String>(&a.banner_key());
+            huge.extend(banner.filter(|u| self.cfg.settings.banners && !u.is_empty()));
             small.extend(top.iter().flat_map(|v| v.iter().take(10)).map(|s| &s.cover));
             big.extend(shelf.iter().map(|x| &x.cover));
-            big.extend(
-                info.iter()
-                    .flat_map(|i| i.similar.iter().take(cols))
-                    .map(|x| &x.cover),
-            );
-            big.extend(
-                appears
-                    .iter()
-                    .flat_map(|v| v.iter().take(cols))
-                    .map(|x| &x.cover),
-            );
+            let similar = info.map_or(&[][..], |i| &i.similar);
+            big.extend(similar.iter().take(cols).map(|x| &x.cover));
+            let appears = appears.map_or(&[][..], |v| &v[..]);
+            big.extend(appears.iter().take(cols).map(|x| &x.cover));
         } else if let Some(p) = self.data::<Pager<Album>>(key).map(|p| &p.items) {
             big.extend(p[tiles(p.len())].iter().map(|a| &a.cover));
         } else if let Some(p) = self.data::<Pager<Artist>>(key).map(|p| &p.items) {
@@ -1760,13 +1744,10 @@ impl App {
         } else if let Some(h) = self.data::<Home>(key) {
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
             small.extend(pls.iter().take(3).map(|p| &p.cover));
-            small.extend(h.recent.iter().take(7).map(|a| &a.cover));
+            small.extend(h[0].iter().take(7).map(|a| &a.cover));
             let hs = cw + 132.0;
             let near = |n: usize| (off - hs..off + view + hs).contains(&(184.0 + n as f32 * hs));
-            let lists = [&h.recent, &h.added, &h.frequent, &h.random]
-                .into_iter()
-                .enumerate();
-            for (_, l) in lists.filter(|x| near(x.0)) {
+            for (_, l) in h.iter().enumerate().filter(|x| near(x.0)) {
                 big.extend(l.iter().take(cols).map(|a| &a.cover));
             }
             big.extend(pls.iter().take(cols).filter(|_| near(4)).map(|p| &p.cover));
@@ -1899,17 +1880,14 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
 
 fn decode(b: &[u8], size: u32, wide: bool) -> Result<Decoded, String> {
     use ::image::imageops::FilterType;
-    let img = ::image::load_from_memory(b).map_err(|e| e.to_string())?;
+    let mut img = ::image::load_from_memory(b).map_err(|e| e.to_string())?;
     let h = (img.width() / 3).min(img.height());
-    let img = match wide {
-        true => img.crop_imm(0, (img.height() - h) * 3 / 10, img.width(), h),
-        false => img,
-    };
-    let big = img.width() > size || img.height() > size;
-    let img = match big {
-        true => img.thumbnail(size, size),
-        false => img,
-    };
+    if wide {
+        img = img.crop_imm(0, (img.height() - h) * 3 / 10, img.width(), h);
+    }
+    if img.width() > size || img.height() > size {
+        img = img.thumbnail(size, size);
+    }
     let small = img.resize_exact(24, 24, FilterType::Triangle).to_rgb8();
     let (mut hue, mut all) = ([[0f32; 4]; 12], [0f32; 3]);
     for p in small.pixels() {
@@ -1935,12 +1913,8 @@ fn decode(b: &[u8], size: u32, wide: bool) -> Result<Decoded, String> {
         true => Color::from_rgb(l, l, l),
         false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
     };
-    Ok((
-        img.width(),
-        img.height(),
-        color,
-        img.into_rgba8().into_raw(),
-    ))
+    let (w, h) = (img.width(), img.height());
+    Ok((w, h, color, img.into_rgba8().into_raw()))
 }
 
 fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {
@@ -1961,12 +1935,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 let l = |t| s.albums(t, &[], 0, 12);
                 let (r, a, f, x) =
                     tokio::try_join!(l("recent"), l("newest"), l("frequent"), l("random"))?;
-                Arc::new(Home {
-                    recent: r.0,
-                    added: a.0,
-                    frequent: f.0,
-                    random: x.0,
-                })
+                Arc::new([r.0, a.0, f.0, x.0]) as AnyData
             }
             "lib" => {
                 let (playlists, (artists, albums, _)) =

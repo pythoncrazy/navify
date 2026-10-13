@@ -1,8 +1,8 @@
 use iced::font::Weight::{Medium, Normal};
 use iced::widget::tooltip::Position::{Bottom, Right, Top};
 use iced::widget::{
-    Column, Row, Space, button, column, container, image, mouse_area, row, scrollable, slider,
-    stack, text, text_input, tooltip,
+    Row, Space, button, column, container, image, mouse_area, row, scrollable, slider, stack, text,
+    text_input, tooltip,
 };
 use iced::{Background, Center, Color, Element, Fill, FillPortion, color, padding};
 
@@ -238,17 +238,12 @@ fn top_bar(app: &App) -> El<'_> {
         side: text_input::Side::Left,
     };
     let style = theme::input([ELEVATED, CHIP], [BG, TEXT], [0.0, 2.0], 500.0);
-    let search = text_input("What do you want to play?", &app.search_q)
-        .id("search")
-        .on_input(Message::Search)
-        .on_submit(Message::SearchGo(app.search_seq))
-        .style(style)
-        .icon(glass)
-        .font(theme::fw(Normal))
-        .padding([13, 16])
-        .line_height(text::LineHeight::Absolute(22.0.into()))
-        .width(474)
-        .size(16);
+    let search = text_input("What do you want to play?", &app.search_q);
+    let search = search.id("search").on_input(Message::Search);
+    let search = search.on_submit(Message::SearchGo(app.search_seq));
+    let search = search.style(style).icon(glass).width(474).size(16);
+    let search = search.font(theme::fw(Normal)).padding([13, 16]);
+    let search = search.line_height(text::LineHeight::Absolute(22.0.into()));
     let fwd = app.hi + 1 < app.history.len();
     let settings = Message::Nav("settings".into());
     let menu = Message::Menu(Box::new(MenuKind::User));
@@ -368,8 +363,7 @@ fn lib_panel(app: &App) -> El<'_> {
     });
     let liked = (f < 2 && hit("Liked Songs"))
         .then(|| item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into()));
-    let list = Column::new()
-        .push(liked)
+    let list = column![liked]
         .extend(pins)
         .push(top)
         .extend(rows)
@@ -392,23 +386,15 @@ fn lib_panel(app: &App) -> El<'_> {
             .font(theme::fw(Normal))
             .size(14)
             .padding([6, 8])
-            .width(Fill)
     });
     let names = ["Custom order", "Alphabetical", "Creator"];
     let order = row![txt(names[sort as usize], 14.0), i(i::LIST, 16.0)].spacing(8);
-    let order = theme::link_btn(
-        order.align_y(Center),
-        SUB,
-        set(|s, n| s.lib_sort = n, (sort + 1) % 3),
-    );
-    let order = tip(order.padding([4, 8]), "Change the sort order", Bottom);
+    let next = set(|s, n| s.lib_sort = n, (sort + 1) % 3);
+    let order = theme::link_btn(order.align_y(Center), SUB, next).padding([4, 8]);
+    let order = tip(order, "Change the sort order", Bottom);
     let gap = field.is_none().then(|| Space::new().width(Fill));
-    let tools = row![find]
-        .push(field)
-        .push(gap)
-        .push(order)
-        .spacing(8)
-        .align_y(Center);
+    let tools = row![find].push(field).push(gap).push(order);
+    let tools = tools.spacing(8).align_y(Center);
     let tools = (!mini).then(|| container(tools).padding([0, 4]));
     let list = scrollable(list).style(theme::scroll).height(Fill);
     let list = list.on_scroll(|v| Message::LibScrolled(v.absolute_offset().y, v.bounds().height));

@@ -218,15 +218,10 @@ fn normalize(v: &mut Value) {
                 m.insert("id".into(), id);
             }
             let has = m.get("hasCoverArt") != Some(&false.into());
-            let id = m
-                .get(if has { "id" } else { "albumId" })
-                .filter(|id| id.is_string())
-                .cloned();
-            let hash = m
-                .remove("imageHash")
-                .and_then(|h| h.as_str().map(str::to_string));
+            let id = m.get(["albumId", "id"][usize::from(has)]).cloned();
+            let (id, hash) = (id.filter(Value::is_string), m.remove("imageHash"));
             if let Some(c) = m.remove("coverArt").filter(|c| c != "").or(id) {
-                let c = match (c.as_str(), hash) {
+                let c = match (c.as_str(), hash.as_ref().and_then(Value::as_str)) {
                     (Some(c), Some(h)) => format!("{c}#{h}").into(),
                     _ => c,
                 };
@@ -359,8 +354,8 @@ impl Session {
     }
 
     pub async fn rest<T: Data>(&self, method: &str, q: &Q<'_>, ptr: &str) -> Result<T> {
-        self.get(method, Value::from_iter(q.iter().copied()), ptr)
-            .await
+        let q = Value::from_iter(q.iter().copied());
+        self.get(method, q, ptr).await
     }
 
     async fn get<T: Data>(&self, method: &str, q: impl Into<Value>, ptr: &str) -> Result<T> {
@@ -548,25 +543,17 @@ impl Session {
 
     pub async fn banner(&self, q: &str) -> Result<String> {
         let base = "https://www.theaudiodb.com/api/v1/json/123";
-        let req = match q.strip_prefix("mb:") {
-            Some(m) => self
-                .http
-                .get(format!("{base}/artist-mb.php"))
-                .query(&[("i", m)]),
-            None => self
-                .http
-                .get(format!("{base}/search.php"))
-                .query(&[("s", q)]),
+        let (path, k, v) = match q.strip_prefix("mb:") {
+            Some(m) => ("artist-mb", "i", m),
+            None => ("search", "s", q),
         };
+        let req = self.http.get(format!("{base}/{path}.php")).query(&[(k, v)]);
         let res = req.send().await.map_err(net_err)?;
         let status = res.status().as_u16();
         ensure!(status < 300, "TheAudioDB returned HTTP {status}.");
         let v: Value = serde_json::from_slice(&res.bytes().await.map_err(net_err)?)?;
-        let same = |a: &&Value| {
-            a["strArtist"]
-                .as_str()
-                .is_some_and(|n| n.eq_ignore_ascii_case(q))
-        };
+        let low = Some(q.to_lowercase());
+        let same = |a: &&Value| a["strArtist"].as_str().map(str::to_lowercase) == low;
         let mut hit = v["artists"].as_array().into_iter().flatten();
         let hit = hit.find(|a| q.starts_with("mb:") || same(a));
         Ok(hit
@@ -636,8 +623,8 @@ impl Session {
     }
 
     pub async fn scrobble(&self, id: &str, on: bool) -> Result<()> {
-        self.act("scrobble", json!({"id": id, "submission": on}))
-            .await
+        let q = json!({"id": id, "submission": on});
+        self.act("scrobble", q).await
     }
 
     pub async fn star(&self, ids: &[String], on: bool) -> Result<()> {

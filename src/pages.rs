@@ -507,7 +507,7 @@ fn home(app: &App) -> Option<El<'_>> {
     };
     let pins = pls.iter().take(3);
     let pins = pins.map(|p| (&p.cover, &p.name, format!("playlist:{}", p.id)));
-    let recent = h.recent.iter();
+    let recent = h[0].iter();
     let recent = recent.map(|a| (&a.cover, &a.name, format!("album:{}", a.id)));
     let small = |c| cover(app, c, 56.0, false);
     let rest = pins.chain(recent).map(|(c, n, r)| tile(small(c), n, r));
@@ -519,19 +519,19 @@ fn home(app: &App) -> Option<El<'_>> {
     });
     let k = app.grid().0;
     let shelves = [
-        ("Recently played", "recent", &h.recent),
-        ("Recently added", "newest", &h.added),
-        ("Most played", "frequent", &h.frequent),
-        ("Random picks", "random", &h.random),
+        ("Recently played", "recent"),
+        ("Recently added", "newest"),
+        ("Most played", "frequent"),
+        ("Random picks", "random"),
     ];
-    let shelves = shelves.map(|(t, s, l)| {
+    let shelves = shelves.into_iter().zip(h).map(|((t, s), l)| {
         let cards = l
             .iter()
             .take(k)
             .map(|a| album_card(app, a, a.artist.clone()));
         shelf(t, Some(format!("albums:{s}")), cards)
     });
-    let c = h.recent.first().map_or(GREY, |a| head_color(app, &a.cover));
+    let c = h[0].first().map_or(GREY, |a| head_color(app, &a.cover));
     let height = 200.0 + 5.0 * (app.grid().1 + 100.0);
     let pls = pls.iter().take(k).map(|p| playlist_card(app, p));
     let pls = shelf("Your playlists", None, pls);
@@ -569,16 +569,9 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
         blur_radius: 60.0,
         offset: iced::Vector::new(0.0, 4.0),
     };
-    let r = if app.route.starts_with("artist:") {
-        px / 2.0
-    } else {
-        4.0
-    };
-    let art = container(p.art).style(move |_| {
-        container::Style::default()
-            .shadow(shadow)
-            .border(iced::Border::default().rounded(r))
-    });
+    let r = [4.0, px / 2.0][usize::from(app.route.starts_with("artist:"))];
+    let st = container::Style::default().shadow(shadow);
+    let art = container(p.art).style(move |_| st.border(iced::border::rounded(r)));
     let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
     let hero: El = if let Some(url) = p.banner {
         let bh = app.main_w() / 3.0;
@@ -586,21 +579,18 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
         let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
         let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
         let title = ell(p.title, tw, size, Black).line_height(1.1);
-        let img = app.covers.get(url, 640).map(|h| {
-            image(h)
-                .width(Fill)
-                .height(bh)
-                .content_fit(iced::ContentFit::Fill)
-        });
-        let dim = [
+        let img = app
+            .covers
+            .get(url, 640)
+            .map(|h| image(h).width(Fill).height(bh));
+        let img = img.map(|i| i.content_fit(iced::ContentFit::Fill));
+        let dim_stops = [
             (0.0, CLEAR),
             (0.5, BG.scale_alpha(0.1)),
             (1.0, BG.scale_alpha(0.6)),
         ];
-        let dim = container(Space::new())
-            .width(Fill)
-            .height(bh)
-            .style(theme::down(&dim));
+        let dim = container(Space::new()).width(Fill).height(bh);
+        let dim = dim.style(theme::down(&dim_stops));
         let text = container(column![title, p.meta].spacing(8)).padding(PAD);
         let text = text.width(Fill).height(bh).align_bottom(bh);
         let back = container(Space::new()).width(Fill).height(bh).style(bg);
@@ -737,13 +727,8 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let t = bold("Show the current line", 14.0);
         let b = button(t).padding([10, 20]).on_press(Message::Follow);
         let b = b.style(theme::btn([TEXT; 3], [BG; 3], 500.0));
-        return Some(
-            container(b)
-                .center_x(Fill)
-                .align_bottom(Fill)
-                .padding(24)
-                .into(),
-        );
+        let b = container(b).center_x(Fill).align_bottom(Fill);
+        return Some(b.padding(24).into());
     }
     if let Some((id, f, _, albums)) = disc_args(app) {
         let tools = disc_tools(app, albums, id, f);
@@ -1012,33 +997,24 @@ pub fn lyric_scroll(app: &App) -> Option<(usize, f32)> {
     let (l, cur, _) = lyric_at(app, app.current_song()?)?;
     let w = (app.main_w() - 4.0 * PAD).min(900.0);
     let rows = |s: &str| (s.chars().count() as f32 * 17.6 / w).ceil().max(1.0);
-    let y: f32 = l.lines[..cur]
-        .iter()
-        .map(|x| rows(&x.1) * 41.6 + 16.0)
-        .sum();
-    Some((cur, (48.0 + y - app.scroll().1 * 0.3).max(0.0)))
+    let ys = l.lines[..cur].iter().map(|x| rows(&x.1) * 41.6 + 16.0);
+    Some((
+        cur,
+        (48.0 + ys.sum::<f32>() - app.scroll().1 * 0.3).max(0.0),
+    ))
 }
 
 fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, usize, bool)> {
     let all = app.data::<Vec<Lyrics>>(&format!("lyrics:{}", song.id))?;
     let l = all.iter().find(|l| !l.lines.is_empty())?;
-    let (ms, end) = (
-        (app.position * 1000.0) as i64,
-        (song.duration * 1000.0) as i64,
-    );
+    let ms = (app.position * 1000.0) as i64;
+    let end = (song.duration * 1000.0) as i64;
     let at = |t: u64| t as i64 + l.offset;
     let fits = l.lines.iter().filter_map(|x| x.0).all(|t| at(t) <= end);
     let synced = l.synced && (end <= 0 || fits);
     let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
-    Some((
-        l,
-        if synced {
-            l.lines.iter().rposition(past).unwrap_or(0)
-        } else {
-            0
-        },
-        synced,
-    ))
+    let cur = l.lines.iter().rposition(past).filter(|_| synced);
+    Some((l, cur.unwrap_or(0), synced))
 }
 
 fn pick<'a, T: Clone + Send + Sync + 'static>(
@@ -1271,7 +1247,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         let m = Message::Star(vec![id.into()], !on);
         it(
             [i::SAVE, i::SAVED][usize::from(on)],
-            if on { yes } else { no },
+            [no, yes][usize::from(on)],
             m,
         )
     };
@@ -1342,12 +1318,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 let rm = Message::PlRemove(n.clone());
                 v.push(it(i::TRASH, "Remove from this playlist", rm));
             }
-            let star = Message::Star(ids(songs), !on);
-            v.push(it(
-                [i::SAVE, i::SAVED][usize::from(on)],
-                like[usize::from(on)],
-                star,
-            ));
+            let (star, k) = (Message::Star(ids(songs), !on), usize::from(on));
+            v.push(it([i::SAVE, i::SAVED][k], like[k], star));
             if let [s] = &songs[..] {
                 let radio = Message::Radio(s.id.clone());
                 let radio = it(i::RADIO, "Go to song radio", radio);
@@ -1404,16 +1376,12 @@ pub fn login(app: &App) -> El<'_> {
     const W: f32 = 324.0;
     let field = |label: &'static str, v: &str, n: u8| -> El<'_> {
         let style = theme::input([theme::PANEL; 2], [theme::FIELD, TEXT], [1.0, 2.0], 4.0);
-        let input = text_input("", v)
-            .id(format!("login{n}"))
-            .on_input(move |s| Message::LField(n, s))
-            .on_submit(Message::LSubmit)
-            .secure(n == 2)
-            .style(style)
-            .font(theme::fw(Normal))
-            .padding(13)
-            .line_height(text::LineHeight::Absolute(20.0.into()))
-            .size(16);
+        let input = text_input("", v).id(format!("login{n}"));
+        let input = input.on_input(move |s| Message::LField(n, s));
+        let input = input.on_submit(Message::LSubmit).secure(n == 2);
+        let input = input.style(style).font(theme::fw(Normal));
+        let input = input.padding(13).size(16);
+        let input = input.line_height(text::LineHeight::Absolute(20.0.into()));
         column![bold(label, 14.0), input].spacing(8).into()
     };
     let saved = app.cfg.servers.iter().map(|s| -> El<'_> {

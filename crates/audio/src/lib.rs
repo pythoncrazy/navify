@@ -499,8 +499,8 @@ impl Raw {
         Ok(first.map(|(j, s, n)| {
             self.big = self.big.max((buf.len() - j) as u64);
             let data = buf.split_off(j);
-            self.pk
-                .push_back(Packet::new(0, Timestamp::new(s as i64), n.into(), data));
+            let pk = Packet::new(0, Timestamp::new(s as i64), n.into(), data);
+            self.pk.push_back(pk);
             self.prev = Some(s + n);
             s + n
         }))
@@ -518,11 +518,8 @@ impl Raw {
             }
         };
         self.big = self.big.max((27 + lace.len() + data.len()) as u64);
-        let mut part = if flags & 1 != 0 {
-            self.part.take()
-        } else {
-            Some(Vec::new())
-        };
+        let mut part = self.part.take().filter(|_| flags & 1 != 0);
+        part = part.or_else(|| (flags & 1 == 0).then(Vec::new));
         let (mut off, mut got) = (0, Vec::new());
         for &l in &lace {
             if let Some(v) = &mut part {
@@ -583,9 +580,8 @@ impl Demux for Raw {
         'probe: for _ in 0..32 {
             let bps = (hi.0 - lo.0) as f64 / (hi.1 - lo.1).max(1) as f64;
             let est = lo.0 + ((t - lo.1) as f64 * bps) as u64;
-            let at = est
-                .saturating_sub((hi.0 - lo.0) / 64 + 2 * self.big)
-                .max(lo.0);
+            let at = est.saturating_sub((hi.0 - lo.0) / 64 + 2 * self.big);
+            let at = at.max(lo.0);
             self.r.seek(SeekFrom::Start(at))?;
             (self.pk, self.part, self.prev) = (VecDeque::new(), None, None);
             let mut g = loop {
@@ -711,11 +707,7 @@ impl Source {
                     (Box::new((format, id)), p, head, sr, tb, frames)
                 };
             let tb = tb.or(TimeBase::try_from_recip(sr)).ok_or("no time base")?;
-            let base = if track.transcoded {
-                offset.trunc() as f64
-            } else {
-                0.0
-            };
+            let base = [0.0, offset.trunc() as f64][usize::from(track.transcoded)];
             let opus = params.is_none();
             if opus && (head.len() < 19 || head[9] > 2) {
                 Err("The Opus stream has more than two channels or a bad header.")?
