@@ -173,7 +173,6 @@ struct Net0 {
     len: Option<u64>,
     want: u64,
     jump: bool,
-    busy: bool,
     rate: f64,
     ttfb: f64,
     err: Option<String>,
@@ -214,8 +213,7 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                             if std::mem::take(&mut st.jump) {
                                 (st.start, st.data) = (st.want, Vec::new());
                             }
-                            st.busy = st.end() < len && st.end() < st.want + AHEAD;
-                            if st.busy {
+                            if st.end() < len && st.end() < st.want + AHEAD / 2 {
                                 break st.end();
                             }
                         }
@@ -281,7 +279,7 @@ impl Read for Http {
                 buf[..n].copy_from_slice(&d[..n]);
                 self.pos += n as u64;
                 let end = st.end();
-                if !tail && !st.busy && end - pos < AHEAD / 2 && st.len.is_some_and(|l| end < l) {
+                if !tail && end - pos < AHEAD / 2 && st.len.is_some_and(|l| end < l) {
                     self.net.2.notify_one();
                 }
                 return Ok(n);
@@ -297,9 +295,7 @@ impl Read for Http {
             }
             let far = pos.wrapping_sub(st.end()) as f64 > st.rate * st.ttfb + 65536.0;
             st.jump |= st.len.is_some() && far;
-            if !st.busy {
-                self.net.2.notify_one();
-            }
+            self.net.2.notify_one();
             st = self.net.1.wait(st).expect("net lock");
         }
     }
@@ -685,7 +681,6 @@ impl Source {
                 st.len = Some(len.ok_or("The server did not send the stream length.")?);
                 Ok(head)
             })?;
-            net.st().busy = true;
             let mut task = JoinSet::new();
             task.spawn_on(fetch(net.clone(), http.clone(), url, Some(head)), rt);
             let mut src = Http {
@@ -816,9 +811,8 @@ impl Source {
                 SeekMode::Coarse
             }
         };
-        let to = self
-            .demux
-            .seek(self.tb.calc_timestamp(time).ok_or("invalid seek")?, mode)?;
+        let ts = self.tb.calc_timestamp(time).ok_or("invalid seek")?;
+        let to = self.demux.seek(ts, mode)?;
         let at = self.tb.calc_time_saturating(to).as_secs_f64();
         self.skip = ((target - at) * self.rate).max(0.0) as usize;
         (self.dec)(None, &mut self.pcm)?;
@@ -857,76 +851,73 @@ impl Source {
         }
         let (gain, mut k) = (self.track.gain, 0);
         while k < out.len() {
-            if !self.out.is_empty() {
-                let m = self.out.len().min(out.len() - k);
-                out[k..k + m]
-                    .iter_mut()
-                    .zip(self.out.drain(..m))
-                    .for_each(|(o, s)| *o = s * gain);
-                k += m;
-                continue;
-            }
-            let need = self.rs.as_ref().map_or(CHUNK, |r| r.input_frames_next()) * 2;
-            if self.pcm.len() - self.off < need {
-                self.pcm.drain(..self.off);
-                self.off = 0;
-            }
-            while !self.eof && self.pcm.len() < need {
-                let p = match self.demux.next() {
-                    Err(SymError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => None,
-                    r => r?,
-                };
-                let Some(p) = p else {
-                    self.eof = true;
-                    break;
-                };
-                let n = self.pcm.len();
-                match (self.dec)(Some(&p), &mut self.pcm) {
-                    Err(SymError::DecodeError(_)) => {}
-                    r => r?,
+            if self.out.is_empty() {
+                let need = self.rs.as_ref().map_or(CHUNK, |r| r.input_frames_next()) * 2;
+                if self.pcm.len() - self.off < need {
+                    self.pcm.drain(..self.off);
+                    self.off = 0;
                 }
-                let k = (self.skip * 2).min(self.pcm.len() - n);
-                self.pcm.drain(n..n + k);
-                self.skip -= k / 2;
-            }
-            let (pcm, avail) = (&self.pcm[self.off..], (self.pcm.len() - self.off) / 2);
-            let Some(rs) = &mut self.rs else {
-                let m = (avail * 2).min(out.len() - k);
-                if m == 0 {
-                    break;
+                while !self.eof && self.pcm.len() < need {
+                    let p = match self.demux.next() {
+                        Err(SymError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => None,
+                        r => r?,
+                    };
+                    let Some(p) = p else {
+                        self.eof = true;
+                        break;
+                    };
+                    let n = self.pcm.len();
+                    match (self.dec)(Some(&p), &mut self.pcm) {
+                        Err(SymError::DecodeError(_)) => {}
+                        r => r?,
+                    }
+                    let k = (self.skip * 2).min(self.pcm.len() - n);
+                    self.pcm.drain(n..n + k);
+                    self.skip -= k / 2;
                 }
-                out[k..k + m]
-                    .iter_mut()
-                    .zip(pcm)
-                    .for_each(|(o, s)| *o = s * gain);
-                (k, self.off, self.done) = (k + m, self.off + m, self.done + m as u64 / 2);
-                continue;
+                if let Some(rs) = &mut self.rs {
+                    let avail = (self.pcm.len() - self.off) / 2;
+                    if self.eof && avail == 0 && self.owed < 1.0 {
+                        break;
+                    }
+                    let partial = avail < need / 2;
+                    let idx = partial.then(|| Indexing::new().partial_len(avail));
+                    self.out.resize(CHUNK * 2, 0.0);
+                    let (nin, nout) = rs.process_into_buffer(
+                        &InterleavedSlice::new(&self.pcm[self.off..], 2, avail)?,
+                        &mut InterleavedSlice::new_mut(&mut self.out, 2, CHUNK)?,
+                        idx.as_ref(),
+                    )?;
+                    let nin = nin.min(avail);
+                    self.owed += nin as f64 * rs.resample_ratio();
+                    (self.off, self.done) = (self.off + nin * 2, self.done + nin as u64);
+                    let (drop, cap) = (self.lead.min(nout), self.owed.round().max(0.0) as usize);
+                    let keep = (nout - drop).min(if partial { cap } else { nout });
+                    (self.lead, self.owed) = (self.lead - drop, self.owed - keep as f64);
+                    self.out.truncate((drop + keep) * 2);
+                    self.out.drain(..drop * 2);
+                    continue;
+                }
+            }
+            let src = if self.out.is_empty() {
+                &self.pcm[self.off..]
+            } else {
+                &self.out
             };
-            if self.eof && avail == 0 && self.owed < 1.0 {
+            let m = src.len().min(out.len() - k);
+            if m == 0 {
                 break;
             }
-            let partial = avail < need / 2;
-            let idx = Indexing {
-                partial_len: partial.then_some(avail),
-                ..Default::default()
-            };
-            self.out.resize(CHUNK * 2, 0.0);
-            let (nin, nout) = rs.process_into_buffer(
-                &InterleavedSlice::new(pcm, 2, avail)?,
-                &mut InterleavedSlice::new_mut(&mut self.out, 2, CHUNK)?,
-                Some(&idx),
-            )?;
-            let nin = nin.min(avail);
-            self.owed += nin as f64 * rs.resample_ratio();
-            (self.off, self.done) = (self.off + nin * 2, self.done + nin as u64);
-            let drop = self.lead.min(nout);
-            let keep = match partial {
-                true => (nout - drop).min(self.owed.round().max(0.0) as usize),
-                false => nout - drop,
-            };
-            (self.lead, self.owed) = (self.lead - drop, self.owed - keep as f64);
-            self.out.truncate((drop + keep) * 2);
-            self.out.drain(..drop * 2);
+            out[k..k + m]
+                .iter_mut()
+                .zip(src)
+                .for_each(|(o, s)| *o = s * gain);
+            k += m;
+            if self.out.is_empty() {
+                (self.off, self.done) = (self.off + m, self.done + m as u64 / 2);
+            } else {
+                self.out.drain(..m);
+            }
         }
         Ok(k / 2)
     }
@@ -946,12 +937,8 @@ struct Mixer {
 impl Mixer {
     fn queue(&mut self, io: &Io, t: Option<Track>) {
         let (io, r) = (io.clone(), self.rate);
-        self.pre = t.map(|t| {
-            (
-                t.clone(),
-                thread::spawn(move || Source::open(t, &io, r, 0.0)),
-            )
-        });
+        let open = move |t: Track| thread::spawn(move || Source::open(t, &io, r, 0.0));
+        self.pre = t.map(|t| (t.clone(), open(t)));
     }
 
     fn seek(&mut self, io: &Io, secs: f32) -> Result<(), String> {
