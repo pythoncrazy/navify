@@ -149,25 +149,17 @@ pub fn focusable<'a>(
 }
 
 pub fn art<'a>(px: f32, glyph: Txt<'a>, bg: impl Into<Background>) -> El<'a> {
-    let (g, r) = (
-        glyph.size(px * 0.38).center(),
-        if px < 100.0 { 4.0 } else { 6.0 },
-    );
-    container(g).center(px).style(fill(bg.into(), r)).into()
+    let r = if px < 100.0 { 4.0 } else { 6.0 };
+    let g = container(glyph.size(px * 0.38).center()).center(px);
+    g.style(fill(bg.into(), r)).into()
 }
 
 pub fn cover(app: &App, id: &str, size: u32, px: f32, round: bool) -> El<'static> {
-    let r = if round {
-        px / 2.0
-    } else {
-        [6.0, 4.0][usize::from(px < 100.0)]
-    };
+    let r = [[6.0, 4.0][usize::from(px < 100.0)], px / 2.0][usize::from(round)];
     let Some(h) = app.covers.get(id, size) else {
         let g = i([i::MUSIC, i::USER][usize::from(round)], px * 0.38).color(SUB);
-        return container(g.center())
-            .center(px)
-            .style(fill(ELEVATED, r))
-            .into();
+        let g = container(g.center()).center(px);
+        return g.style(fill(ELEVATED, r)).into();
     };
     let img = image(h).width(px).height(px).border_radius(r);
     img.content_fit(iced::ContentFit::Cover).into()
@@ -183,9 +175,8 @@ pub fn media<'a>(art: El<'a>, title: &str, sub: &str, w: f32, fg: Color) -> Row<
     let title = theme::ell(title, w, 16.0, Normal).color(fg);
     let sub = (!sub.is_empty()).then(|| theme::ell(sub, w, 14.0, Normal).color(SUB));
     let lines = column![title].push(sub);
-    row![art, lines.spacing(2).width(Fill)]
-        .spacing(12)
-        .align_y(Center)
+    let r = row![art, lines.spacing(2).width(Fill)];
+    r.spacing(12).align_y(Center)
 }
 
 pub fn artists_line<'a>(artists: &[Artist], size: f32, w: f32) -> El<'a> {
@@ -215,9 +206,8 @@ pub fn fmt_n(n: usize) -> String {
     let s = n.to_string();
     let comma = |i: usize| (i > 0 && (s.len() - i).is_multiple_of(3)).then_some(',');
     let digits = s.chars().enumerate();
-    digits
-        .flat_map(|(i, c)| comma(i).into_iter().chain([c]))
-        .collect()
+    let digits = digits.flat_map(|(i, c)| comma(i).into_iter().chain([c]));
+    digits.collect()
 }
 
 pub fn fmt_long(s: f32) -> String {
@@ -228,9 +218,8 @@ pub fn fmt_long(s: f32) -> String {
 }
 
 pub fn tip<'a>(c: impl Into<El<'a>>, label: impl ToString, at: tooltip::Position) -> El<'a> {
-    let body = container(txt(label, 14.0))
-        .padding([4, 8])
-        .style(theme::menu);
+    let body = container(txt(label, 14.0)).padding([4, 8]);
+    let body = body.style(theme::menu);
     let delay = std::time::Duration::from_millis(200);
     tooltip(c, body, at).gap(8).delay(delay).into()
 }
@@ -249,9 +238,8 @@ fn top_bar(app: &App) -> El<'_> {
     let first = user.chars().next().map_or('?', |c| c.to_ascii_uppercase());
     let ring = fill(theme::color_of(&first.to_string()), 500.0);
     let avatar = container(bold(first, 14.0).color(BG).center()).center(32);
-    let avatar = button(avatar.style(ring))
-        .padding(8)
-        .style(theme::round(ELEVATED));
+    let avatar = button(avatar.style(ring)).padding(8);
+    let avatar = avatar.style(theme::round(ELEVATED));
     let home = match app.route == "home" {
         true => theme::filled(theme::fill::HOME, 24.0).color(TEXT),
         false => i(i::HOME, 24.0).color(SUB),
@@ -287,51 +275,35 @@ fn top_bar(app: &App) -> El<'_> {
     let left = row![back, nav(i::RIGHT, fwd, "Go forward", Message::Fwd)];
     let home = round(home, "Home", Message::Nav("home".into()));
     let bar = row![left.spacing(8).width(Fill), home, search, right];
-    bar.spacing(8)
-        .align_y(Center)
-        .padding([0, 8])
-        .height(64)
-        .into()
+    let bar = bar.spacing(8).align_y(Center);
+    bar.padding([0, 8]).height(64).into()
 }
 
 fn lib_panel(app: &App) -> El<'_> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.cfg.settings.lib_collapsed);
     let item = |art: El<'static>, title: &str, sub: &str, route: String| -> El<'static> {
         let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
-        let fg = if !app.ctx.is_empty() && same(&app.ctx) {
-            ACCENT
-        } else {
-            TEXT
-        };
-        let body = if mini {
-            art
-        } else {
-            media(art, title, sub, w - 112.0, fg).into()
-        };
-        let b = button(body)
-            .padding(8)
-            .width(Fill)
-            .style(theme::track(same(&app.route)));
+        let on = !app.ctx.is_empty() && same(&app.ctx);
+        let fg = if on { ACCENT } else { TEXT };
+        let row = |art| media(art, title, sub, w - 112.0, fg).into();
+        let body = if mini { art } else { row(art) };
+        let b = button(body).padding(8).width(Fill);
+        let b = b.style(theme::track(same(&app.route)));
         b.on_press(Message::Nav(route)).into()
     };
     let head: El = if mini {
         let b = icon_btn(i::LIBRARY, 20.0, Message::LibCollapse);
-        container(tip(b, "Expand Your Library", Right))
-            .center_x(Fill)
-            .into()
+        let b = tip(b, "Expand Your Library", Right);
+        container(b).center_x(Fill).into()
     } else {
         let title = row![i(i::LIBRARY, 22.0), bold("Your Library", 16.0)].spacing(12);
         let title = theme::link_btn(title.align_y(Center), SUB, Message::LibCollapse);
         let plus = theme::sq(i(i::PLUS, 18.0).center(), 32.0).style(theme::round(CHIP));
-        let plus = tip(
-            plus.on_press(Message::NewPlaylist),
-            "Create playlist",
-            Bottom,
-        );
+        let plus = plus.on_press(Message::NewPlaylist);
+        let plus = tip(plus, "Create playlist", Bottom);
         let title = tip(title, "Collapse Your Library", Bottom);
-        row![title, Space::new().width(Fill), plus]
-            .align_y(Center)
-            .into()
+        let r = row![title, Space::new().width(Fill), plus];
+        r.align_y(Center).into()
     };
     let chips = [(1u8, "Playlists"), (2, "Albums"), (3, "Artists")].map(|(n, name)| {
         let m = act(move |a| a.lib_filter = if a.lib_filter == n { 0 } else { n });
@@ -399,15 +371,10 @@ fn player_bar(app: &App) -> El<'_> {
     let dur = song.map_or(0.0, |s| s.duration).max(1.0);
     let pos = app.seek_preview.unwrap_or(app.position.min(dur));
     let rest = app.cfg.settings.remaining;
-    let total = if rest {
-        format!("-{}", fmt_dur(dur - pos))
-    } else {
-        fmt_dur(dur)
-    };
-    let total = button(txt(total, 12.0))
-        .width(48)
-        .padding(0)
-        .style(theme::link(SUB));
+    let left_dur = format!("-{}", fmt_dur(dur - pos));
+    let total = if rest { left_dur } else { fmt_dur(dur) };
+    let total = button(txt(total, 12.0)).width(48).padding(0);
+    let total = total.style(theme::link(SUB));
     let total = total.on_press(set(|s, b| s.remaining = b, !rest));
     let seek = slider(0.0..=dur, pos, |v| act(move |a| a.seek_preview = Some(v)));
     let seek = seek.on_release(Message::SeekRelease).style(theme::seek);
@@ -424,11 +391,8 @@ fn player_bar(app: &App) -> El<'_> {
     let glyph = theme::filled([theme::fill::PLAY, theme::fill::PAUSE][playing], 16.0);
     let bg = song.map_or(theme::DIM, |_| TEXT);
     let play = theme::sq(glyph.color(BG).center(), 32.0).style(theme::solid([bg; 3], BG));
-    let play = tip(
-        play.on_press(Message::Toggle),
-        ["Play", "Pause"][playing],
-        Top,
-    );
+    let play = play.on_press(Message::Toggle);
+    let play = tip(play, ["Play", "Pause"][playing], Top);
     let (ic, fi) = (|c| i(c, 16.0), |c| theme::filled(c, 16.0));
     let (on, rep) = (app.shuffle.is_some(), usize::from(app.repeat));
     let shuffle = ["Enable shuffle", "Disable shuffle"][usize::from(on)];
@@ -449,9 +413,8 @@ fn player_bar(app: &App) -> El<'_> {
     let lyrics = app.route == "lyrics";
     let speed = app.cfg.settings.speed;
     let speed_fg = if speed == 1.0 { SUB } else { ACCENT };
-    let speed = button(bold(format!("{speed}x"), 12.0).center())
-        .width(40)
-        .height(32);
+    let speed = bold(format!("{speed}x"), 12.0).center();
+    let speed = button(speed).width(40).height(32);
     let speed = speed.padding(0).style(theme::link(speed_fg));
     let speed = speed.on_press(Message::Menu(Box::new(MenuKind::Speed)));
     let volume = slider(0.0..=1.0, vol, Message::Vol).step(0.01f32).width(93);
@@ -462,11 +425,8 @@ fn player_bar(app: &App) -> El<'_> {
         };
         Message::Vol((vol + step).clamp(0.0, 1.0))
     });
-    let words = if lyrics {
-        Message::Back
-    } else {
-        Message::Nav("lyrics".into())
-    };
+    let words = [Message::Nav("lyrics".into()), Message::Back];
+    let words = words[usize::from(lyrics)].clone();
     let mute = if app.muted { "Unmute" } else { "Mute" };
     let right = row![
         side(
@@ -507,55 +467,40 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
         let msg = text::Rich::<(), Message>::with_spans(spans).size(14);
         let msg = msg.font(theme::fw(Normal)).color(BG);
         let red = [theme::RED, color!(0xd81326), color!(0xa60e1d)];
-        let cancel = act(
-            "Cancel",
-            [theme::CLEAR; 3],
-            BG,
-            16,
-            Some(Message::MenuClose),
-        );
+        let close = Some(Message::MenuClose);
+        let cancel = act("Cancel", [theme::CLEAR; 3], BG, 16, close);
         let delete = act("Delete", red, TEXT, 32, Some(Message::PlDel(id.into())));
         let buttons = row![Space::new().width(Fill), cancel, delete].spacing(16);
         let buttons = buttons.align_y(Center).padding(padding::top(16));
         let title = bold("Delete from Your Library?", 24.0).color(BG);
-        let body = column![title, msg, buttons]
-            .spacing(8)
-            .width(420)
-            .padding(32);
+        let body = column![title, msg, buttons].spacing(8);
+        let body = body.width(420).padding(32);
         return container(body).style(fill(TEXT, 8.0)).into();
     }
     let named = !app.new_pl.trim().is_empty();
     let (name, desc) = (app.new_pl.clone(), app.new_pl_desc.clone());
     let ok = named.then(|| Message::Edit(id.into(), name, desc));
     let input = |hint: &'static str, v: &str, n: u8| {
-        let style = theme::input(
-            [theme::MENU_HOVER; 2],
-            [color!(0x535353); 2],
-            [0.0, 1.0],
-            4.0,
-        );
-        let t = text_input(hint, v)
-            .id("layer")
-            .on_input(move |v| Message::LField(n, v));
+        let edge = [color!(0x535353); 2];
+        let style = theme::input([theme::MENU_HOVER; 2], edge, [0.0, 1.0], 4.0);
+        let t = text_input(hint, v).id("layer");
+        let t = t.on_input(move |v| Message::LField(n, v));
         let t = t.on_submit_maybe(ok.clone()).style(style);
         t.font(theme::fw(Normal)).padding(10).size(14)
     };
     let x = icon_btn(i::X, 16.0, Message::MenuClose);
     let close = focusable(x, Some(Message::MenuClose), 16.0, Some("layer"));
     let error = (!named).then(|| txt("Enter a name.", 12.0).color(theme::ERR));
-    let name = column![input("Add a name", &app.new_pl, 3)]
-        .push(error)
-        .spacing(6);
+    let name = column![input("Add a name", &app.new_pl, 3)];
+    let name = name.push(error).spacing(6);
     let desc = input("Add an optional description", &app.new_pl_desc, 4);
     let art = cover(app, pl.map_or("", |p| p.cover.as_str()), 300, 180.0, false);
     let white = [TEXT, color!(0xf0f0f0), color!(0xf0f0f0)];
     let save = container(act("Save", white, BG, 32, ok)).align_right(Fill);
     let head = row![bold("Edit details", 24.0).width(Fill), close].align_y(Center);
     let fields = row![art, column![name, desc].spacing(16)].spacing(16);
-    let body = column![head, fields, save]
-        .spacing(24)
-        .width(524)
-        .padding(24);
+    let body = column![head, fields, save].spacing(24);
+    let body = body.width(524).padding(24);
     let style = |t: &iced::Theme| theme::menu(t).border(iced::border::rounded(8));
     container(body).style(style).into()
 }
@@ -565,13 +510,9 @@ pub fn view(app: &App) -> El<'_> {
         return pages::login(app);
     }
     let scrim = |c: Color| {
-        let s = container(Space::new())
-            .width(Fill)
-            .height(Fill)
-            .style(fill(c, 0.0));
-        mouse_area(s)
-            .on_press(Message::MenuClose)
-            .on_right_press(Message::MenuClose)
+        let s = container(Space::new()).width(Fill).height(Fill);
+        let s = mouse_area(s.style(fill(c, 0.0))).on_press(Message::MenuClose);
+        s.on_right_press(Message::MenuClose)
     };
     let modal = app.modal.as_ref().map(|(id, kind)| {
         let card = container(modal(app, id, *kind)).center(Fill);
@@ -583,11 +524,7 @@ pub fn view(app: &App) -> El<'_> {
         let x = if m.x + w + 8.0 > ww { m.x - w } else { m.x };
         let y = if m.y + h + 8.0 > wh { m.y - h } else { m.y };
         let speed = matches!(m.kind, MenuKind::Speed);
-        let (x, y) = if speed {
-            (m.x - 20.0, wh - 64.0 - h)
-        } else {
-            (x, y)
-        };
+        let (x, y) = [(x, y), (m.x - 20.0, wh - 64.0 - h)][usize::from(speed)];
         let (x, y) = (x.clamp(8.0, ww - w - 8.0), y.clamp(8.0, wh - h - 8.0));
         let at = padding::top(y).left(x);
         stack![scrim(theme::CLEAR), container(el).padding(at)]

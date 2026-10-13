@@ -138,9 +138,9 @@ fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
             let fs = fs.raw();
             let mut b = ct::Buffer::new(fs, ct::Metrics::new(size, size * 1.3));
             b.set_text(fs, s, &to_attributes(fw(w)), ct::Shaping::Advanced, None);
-            let runs = b.layout_runs();
-            runs.flat_map(|r| r.glyphs.iter().map(|g| (g.x + g.w, g.end)))
-                .collect()
+            let end = |g: &ct::LayoutGlyph| (g.x + g.w, g.end);
+            let runs = b.layout_runs().flat_map(|r| r.glyphs.iter().map(end));
+            runs.collect()
         };
         m.entry(key).or_insert_with(shape).clone()
     })
@@ -163,16 +163,10 @@ pub fn ell<'a>(s: &str, px: f32, size: f32, w: Weight) -> Txt<'a> {
 
 pub fn btn(bg: [Color; 3], fg: [Color; 3], r: f32) -> impl Fn(&Theme, Status) -> BtnStyle {
     move |_, s| {
-        let i = [Status::Hovered, Status::Pressed]
-            .iter()
-            .position(|x| *x == s);
-        let i = i.map_or(0, |i| i + 1);
-        let b = BtnStyle::default().with_background(bg[i]);
-        BtnStyle {
-            text_color: fg[i],
-            border: Border::default().rounded(r),
-            ..b
-        }
+        let i = usize::from(s == Status::Hovered) + 2 * usize::from(s == Status::Pressed);
+        let mut b = BtnStyle::default().with_background(bg[i]);
+        (b.text_color, b.border) = (fg[i], Border::default().rounded(r));
+        b
     }
 }
 
@@ -208,11 +202,9 @@ pub fn link_btn<'a, M: Clone + 'a>(c: impl Into<Element<'a, M>>, fg: Color, m: M
 pub fn pill_btn<'a, M: Clone + 'a>(label: &'a str, m: M) -> Btn<'a, M> {
     let style = |t: &Theme, s| {
         let edge = if s == Status::Active { FIELD } else { TEXT };
-        let border = Border::default().color(edge).width(1).rounded(500);
-        BtnStyle {
-            border,
-            ..link(TEXT)(t, s)
-        }
+        let mut b = link(TEXT)(t, s);
+        b.border = Border::default().color(edge).width(1).rounded(500);
+        b
     };
     button(bold(label, 14.0))
         .style(style)
@@ -223,11 +215,8 @@ pub fn pill_btn<'a, M: Clone + 'a>(label: &'a str, m: M) -> Btn<'a, M> {
 pub fn chip_btn<'a, M: Clone + 'a>(label: &str, on: bool, m: M) -> Element<'a, M> {
     let bg = [[CHIP, color!(0x333333), CHIP], [TEXT; 3]][usize::from(on)];
     let style = solid(bg, if on { BG } else { TEXT });
-    button(txt(label, 14.0))
-        .on_press(m)
-        .style(style)
-        .padding([6, 12])
-        .into()
+    let b = button(txt(label, 14.0)).on_press(m);
+    b.style(style).padding([6, 12]).into()
 }
 
 pub fn fill(c: impl Into<Background>, r: f32) -> impl Fn(&Theme) -> container::Style {
@@ -287,11 +276,8 @@ pub fn seek(t: &Theme, s: slider::Status) -> slider::Style {
 }
 
 pub fn tog(t: &Theme, s: toggler::Status) -> toggler::Style {
-    use toggler::Status::{Active, Hovered};
-    let on = matches!(
-        s,
-        Active { is_toggled: true } | Hovered { is_toggled: true }
-    );
+    use toggler::Status::{Active as A, Hovered as H};
+    let on = matches!(s, A { is_toggled: true } | H { is_toggled: true });
     let mut st = toggler::default(t, s);
     (st.background, st.foreground) = (if on { ACCENT } else { FIELD }.into(), TEXT.into());
     st.padding_ratio = 0.12;
@@ -320,13 +306,12 @@ pub fn pick_menu(t: &Theme) -> iced::overlay::menu::Style {
 }
 
 pub fn scroll(t: &Theme, s: scrollable::Status) -> scrollable::Style {
-    use scrollable::Status::{Active, Hovered};
     let a = match s {
-        Active { .. } => 0.0,
-        Hovered {
-            is_vertical_scrollbar_hovered: on,
+        scrollable::Status::Active { .. } => 0.0,
+        scrollable::Status::Hovered {
+            is_vertical_scrollbar_hovered: false,
             ..
-        } => [0.3, 0.5][usize::from(on)],
+        } => 0.3,
         _ => 0.5,
     };
     let mut st = scrollable::default(t, s);
