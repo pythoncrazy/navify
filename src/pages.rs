@@ -1998,206 +1998,83 @@ pub const SPEED_H: f32 = 436.0;
 
 pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     const W: f32 = 260.0;
-    let entry = |r: El<'a>, msg: Message| -> El<'a> {
-        focusable(
-            button(container(r).center_y(Fill))
-                .padding([0, 12])
-                .height(40)
-                .width(Fill)
-                .style(theme::menu_item)
-                .on_press(msg.clone()),
-            Some(msg),
-            2.0,
-            Some("layer"),
-        )
+    let entry = |r: Row<'a, Message>, msg: Message| -> El<'a> {
+        let b = button(container(r.spacing(12).align_y(Alignment::Center)).center_y(Fill));
+        let b = b
+            .padding([0, 12])
+            .height(40)
+            .width(Fill)
+            .style(theme::menu_item);
+        focusable(b.on_press(msg.clone()), Some(msg), 2.0, Some("layer"))
     };
-    let item = |ic: char, label: String, msg: Message| -> El<'a> {
-        entry(
-            row![
-                i(ic, 16.0).color(theme::SUB),
-                theme::ell(&label, W - 64.0, 14.0, Weight::Normal)
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center)
-            .into(),
-            msg,
-        )
-    };
-    let more = |ic: char, label: &str, sub: u8| -> El<'a> {
-        entry(
-            row![
-                i(ic, 16.0).color(theme::SUB),
-                theme::txt(label, 14.0, Weight::Normal).width(Fill),
-                i(icon::RIGHT, 16.0)
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center)
-            .into(),
-            Message::MenuSub(sub),
-        )
-    };
-    let star = |id: &str, on: bool, yes: &str, no: &str| {
-        let on = app.is_starred(id, on);
-        item(
-            icon::HEART,
-            if on { yes } else { no }.into(),
-            Message::Star(vec![id.into()], !on),
-        )
-    };
+    let it = |c: char, l: &str, m: Message| Some((c, l.to_string(), m));
     let mine = |p: &Playlist| {
         app.session
             .as_ref()
             .is_some_and(|s| s.server.user == p.owner)
     };
+    let star = |ids: Vec<String>, on: bool, yes: &str, no: &str| {
+        it(
+            icon::HEART,
+            if on { yes } else { no },
+            Message::Star(ids, !on),
+        )
+    };
     let ctx = |kind: &str, id: &str| {
         let r = format!("{kind}:{id}");
-        [
-            item(icon::PLAY, "Play".into(), Message::PlayCtx(r.clone(), 0)),
-            item(
-                icon::SHUFFLE,
-                "Shuffle".into(),
-                Message::PlayCtx(r.clone(), 1),
-            ),
-            item(
-                icon::LISTPLUS,
-                "Add to queue".into(),
-                Message::PlayCtx(r, 2),
-            ),
+        vec![
+            it(icon::PLAY, "Play", Message::PlayCtx(r.clone(), 0)),
+            it(icon::SHUFFLE, "Shuffle", Message::PlayCtx(r.clone(), 1)),
+            it(icon::LISTPLUS, "Add to queue", Message::PlayCtx(r, 2)),
         ]
     };
-    let (items, seps): (Vec<El>, usize) = match &m.kind {
+    let ids = |s: &[Song]| s.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
+    let mut head: Option<El> = None;
+    let list = match &m.kind {
         MenuKind::Speed => {
-            let head = container(theme::bold("Playback speed", 12.0).color(theme::SUB))
-                .padding([0, 12])
-                .center_y(40);
             let list = Column::with_children((5..=35u8).map(|n| {
-                let v = f32::from(n) / 10.0;
-                let on = app.cfg.settings.speed == v;
-                entry(
-                    row![
-                        theme::txt(format!("{v}x"), 14.0, Weight::Normal)
-                            .color(if on { theme::ACCENT } else { theme::TEXT })
-                            .width(Fill)
-                    ]
-                    .push(on.then(|| i(icon::CHECK, 16.0).color(theme::ACCENT)))
-                    .align_y(Alignment::Center)
-                    .into(),
-                    set(|s, v| s.speed = v, v),
-                )
+                let (v, on) = (
+                    f32::from(n) / 10.0,
+                    app.cfg.settings.speed * 10.0 == f32::from(n),
+                );
+                let label = theme::txt(format!("{v}x"), 14.0, Weight::Normal);
+                let label = label
+                    .color(if on { theme::ACCENT } else { theme::TEXT })
+                    .width(Fill);
+                let check = on.then(|| i(icon::CHECK, 16.0).color(theme::ACCENT));
+                entry(row![label].push(check), set(|s, v| s.speed = v, v))
             }));
-            return (
-                container(column![
-                    head,
-                    scrollable(list)
-                        .id("speed")
-                        .style(theme::scroll)
-                        .height(Fill)
-                ])
+            let head =
+                container(theme::bold("Playback speed", 12.0).color(theme::SUB)).padding([0, 12]);
+            let body = column![
+                head.center_y(40),
+                scrollable(list)
+                    .id("speed")
+                    .style(theme::scroll)
+                    .height(Fill)
+            ];
+            let menu = container(body)
                 .padding(4)
                 .width(160)
                 .height(SPEED_H)
-                .style(theme::menu)
-                .into(),
-                160.0,
-                SPEED_H,
-            );
-        }
-        MenuKind::User => {
-            let s = app.session.as_ref();
-            let head: El = container(
-                column![
-                    theme::bold(s.map_or("", |s| s.server.user.as_str()), 14.0),
-                    theme::ell(
-                        s.map_or("", |s| s.server.url.as_str()),
-                        W - 32.0,
-                        12.0,
-                        Weight::Normal
-                    )
-                    .color(theme::SUB),
-                ]
-                .spacing(2),
-            )
-            .padding([0, 12])
-            .center_y(40)
-            .into();
-            let v: Vec<El> = std::iter::once(head)
-                .chain(
-                    app.cfg
-                        .servers
-                        .iter()
-                        .filter(|s| app.cfg.active.as_ref() != Some(&s.id))
-                        .map(|s| {
-                            item(
-                                icon::SERVER,
-                                format!("Switch to {}", s.name),
-                                Message::UseServer(s.id.clone()),
-                            )
-                        }),
-                )
-                .chain([
-                    item(
-                        icon::SETTINGS,
-                        "Settings".into(),
-                        Message::Nav("settings".into()),
-                    ),
-                    sep(),
-                    item(icon::LOGOUT, "Log out".into(), Message::LogOut),
-                ])
-                .collect();
-            (v, 1)
-        }
-        MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
-            let n = app.data::<Lib>("lib").map_or(0, |l| l.playlists.len()) + 1;
-            let name = if let [x] = &s[..] {
-                x.title.clone()
-            } else {
-                format!("My Playlist #{n}")
-            };
-            let pl: Vec<El> = std::iter::once(item(
-                icon::PLUS,
-                "New playlist".into(),
-                Message::PlNew(name, s.iter().map(|s| s.id.clone()).collect()),
-            ))
-            .chain([sep()])
-            .chain(app.data::<Lib>("lib").into_iter().flat_map(|l| {
-                l.playlists.iter().filter(|p| mine(p)).map(|p| {
-                    item(
-                        icon::MUSIC,
-                        p.name.clone(),
-                        Message::PlAdd(p.id.clone(), s.iter().map(|s| s.id.clone()).collect()),
-                    )
-                })
-            }))
-            .collect();
-            let h = ((pl.len() - 1) as f32 * 40.0 + 9.0 + 8.0).min(400.0);
-            return (
-                container(scrollable(Column::with_children(pl)).style(theme::scroll))
-                    .padding(4)
-                    .width(W)
-                    .height(h)
-                    .style(theme::menu)
-                    .into(),
-                W,
-                h,
-            );
+                .style(theme::menu);
+            return (menu.into(), 160.0, SPEED_H);
         }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if m.sub == 2 && v.len() == 1 => {
-            let s = &v[0];
-            let cur = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
+            let cur = app
+                .ratings
+                .get(&v[0].id)
+                .copied()
+                .unwrap_or(v[0].user_rating);
             let stars = Row::with_children((1..=5u8).map(|n| {
-                let m = Message::Rate(s.id.clone(), if n == cur { 0 } else { n });
-                focusable(
-                    theme::sq(i(icon::STAR, 20.0).center(), 36.0)
-                        .style(theme::link(if n <= cur {
-                            theme::ACCENT
-                        } else {
-                            theme::SUB
-                        }))
-                        .on_press(m.clone()),
-                    Some(m),
-                    18.0,
-                    Some("layer"),
-                )
+                let m = Message::Rate(v[0].id.clone(), if n == cur { 0 } else { n });
+                let b = theme::sq(i(icon::STAR, 20.0).center(), 36.0);
+                let b = b.style(theme::link(if n <= cur {
+                    theme::ACCENT
+                } else {
+                    theme::SUB
+                }));
+                focusable(b.on_press(m.clone()), Some(m), 18.0, Some("layer"))
             }));
             return (
                 container(stars).padding(6).style(theme::menu).into(),
@@ -2205,126 +2082,176 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 48.0,
             );
         }
+        MenuKind::User => {
+            let s = app.session.as_ref().map(|s| &s.server);
+            let url = theme::ell(s.map_or("", |s| &s.url), W - 32.0, 12.0, Weight::Normal);
+            let user = theme::bold(s.map_or("", |s| &s.user), 14.0);
+            head = Some(
+                container(column![user, url.color(theme::SUB)].spacing(2))
+                    .padding([0, 12])
+                    .center_y(40)
+                    .into(),
+            );
+            let others = app
+                .cfg
+                .servers
+                .iter()
+                .filter(|s| app.cfg.active.as_ref() != Some(&s.id));
+            others
+                .map(|s| {
+                    it(
+                        icon::SERVER,
+                        &format!("Switch to {}", s.name),
+                        Message::UseServer(s.id.clone()),
+                    )
+                })
+                .chain([
+                    it(icon::SETTINGS, "Settings", Message::Nav("settings".into())),
+                    None,
+                ])
+                .chain([it(icon::LOGOUT, "Log out", Message::LogOut)])
+                .collect()
+        }
+        MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
+            let lib = app.data::<Lib>("lib");
+            let n = lib.map_or(0, |l| l.playlists.len()) + 1;
+            let name = if let [x] = &s[..] {
+                x.title.clone()
+            } else {
+                format!("My Playlist #{n}")
+            };
+            let mine = lib
+                .into_iter()
+                .flat_map(|l| l.playlists.iter().filter(|p| mine(p)));
+            [
+                it(icon::PLUS, "New playlist", Message::PlNew(name, ids(s))),
+                None,
+            ]
+            .into_iter()
+            .chain(mine.map(|p| it(icon::MUSIC, &p.name, Message::PlAdd(p.id.clone(), ids(s)))))
+            .collect()
+        }
         MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
             let mut v = vec![
-                item(
+                it(
                     icon::LISTPLUS,
-                    "Add to queue".into(),
+                    "Add to queue",
                     Message::Queue(songs.clone(), false),
                 ),
-                item(
+                it(
                     icon::QUEUE,
-                    "Play next".into(),
+                    "Play next",
                     Message::Queue(songs.clone(), true),
                 ),
-                sep(),
-                more(icon::PLUS, "Add to playlist", 1),
+                None,
+                it(icon::PLUS, "Add to playlist", Message::MenuSub(1)),
             ];
             if let MenuKind::SongIn(_, n) = &m.kind {
-                v.push(item(
+                v.push(it(
                     icon::TRASH,
-                    "Remove from this playlist".into(),
+                    "Remove from this playlist",
                     Message::PlRemove(n.clone()),
                 ));
             }
-            v.push(item(
-                icon::HEART,
-                if on {
-                    "Remove from your Liked Songs"
-                } else {
-                    "Save to your Liked Songs"
-                }
-                .into(),
-                Message::Star(songs.iter().map(|s| s.id.clone()).collect(), !on),
+            v.push(star(
+                ids(songs),
+                on,
+                "Remove from your Liked Songs",
+                "Save to your Liked Songs",
             ));
             if let [s] = &songs[..] {
+                v.extend([it(icon::STAR, "Rate", Message::MenuSub(2)), None]);
+                v.push(it(
+                    icon::RADIO,
+                    "Go to song radio",
+                    Message::Radio(s.id.clone()),
+                ));
+                let artist = it(
+                    icon::USER,
+                    "Go to artist",
+                    Message::Nav(format!("artist:{}", s.artist_id)),
+                );
+                let album = it(
+                    icon::ALBUM,
+                    "Go to album",
+                    Message::Nav(format!("album:{}", s.album_id)),
+                );
                 v.extend([
-                    more(icon::STAR, "Rate", 2),
-                    sep(),
-                    item(
-                        icon::RADIO,
-                        "Go to song radio".into(),
-                        Message::Radio(s.id.clone()),
-                    ),
+                    artist.filter(|_| !s.artist_id.is_empty()),
+                    album.filter(|_| !s.album_id.is_empty()),
                 ]);
-                v.extend((!s.artist_id.is_empty()).then(|| {
-                    item(
-                        icon::USER,
-                        "Go to artist".into(),
-                        Message::Nav(format!("artist:{}", s.artist_id)),
-                    )
-                }));
-                v.extend((!s.album_id.is_empty()).then(|| {
-                    item(
-                        icon::ALBUM,
-                        "Go to album".into(),
-                        Message::Nav(format!("album:{}", s.album_id)),
-                    )
-                }));
             }
-            let seps = if songs.len() == 1 { 2 } else { 1 };
-            (v, seps)
+            v
         }
-        MenuKind::Album(a) => (
-            ctx("album", &a.id)
-                .into_iter()
-                .chain([
-                    star(
-                        &a.id,
-                        a.starred,
-                        "Remove from Your Library",
-                        "Save to Your Library",
-                    ),
-                    item(
-                        icon::USER,
-                        "Go to artist".into(),
-                        Message::Nav(format!("artist:{}", a.artist_id)),
-                    ),
-                ])
-                .collect(),
-            0,
-        ),
-        MenuKind::Artist(a) => (
-            ctx("artist", &a.id)
-                .into_iter()
-                .chain([
-                    star(&a.id, a.starred, "Unfollow", "Follow"),
-                    item(
-                        icon::RADIO,
-                        "Go to artist radio".into(),
-                        Message::Radio(a.id.clone()),
-                    ),
-                ])
-                .collect(),
-            0,
-        ),
-        MenuKind::Playlist(p) if mine(p) => (
-            ctx("playlist", &p.id)
-                .into_iter()
-                .chain([
-                    item(
-                        icon::PENCIL,
-                        "Edit details".into(),
-                        Message::Modal(p.id.clone(), 1),
-                    ),
-                    sep(),
-                    item(
-                        icon::TRASH,
-                        "Delete".into(),
-                        Message::Modal(p.id.clone(), 2),
-                    ),
-                ])
-                .collect(),
-            1,
-        ),
-        MenuKind::Playlist(p) => (ctx("playlist", &p.id).into(), 0),
+        MenuKind::Album(a) => {
+            let mut v = ctx("album", &a.id);
+            let on = app.is_starred(&a.id, a.starred);
+            v.push(star(
+                vec![a.id.clone()],
+                on,
+                "Remove from Your Library",
+                "Save to Your Library",
+            ));
+            v.push(it(
+                icon::USER,
+                "Go to artist",
+                Message::Nav(format!("artist:{}", a.artist_id)),
+            ));
+            v
+        }
+        MenuKind::Artist(a) => {
+            let mut v = ctx("artist", &a.id);
+            v.push(star(
+                vec![a.id.clone()],
+                app.is_starred(&a.id, a.starred),
+                "Unfollow",
+                "Follow",
+            ));
+            v.push(it(
+                icon::RADIO,
+                "Go to artist radio",
+                Message::Radio(a.id.clone()),
+            ));
+            v
+        }
+        MenuKind::Playlist(p) => {
+            let mut v = ctx("playlist", &p.id);
+            if mine(p) {
+                v.push(it(
+                    icon::PENCIL,
+                    "Edit details",
+                    Message::Modal(p.id.clone(), 1),
+                ));
+                v.extend([
+                    None,
+                    it(icon::TRASH, "Delete", Message::Modal(p.id.clone(), 2)),
+                ]);
+            }
+            v
+        }
     };
-    let h = (items.len() - seps) as f32 * 40.0 + seps as f32 + 8.0;
+    let seps = list.iter().filter(|x| x.is_none()).count();
+    let h = ((list.len() - seps + head.is_some() as usize) as f32 * 40.0 + seps as f32 + 8.0)
+        .min(400.0);
+    let rows = list.into_iter().map(|x| match x {
+        Some((c, l, msg)) => {
+            let sub = matches!(msg, Message::MenuSub(_));
+            let label =
+                theme::ell(&l, W - if sub { 92.0 } else { 64.0 }, 14.0, Weight::Normal).width(Fill);
+            entry(
+                row![i(c, 16.0).color(theme::SUB), label].push(sub.then(|| i(icon::RIGHT, 16.0))),
+                msg,
+            )
+        }
+        None => sep(),
+    });
+    let col = Column::new().push(head).extend(rows);
     (
-        container(Column::with_children(items))
+        container(scrollable(col).style(theme::scroll))
             .padding(4)
             .width(W)
+            .height(h)
             .style(theme::menu)
             .into(),
         W,
