@@ -578,11 +578,6 @@ impl Session {
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
         cache_dir("covers").join(&self.server.id).join(format!("{id}-{size}"))
     }
-
-    pub fn audio_file(&self, song: &Song) -> PathBuf {
-        cache_dir("audio").join(&self.server.id).join(format!("{}.{}", song.id, song.suffix))
-    }
-
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
         let file = self.cover_file(id, size);
         if let Ok(b) = fs::read(&file).await {

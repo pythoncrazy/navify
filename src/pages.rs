@@ -1329,26 +1329,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         .extend(servers)
         .push(section("Storage"))
         .push(line(
-            "Song cache limit",
-            row![
-                text_input("2", &app.cache_gb)
-                    .on_input(Message::CacheText)
-                    .on_submit(match app.cache_gb.trim().parse::<f32>() {
-                        Ok(v) if (0.0..=10_000.0).contains(&v) => Message::Set(Set::CacheGb(v)),
-                        _ => Message::Toast(0, "Type a number from 0 to 10000.".into()),
-                    })
-                    .size(14)
-                    .padding([8, 12])
-                    .width(96)
-                    .style(theme::field),
-                theme::sub("GB", 14.0)
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center)
-            .into(),
-        ))
-        .push(line(
-            "Cache",
+            "Cover cache",
             row![
                 theme::sub(
                     format!(

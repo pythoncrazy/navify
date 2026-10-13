@@ -1,14 +1,12 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::f32::consts::FRAC_PI_2;
-use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle, Thread};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::Url;
@@ -40,7 +38,6 @@ pub struct Track {
     pub gain: f32,
     pub transcoded: bool,
     pub duration: f32,
-    pub cache: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -210,7 +207,6 @@ async fn fetch(
     http: reqwest::Client,
     url: Url,
     mut first: Option<reqwest::Response>,
-    cache: Option<PathBuf>,
 ) {
     let res = async {
         loop {
@@ -261,20 +257,6 @@ async fn fetch(
         st.err = Some(e.without_url().to_string());
     }
     net.1.notify_all();
-    if let Some(dest) = cache.filter(|_| st.len.is_some_and(|l| st.have == [(0, l)])) {
-        drop(st);
-        tokio::task::spawn_blocking(move || {
-            static N: AtomicU64 = AtomicU64::new(0);
-            let n = N.fetch_add(1, Relaxed);
-            let tmp = dest.with_extension(format!("{}.{n}.tmp", std::process::id()));
-            let ok = dest.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok())
-                && std::fs::write(&tmp, &net.0.lock().expect("net lock").buf).is_ok()
-                && std::fs::rename(&tmp, dest).is_ok();
-            if !ok {
-                let _ = std::fs::remove_file(tmp);
-            }
-        });
-    }
 }
 
 struct Http {
@@ -663,7 +645,7 @@ type Decode = Box<dyn FnMut(Option<&Packet>, &mut Vec<f32>) -> Result<(), SymErr
 struct Source {
     track: Track,
     demux: Box<dyn Demux>,
-    net: Option<Arc<Net>>,
+    net: Arc<Net>,
     dec: Decode,
     rs: Async<f32>,
     orate: u32,
@@ -692,58 +674,40 @@ impl Source {
         let url: Url = url.parse().map_err(|_| "invalid stream url".to_string())?;
         let safe = url.as_str().to_string();
         (|| -> Result<Source, Box<dyn Error>> {
-            let cached = track
-                .cache
-                .as_ref()
-                .and_then(|p| File::options().read(true).write(true).open(p).ok());
-            let (mut src, net): (Box<dyn MediaSource>, _) = match cached {
-                Some(f) => {
-                    let _ = f.set_modified(SystemTime::now());
-                    (Box::new(f), None)
-                }
-                None => {
-                    let net = Arc::new(Net::default());
-                    let get = |r: Option<String>| match r {
-                        Some(r) => http.get(url.clone()).header(RANGE, r).send(),
-                        None => http.get(url.clone()).send(),
-                    };
-                    let task = rt.block_on(async {
-                        let t = Instant::now();
-                        let head = match track.transcoded {
-                            true => get(None).await?.error_for_status()?,
-                            false => {
-                                let (head, tail) = tokio::try_join!(
-                                    get(Some("bytes=0-".into())),
-                                    get(Some(format!("bytes=-{TAIL}")))
-                                )?;
-                                let (head, tail) =
-                                    (head.error_for_status()?, tail.error_for_status()?);
-                                let ttfb = t.elapsed().as_secs_f64();
-                                let len = range(&head).map(|r| r.1).or(head.content_length());
-                                let len =
-                                    len.ok_or("The server did not send the stream length.")?;
-                                let at = range(&tail).map_or(0, |r| r.0);
-                                let body = tail.bytes().await?;
-                                let mut st = net.0.lock().expect("net lock");
-                                (st.ttfb, st.len, st.buf) =
-                                    (ttfb, Some(len), vec![0; len as usize]);
-                                st.add(at, &body);
-                                head
-                            }
-                        };
-                        {
-                            let mut st = net.0.lock().expect("net lock");
-                            st.cur = (0, st.gap().map_or(u64::MAX, |g| g.1));
-                        }
-                        let (net, http, url, cache) =
-                            (net.clone(), http.clone(), url.clone(), track.cache.clone());
-                        Ok::<_, Box<dyn Error>>(
-                            rt.spawn(fetch(net, http, url, Some(head), cache)).abort_handle(),
-                        )
-                    })?;
-                    (Box::new(Http { net: net.clone(), pos: 0, task }), Some(net))
-                }
+            let net = Arc::new(Net::default());
+            let get = |r: Option<String>| match r {
+                Some(r) => http.get(url.clone()).header(RANGE, r).send(),
+                None => http.get(url.clone()).send(),
             };
+            let task = rt.block_on(async {
+                let t = Instant::now();
+                let head = match track.transcoded {
+                    true => get(None).await?.error_for_status()?,
+                    false => {
+                        let (head, tail) = tokio::try_join!(
+                            get(Some("bytes=0-".into())),
+                            get(Some(format!("bytes=-{TAIL}")))
+                        )?;
+                        let (head, tail) = (head.error_for_status()?, tail.error_for_status()?);
+                        let ttfb = t.elapsed().as_secs_f64();
+                        let len = range(&head).map(|r| r.1).or(head.content_length());
+                        let len = len.ok_or("The server did not send the stream length.")?;
+                        let at = range(&tail).map_or(0, |r| r.0);
+                        let body = tail.bytes().await?;
+                        let mut st = net.0.lock().expect("net lock");
+                        (st.ttfb, st.len, st.buf) = (ttfb, Some(len), vec![0; len as usize]);
+                        st.add(at, &body);
+                        head
+                    }
+                };
+                {
+                    let mut st = net.0.lock().expect("net lock");
+                    st.cur = (0, st.gap().map_or(u64::MAX, |g| g.1));
+                }
+                let (net, http, url) = (net.clone(), http.clone(), url.clone());
+                Ok::<_, Box<dyn Error>>(rt.spawn(fetch(net, http, url, Some(head))).abort_handle())
+            })?;
+            let mut src: Box<dyn MediaSource> = Box::new(Http { net: net.clone(), pos: 0, task });
             let mut h = [0u8; 42];
             let ok = src.read_exact(&mut h).is_ok();
             let ogg = ok && h[..4] == *b"OggS" && h[28..36] == *b"OpusHead";
@@ -904,15 +868,15 @@ impl Source {
         let target = secs as f64 + self.delay;
         let preroll = if self.delay > 0.0 { 0.08 } else { 0.0 };
         let time = Time::try_from_secs_f64((target - preroll).max(0.0)).ok_or("invalid seek")?;
-        let mode = self.net.as_ref().map_or(SeekMode::Accurate, |n| {
-            let st = n.0.lock().expect("net lock");
+        let mode = {
+            let st = self.net.0.lock().expect("net lock");
             let len = st.len.unwrap_or(0);
             let need = len.min((len as f64 * secs as f64 / self.dur) as u64 + (256 << 10));
             match st.have.first().is_some_and(|r| r.0 == 0 && r.1 >= need) {
                 true => SeekMode::Accurate,
                 false => SeekMode::Coarse,
             }
-        });
+        };
         let to = self.demux.seek(self.tb.calc_timestamp(time).ok_or("invalid seek")?, mode)?;
         self.skip = ((target - self.tb.calc_time_saturating(to).as_secs_f64()) * self.rate).max(0.0)
             as usize;

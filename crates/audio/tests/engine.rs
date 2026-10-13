@@ -45,7 +45,6 @@ fn tracks(titles: &[&str], format: Option<&str>) -> Vec<Track> {
                 gain: 1.0,
                 transcoded: format.is_some(),
                 duration: s["duration"].as_f64().expect("duration") as f32,
-                cache: None,
             }
         })
         .collect()
@@ -136,24 +135,6 @@ fn player_sends_events_on_null_device() {
         }
     }
     assert_eq!(got, [Event::Started(t[1].id.clone()), Event::Ended]);
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn cache_file_replaces_stream() {
-    let dir = std::env::temp_dir().join(format!("navify-cache-{}", std::process::id()));
-    let file = dir.join("three.mp3");
-    let mut t = tracks(&["Three"], None);
-    t[0].cache = Some(file.clone());
-    let first = render(io(), t.clone(), RATE, 0.0, 0.0, 1.0).expect("render");
-    let start = std::time::Instant::now();
-    while !file.exists() && start.elapsed() < std::time::Duration::from_secs(5) {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert_eq!(std::fs::read_dir(&dir).expect("cache dir").count(), 1, "no temp file is left");
-    t[0].url = "http://127.0.0.1:9/stream".into();
-    assert!(render(io(), t, RATE, 0.0, 0.0, 1.0).expect("render from cache") == first);
-    std::fs::remove_dir_all(dir).expect("remove cache dir");
 }
 
 #[test]
