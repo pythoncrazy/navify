@@ -1178,8 +1178,10 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             && want != running
         {
             running = want;
-            if let Err(e) = if want { s.play() } else { s.pause() } {
-                fail(e.to_string());
+            match want {
+                true => s.play().map_err(|e| e.to_string()).unwrap_or_else(fail),
+                false if s.pause().is_err() => out = None,
+                false => {}
             }
         }
         let left = idle.get_or_insert_with(Instant::now).elapsed();
