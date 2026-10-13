@@ -383,7 +383,12 @@ impl App {
             match s {
                 "queue" | "panel1" => {
                     (self.queue, self.index) = (songs.iter().take(20).cloned().collect(), 0);
-                    self.source = "Liked Songs".into();
+                    let album = self
+                        .route
+                        .starts_with("album:")
+                        .then(|| songs.first())
+                        .flatten();
+                    self.source = album.map_or("Liked Songs".into(), |s| s.album.clone());
                     self.panel = if s == "queue" { 2 } else { 1 };
                     let first = songs.first().map(|s| format!("lyrics:{}", s.id));
                     task = Task::batch(first.map(|k| self.request(&k, 0)));

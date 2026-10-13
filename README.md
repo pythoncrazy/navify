@@ -15,6 +15,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License"></a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Navify shows an album page, the library panel, and the Now Playing panel">
+</p>
+
 ## Features
 
 - **Playback:** gapless playback, crossfade, ReplayGain (track or album), and fast seek.
