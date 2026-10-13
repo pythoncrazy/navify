@@ -18,13 +18,12 @@ use rubato::{
     WindowFunction,
 };
 use rusty_opus::OpusDecoder;
-use symphonia::core::codecs::audio::AudioCodecParameters;
-use symphonia::core::codecs::audio::well_known::{CODEC_ID_FLAC, CODEC_ID_OPUS};
-use symphonia::core::errors::{Error as SymError, SeekErrorKind};
+use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
+use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::{FormatReader, SeekMode, SeekTo, TrackType, probe::Hint};
-use symphonia::core::io::{MediaSource, MediaSourceStream, ReadBytes};
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::packet::Packet;
-use symphonia::core::units::{Time, TimeBase, Timestamp};
+use symphonia::core::units::{Time, TimeBase};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinSet;
@@ -316,311 +315,12 @@ impl MediaSource for Http {
     }
 }
 
-trait Demux: Send {
-    fn next(&mut self) -> Result<Option<Packet>, SymError>;
-    fn seek(&mut self, ts: Timestamp, mode: SeekMode) -> Result<Timestamp, SymError>;
-}
-
-impl Demux for (Box<dyn FormatReader>, u32) {
-    fn next(&mut self) -> Result<Option<Packet>, SymError> {
-        loop {
-            match self.0.next_packet()? {
-                Some(p) if p.track_id != self.1 => {}
-                p => return Ok(p),
-            }
-        }
-    }
-
-    fn seek(&mut self, ts: Timestamp, mode: SeekMode) -> Result<Timestamp, SymError> {
-        let to = SeekTo::Timestamp {
-            ts,
-            track_id: self.1,
-        };
-        Ok(self.0.seek(mode, to)?.actual_ts)
-    }
-}
-
-type Page = (u8, u64, u32, Vec<u8>, Vec<u8>);
-
-struct Raw {
-    r: MediaSourceStream<'static>,
-    block: Option<u64>,
-    serial: u32,
-    data: u64,
-    end: u64,
-    pk: VecDeque<Packet>,
-    part: Option<Vec<u8>>,
-    prev: Option<u64>,
-    big: u64,
-}
-
-impl Raw {
-    fn open(r: MediaSourceStream<'static>, flac: bool) -> Res<(Raw, Vec<u8>, u32)> {
-        let len = r.byte_len().unwrap_or(0);
-        let (pk, part, prev) = (VecDeque::new(), None, Some(0));
-        let mut o = Raw {
-            r,
-            block: None,
-            serial: 0,
-            data: 0,
-            end: u64::MAX,
-            pk,
-            part,
-            prev,
-            big: 8192,
-        };
-        let (head, sr) = if flac {
-            let (mut h, mut si) = ([0u8; 4], vec![0u8; 34]);
-            o.r.read_exact(&mut h)?;
-            while h[0] & 128 == 0 {
-                o.r.read_exact(&mut h)?;
-                match h[0] & 127 {
-                    0 => o.r.read_exact(&mut si)?,
-                    _ => {
-                        o.r.ignore_bytes((u32::from_be_bytes(h) & 0xFFFFFF).into())?
-                    }
-                }
-            }
-            o.end = u64::from_be_bytes([0, 0, 0, si[13] & 15, si[14], si[15], si[16], si[17]]);
-            o.block = Some(u16::from_be_bytes([si[2], si[3]]).into());
-            let sr = u32::from_be_bytes([0, si[10], si[11], si[12]]) >> 4;
-            (si, sr)
-        } else {
-            let head = Raw::page(&mut o.r)?.ok_or("The Ogg stream is empty.")?;
-            loop {
-                let p = Raw::page(&mut o.r)?.ok_or("The Ogg stream has no audio.")?;
-                if p.2 == head.2 && p.3.iter().any(|&l| l < 255) {
-                    break;
-                }
-            }
-            o.serial = head.2;
-            if len > 0 {
-                let (data, mut t) = (o.r.pos(), Vec::new());
-                o.r.seek(SeekFrom::Start(len.saturating_sub(TAIL)))?;
-                o.r.read_to_end(&mut t)?;
-                let i = (0..t.len().saturating_sub(26))
-                    .rev()
-                    .find(|&i| {
-                        t[i..i + 4] == *b"OggS" && t[i + 14..i + 18] == o.serial.to_le_bytes()
-                    })
-                    .ok_or("The Ogg stream has no end.")?;
-                o.end = u64::from_le_bytes(t[i + 6..i + 14].try_into()?);
-                o.r.seek(SeekFrom::Start(data))?;
-            }
-            (head.4, 48_000)
-        };
-        o.data = o.r.pos();
-        Ok((o, head, sr))
-    }
-
-    fn page(r: &mut MediaSourceStream<'static>) -> std::io::Result<Option<Page>> {
-        let mut w = 0u32;
-        let res: std::io::Result<Page> = (|| loop {
-            w = w << 8 | r.read_byte()? as u32;
-            if w != u32::from_be_bytes(*b"OggS") {
-                continue;
-            }
-            let mut h = [0u8; 23];
-            r.read_exact(&mut h)?;
-            if h[0] != 0 || h[1] > 7 {
-                r.seek(SeekFrom::Current(-23))?;
-                w = 0;
-                continue;
-            }
-            let mut lace = vec![0; h[22] as usize];
-            r.read_exact(&mut lace)?;
-            let mut data = vec![0; lace.iter().map(|&l| l as usize).sum()];
-            r.read_exact(&mut data)?;
-            let gran = u64::from_le_bytes(h[2..10].try_into().expect("8 bytes"));
-            let serial = u32::from_le_bytes(h[10..14].try_into().expect("4 bytes"));
-            return Ok((h[1], gran, serial, lace, data));
-        })();
-        match res {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => Ok(None),
-            r => r.map(Some),
-        }
-    }
-
-    fn frame(&mut self, block: u64) -> std::io::Result<Option<u64>> {
-        let head = |b: &[u8]| -> Option<(u64, u64)> {
-            let bad = b[1] & 0xFE != 0xF8 || b[2] >> 4 == 0 || b[2] & 15 == 15 || b[3] >> 4 > 10;
-            let lead = b[4].leading_ones() as usize;
-            if bad || b[3] & 1 != 0 || (b[3] >> 1) & 7 == 3 || lead == 1 || lead > 7 {
-                return None;
-            }
-            let k = lead.max(1);
-            let mut num = (b[4] & (0x7F >> lead)) as u64;
-            for &c in &b[5..4 + k] {
-                (c & 0xC0 == 0x80).then_some(())?;
-                num = num << 6 | (c & 0x3F) as u64;
-            }
-            let i = 4 + k;
-            let (n, x) = match b[2] >> 4 {
-                1 => (192, 0),
-                c @ 2..=5 => (576 << (c - 2), 0),
-                6 => (b[i] as u64 + 1, 1),
-                7 => (u16::from_be_bytes([b[i], b[i + 1]]) as u64 + 1, 2),
-                c => (256 << (c - 8), 0),
-            };
-            let i = i + x + [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 2, 0][b[2] as usize & 15];
-            let crc = b[..i].iter().fold(0u8, |c, &x| {
-                (0..8).fold(c ^ x, |c, _| (c << 1) ^ ((c >> 7) * 7))
-            });
-            (crc == b[i]).then_some((if b[1] & 1 == 0 { num * block } else { num }, n))
-        };
-        let (at, mut buf, mut i) = (self.r.pos(), Vec::new(), 0);
-        let mut first: Option<(usize, u64, u64)> = None;
-        loop {
-            if buf.len() < i + 16 {
-                if (&mut self.r).take(16384).read_to_end(&mut buf)? == 0 {
-                    break;
-                }
-                continue;
-            }
-            let Some(j) = buf[i..buf.len() - 15].iter().position(|&b| b == 0xFF) else {
-                i = buf.len() - 15;
-                continue;
-            };
-            i += j;
-            if let Some((s, n)) = head(&buf[i..]) {
-                match first {
-                    Some((_, s0, n0)) if s == s0 + n0 => {
-                        self.r.seek(SeekFrom::Start(at + i as u64))?;
-                        buf.truncate(i);
-                        break;
-                    }
-                    Some(_) if self.prev.is_some() => {}
-                    _ if self.prev.is_none_or(|e| e == s) => first = Some((i, s, n)),
-                    _ => {}
-                }
-            }
-            i += 1;
-        }
-        Ok(first.map(|(j, s, n)| {
-            self.big = self.big.max((buf.len() - j) as u64);
-            let data = buf.split_off(j);
-            let pk = Packet::new(0, Timestamp::new(s as i64), n.into(), data);
-            self.pk.push_back(pk);
-            self.prev = Some(s + n);
-            s + n
-        }))
-    }
-
-    fn unit(&mut self) -> Result<Option<u64>, SymError> {
-        if let Some(b) = self.block {
-            return Ok(self.frame(b)?);
-        }
-        let (flags, gran, lace, data) = loop {
-            match Raw::page(&mut self.r)? {
-                Some((f, g, s, l, d)) if s == self.serial => break (f, g, l, d),
-                Some(_) => {}
-                None => return Ok(None),
-            }
-        };
-        self.big = self.big.max((27 + lace.len() + data.len()) as u64);
-        let mut part = self.part.take().filter(|_| flags & 1 != 0);
-        part = part.or_else(|| (flags & 1 == 0).then(Vec::new));
-        let (mut off, mut got) = (0, Vec::new());
-        for &l in &lace {
-            if let Some(v) = &mut part {
-                v.extend_from_slice(&data[off..off + l as usize]);
-            }
-            off += l as usize;
-            if l < 255 {
-                got.extend(part.replace(Vec::new()));
-            }
-        }
-        self.part = part;
-        if gran == u64::MAX || got.is_empty() {
-            return Ok(Some(gran));
-        }
-        let dur = |d: &[u8]| {
-            let Some(&toc) = d.first() else { return 0 };
-            let c = toc as usize >> 3;
-            let f = match c {
-                0..=11 => [480, 960, 1920, 2880][c & 3],
-                12..=15 => [480, 960][c & 1],
-                _ => [120, 240, 480, 960][c & 3],
-            };
-            f * match toc & 3 {
-                0 => 1,
-                1 | 2 => 2,
-                _ => d.get(1).map_or(0, |b| b & 63) as u64,
-            }
-        };
-        let eos = flags & 4 != 0;
-        let sum: u64 = got.iter().map(|d| dur(d)).sum();
-        let mut t = self
-            .prev
-            .filter(|_| eos)
-            .unwrap_or(gran.saturating_sub(sum));
-        let end = if eos { gran } else { u64::MAX };
-        for d in got {
-            let n = dur(&d);
-            let mut pk = Packet::new(0, Timestamp::new(t as i64), n.into(), d);
-            pk.trim_end = (t + n).saturating_sub(end).min(n).into();
-            self.pk.push_back(pk);
-            t += n;
-        }
-        self.prev = Some(gran);
-        Ok(Some(gran))
-    }
-}
-
-impl Demux for Raw {
-    fn next(&mut self) -> Result<Option<Packet>, SymError> {
-        while self.pk.is_empty() && self.unit()?.is_some() {}
-        Ok(self.pk.pop_front())
-    }
-
-    fn seek(&mut self, ts: Timestamp, _: SeekMode) -> Result<Timestamp, SymError> {
-        let t = (ts.get().max(0) as u64).min(self.end.saturating_sub(1));
-        let len = self.r.byte_len().unwrap_or(0);
-        let (mut lo, mut hi) = ((self.data, 0), (len, self.end.max(1)));
-        'probe: for _ in 0..32 {
-            let bps = (hi.0 - lo.0) as f64 / (hi.1 - lo.1).max(1) as f64;
-            let est = lo.0 + ((t - lo.1) as f64 * bps) as u64;
-            let at = est.saturating_sub((hi.0 - lo.0) / 64 + 2 * self.big);
-            let at = at.max(lo.0);
-            self.r.seek(SeekFrom::Start(at))?;
-            (self.pk, self.part, self.prev) = (VecDeque::new(), None, None);
-            let mut g = loop {
-                let Some(g) = self.unit()? else {
-                    hi.0 = at;
-                    continue 'probe;
-                };
-                let Some(start) = self.pk.front().map(|p| p.pts.get() as u64) else {
-                    continue;
-                };
-                if start > t && at > lo.0 {
-                    hi = (at, start);
-                    continue 'probe;
-                }
-                break g;
-            };
-            while g <= t {
-                if (t - g) as f64 * bps > 256.0 * 1024.0 {
-                    lo = (self.r.pos(), g);
-                    continue 'probe;
-                }
-                self.pk.clear();
-                match self.unit()? {
-                    Some(n) if n != u64::MAX => g = n,
-                    Some(_) => {}
-                    None => break,
-                }
-            }
-            return Ok(self.pk.front().map_or(Timestamp::new(t as i64), |p| p.pts));
-        }
-        Err(SymError::SeekError(SeekErrorKind::OutOfRange))
-    }
-}
-
 type Decode = Box<dyn FnMut(Option<&Packet>, &mut Vec<f32>) -> Result<(), SymError> + Send>;
 
 struct Source {
     track: Track,
-    demux: Box<dyn Demux>,
+    demux: Box<dyn FormatReader>,
+    tid: u32,
     net: Arc<Net>,
     dec: Decode,
     rs: Option<Async<f32>>,
@@ -671,41 +371,18 @@ impl Source {
             })?;
             let mut task = JoinSet::new();
             task.spawn_on(fetch(net.clone(), http.clone(), url, Some(head)), rt);
-            let mut src = Http {
-                net: net.clone(),
-                pos: 0,
-                _task: task,
-            };
-            let mut h = [0u8; 42];
-            let ok = src.read_exact(&mut h).is_ok();
-            src.pos = 0;
-            let ogg = ok && h[..4] == *b"OggS" && h[28..36] == *b"OpusHead";
-            let flac = ok
-                && h[..4] == *b"fLaC"
-                && h[4] & 127 == 0
-                && (h[21] & 15 | h[22] | h[23] | h[24] | h[25]) != 0;
-            let mss = MediaSourceStream::new(Box::new(src), Default::default());
-            let (demux, params, head, sr, tb, frames): (Box<dyn Demux>, _, Vec<u8>, _, _, _) =
-                if ogg || flac {
-                    let (o, head, sr) = Raw::open(mss, flac)?;
-                    let mut p = AudioCodecParameters::new();
-                    p.for_codec(CODEC_ID_FLAC)
-                        .with_extra_data(head.clone().into());
-                    let frames = (o.end != u64::MAX).then_some(o.end);
-                    (Box::new(o), flac.then_some(p), head, sr, None, frames)
-                } else {
-                    let probe = symphonia::default::get_probe();
-                    let format =
-                        probe.probe(&Hint::new(), mss, Default::default(), Default::default())?;
-                    let t = format.default_track(TrackType::Audio);
-                    let a = t.and_then(|t| Some((t, t.codec_params.as_ref()?.audio()?)));
-                    let (t, p) = a.ok_or("The stream has no audio.")?;
-                    let (id, tb, frames, p) = (t.id, t.time_base, t.num_frames, p.clone());
-                    let head = p.extra_data.clone().unwrap_or_default().into();
-                    let sr = p.sample_rate.ok_or("unknown sample rate")?;
-                    let p = Some(p).filter(|p| p.codec != CODEC_ID_OPUS);
-                    (Box::new((format, id)), p, head, sr, tb, frames)
-                };
+            let (n, pos, _task) = (net.clone(), 0, task);
+            let src = Box::new(Http { net: n, pos, _task });
+            let mss = MediaSourceStream::new(src, Default::default());
+            let probe = symphonia::default::get_probe();
+            let demux = probe.probe(&Hint::new(), mss, Default::default(), Default::default())?;
+            let t = demux.default_track(TrackType::Audio);
+            let a = t.and_then(|t| Some((t, t.codec_params.as_ref()?.audio()?)));
+            let (t, p) = a.ok_or("The stream has no audio.")?;
+            let (tid, tb, frames, p) = (t.id, t.time_base, t.num_frames, p.clone());
+            let head: Vec<u8> = p.extra_data.clone().unwrap_or_default().into();
+            let sr = p.sample_rate.ok_or("unknown sample rate")?;
+            let params = Some(p).filter(|p| p.codec != CODEC_ID_OPUS);
             let tb = tb.or(TimeBase::try_from_recip(sr)).ok_or("no time base")?;
             let base = [0.0, offset.trunc() as f64][usize::from(track.transcoded)];
             let opus = params.is_none();
@@ -755,6 +432,7 @@ impl Source {
                 orate: if rate == 0 { sr as u32 } else { rate },
                 track,
                 demux,
+                tid,
                 net,
                 dec,
                 rs: None,
@@ -791,7 +469,11 @@ impl Source {
         drop(st);
         let mode = [SeekMode::Coarse, SeekMode::Accurate][have];
         let ts = self.tb.calc_timestamp(time).ok_or("invalid seek")?;
-        let to = self.demux.seek(ts, mode)?;
+        let track_id = self.tid;
+        let to = self
+            .demux
+            .seek(mode, SeekTo::Timestamp { ts, track_id })?
+            .actual_ts;
         let at = self.tb.calc_time_saturating(to).as_secs_f64();
         self.skip = ((target - at) * self.rate).max(0.0) as usize;
         (self.dec)(None, &mut self.pcm)?;
@@ -828,7 +510,7 @@ impl Source {
                     self.off = 0;
                 }
                 while !self.eof && self.pcm.len() < need {
-                    let p = match self.demux.next() {
+                    let p = match self.demux.next_packet() {
                         Err(SymError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => None,
                         r => r?,
                     };
@@ -836,6 +518,9 @@ impl Source {
                         self.eof = true;
                         break;
                     };
+                    if p.track_id != self.tid {
+                        continue;
+                    }
                     let n = self.pcm.len();
                     match (self.dec)(Some(&p), &mut self.pcm) {
                         Err(SymError::DecodeError(_)) => {}
