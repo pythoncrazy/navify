@@ -2,128 +2,99 @@
 
 use iced::{Font, Theme};
 
-use navify::app::App;
-use navify::config::Config;
+use navify::app::{App, Message};
 
-struct Rt(tokio::runtime::Runtime);
+#[cfg(target_os = "linux")]
+mod linux {
+    use wayland_client::protocol::wl_registry::{Event, WlRegistry};
+    use wayland_client::{Connection, Dispatch, QueueHandle, globals::GlobalListContents};
 
-impl iced::Executor for Rt {
-    fn new() -> std::io::Result<Self> {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map(Rt)
+    pub struct Probe;
+
+    impl Dispatch<WlRegistry, GlobalListContents> for Probe {
+        fn event(
+            _: &mut Self,
+            _: &WlRegistry,
+            _: Event,
+            _: &GlobalListContents,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+        }
     }
 
-    fn spawn(&self, f: impl Future<Output = ()> + Send + 'static) {
-        drop(self.0.spawn(f));
+    pub fn decorations() -> Option<bool> {
+        let c = Connection::connect_to_env().ok()?;
+        let (globals, _) = wayland_client::globals::registry_queue_init::<Probe>(&c).ok()?;
+        let has = |l: &[_]| {
+            l.iter().any(|g: &wayland_client::globals::Global| {
+                g.interface == "zxdg_decoration_manager_v1"
+            })
+        };
+        Some(globals.contents().with_list(has))
     }
 
-    fn block_on<T>(&self, f: impl Future<Output = T>) -> T {
-        self.0.block_on(f)
-    }
-
-    fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
-        let _g = self.0.enter();
-        f()
+    pub fn install() -> std::io::Result<()> {
+        let data = dirs::data_dir().ok_or(std::io::ErrorKind::NotFound)?;
+        let exe = format!("Exec=\"{}\"", std::env::current_exe()?.display());
+        let desktop = include_str!("../assets/navify.desktop").replace("Exec=navify", &exe);
+        for (path, bytes) in [
+            ("icons/hicolor/256x256/apps/navify.png", navify::app::ICON),
+            (
+                "icons/hicolor/scalable/apps/navify.svg",
+                include_bytes!("../assets/navify.svg"),
+            ),
+            ("applications/navify.desktop", desktop.as_bytes()),
+        ] {
+            let path = data.join(path);
+            std::fs::create_dir_all(path.parent().expect("the path has a parent"))?;
+            std::fs::write(&path, bytes)?;
+            println!("{}", path.display());
+        }
+        Ok(())
     }
 }
 
-#[cfg(target_os = "linux")]
-struct Probe;
-
-#[cfg(target_os = "linux")]
-impl
-    wayland_client::Dispatch<
-        wayland_client::protocol::wl_registry::WlRegistry,
-        wayland_client::globals::GlobalListContents,
-    > for Probe
-{
-    fn event(
-        _: &mut Self,
-        _: &wayland_client::protocol::wl_registry::WlRegistry,
-        _: wayland_client::protocol::wl_registry::Event,
-        _: &wayland_client::globals::GlobalListContents,
-        _: &wayland_client::Connection,
-        _: &wayland_client::QueueHandle<Self>,
-    ) {
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn install() -> std::io::Result<()> {
-    let data = dirs::data_dir().ok_or(std::io::ErrorKind::NotFound)?;
-    let exe = std::env::current_exe()?;
-    let icons = data.join("icons/hicolor");
-    let files = [
-        (
-            icons.join("256x256/apps/navify.png"),
-            navify::app::ICON.to_vec(),
-        ),
-        (
-            icons.join("scalable/apps/navify.svg"),
-            include_bytes!("../assets/navify.svg").to_vec(),
-        ),
-        (
-            data.join("applications/navify.desktop"),
-            include_str!("../assets/navify.desktop")
-                .replace("Exec=navify", &format!("Exec=\"{}\"", exe.display()))
-                .into_bytes(),
-        ),
-    ];
-    for (path, bytes) in files {
-        std::fs::create_dir_all(path.parent().expect("the path has a parent"))?;
-        std::fs::write(&path, bytes)?;
-        println!("{}", path.display());
-    }
-    Ok(())
-}
-
-fn view(app: &App, _: iced::window::Id) -> iced::Element<'_, navify::app::Message> {
+fn view(app: &App, _: iced::window::Id) -> iced::Element<'_, Message> {
     app.view()
 }
 
 fn main() -> iced::Result {
     #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some("--install") {
-        if let Err(e) = install() {
+        if let Err(e) = linux::install() {
             eprintln!("Cannot install the desktop entry: {e}");
             std::process::exit(1);
         }
         return Ok(());
     }
-    let cfg = Config::load();
+    unsafe { std::env::set_var("TOKIO_WORKER_THREADS", "2") };
     #[cfg(target_os = "linux")]
     if ["DISPLAY", "WAYLAND_DISPLAY"]
         .iter()
         .all(|v| std::env::var_os(v).is_some())
         && std::env::var_os("WAYLAND_SOCKET").is_none()
     {
-        use wayland_client::{Connection, globals::registry_queue_init};
-        let ssd = Connection::connect_to_env().ok().and_then(|c| {
-            let (globals, _) = registry_queue_init::<Probe>(&c).ok()?;
-            Some(globals.contents().with_list(|l| {
-                l.iter()
-                    .any(|g| g.interface == "zxdg_decoration_manager_v1")
-            }))
-        });
-        if ssd.is_none() || (ssd == Some(false) && cfg.settings.system_frame) {
+        let ssd = linux::decorations();
+        if ssd.is_none()
+            || (ssd == Some(false) && navify::config::Config::load().settings.system_frame)
+        {
             unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
         }
     }
-    iced::daemon(App::boot, App::update, view)
+    let fonts: [&[u8]; 6] = [
+        include_bytes!("../assets/fonts/Figtree-Regular.ttf"),
+        include_bytes!("../assets/fonts/Figtree-Medium.ttf"),
+        include_bytes!("../assets/fonts/Figtree-Bold.ttf"),
+        include_bytes!("../assets/fonts/Figtree-Black.ttf"),
+        include_bytes!("../assets/fonts/lucide.ttf"),
+        include_bytes!("../assets/fonts/phosphor-fill.ttf"),
+    ];
+    let app = iced::daemon(App::boot, App::update, view)
         .subscription(App::subscription)
         .scale_factor(|a: &App, _| a.scale())
-        .executor::<Rt>()
         .theme(|_: &App, _| Theme::Dark)
         .default_font(Font::with_name("Figtree"))
-        .font(include_bytes!("../assets/fonts/Figtree-Regular.ttf").as_slice())
-        .font(include_bytes!("../assets/fonts/Figtree-Medium.ttf").as_slice())
-        .font(include_bytes!("../assets/fonts/Figtree-Bold.ttf").as_slice())
-        .font(include_bytes!("../assets/fonts/Figtree-Black.ttf").as_slice())
-        .font(include_bytes!("../assets/fonts/lucide.ttf").as_slice())
-        .font(include_bytes!("../assets/fonts/phosphor-fill.ttf").as_slice())
-        .title(|a: &App, _| a.title())
-        .run()
+        .title(|a: &App, _| a.title());
+    fonts.into_iter().fold(app, |app, f| app.font(f)).run()
 }
