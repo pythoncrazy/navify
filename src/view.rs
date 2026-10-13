@@ -537,6 +537,5 @@ pub fn view(app: &App) -> El<'_> {
     let panels = row![lib_panel(app), grip(0), main].push(right);
     let panels = container(panels.height(Fill)).padding([0, 8]);
     let base = column![top_bar(app), panels, player_bar(app)];
-    let base = container(base).style(fill(BG, 0.0));
     stack![base, modal, menu, toast].into()
 }

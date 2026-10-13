@@ -117,6 +117,10 @@ fn main() -> iced::Result {
         .scale_factor(|a: &App, _| a.scale())
         .executor::<Rt>()
         .theme(|_: &App, _| Theme::Dark)
+        .style(|_, _| iced::theme::Style {
+            background_color: iced::Color::BLACK,
+            text_color: iced::Color::WHITE,
+        })
         .default_font(Font::with_name("Figtree"))
         .font(include_bytes!("../assets/fonts/Figtree-Regular.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/Figtree-Medium.ttf").as_slice())
