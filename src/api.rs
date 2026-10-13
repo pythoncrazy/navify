@@ -656,19 +656,11 @@ impl Session {
     pub async fn songs(
         &self,
         sort: &str,
-        filter: &[(&str, &str)],
         offset: usize,
         size: usize,
     ) -> Result<(Vec<Song>, usize)> {
         if self.server.native {
-            return self
-                .nd_page(
-                    "song",
-                    offset,
-                    size,
-                    &[sort_q(sort, SONG_SORTS), filter.to_vec()].concat(),
-                )
-                .await;
+            return self.nd_page("song", offset, size, &sort_q(sort, SONG_SORTS)).await;
         }
         if sort == "starred" {
             let (.., songs) = self.starred().await?;

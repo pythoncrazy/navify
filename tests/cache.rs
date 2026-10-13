@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use navify::api::{Album, Server, Session, Song};
-use navify::app::{App, Message};
+use navify::app::{AnyData, App, Message, Pager};
 
 #[test]
 fn album_reopen_in_stale_time_sends_no_request() {
@@ -25,5 +25,13 @@ fn album_reopen_in_stale_time_sends_no_request() {
     let _ = app.update(Message::Nav(key.clone()));
     assert_eq!(app.route, key);
     assert!(!app.pending.contains(&pend));
+    let page = |n: usize, offset: usize| {
+        let items = (offset..offset + n).map(|i| Album { id: i.to_string(), ..Album::default() });
+        Ok(Arc::new(Pager { items: items.collect(), total: 150, offset }) as AnyData)
+    };
+    let _ = app.update(Message::Loaded("albums".into(), page(100, 0)));
+    let _ = app.update(Message::Loaded("albums".into(), page(50, 100)));
+    let p = app.data::<Pager<Album>>("albums").expect("merged page");
+    assert_eq!((p.items.len(), p.offset, p.items[120].id.as_str()), (150, 0, "120"));
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -707,27 +707,14 @@ impl App {
     }
 
     fn next_index(&self) -> Option<usize> {
-        if self.queue.is_empty() {
-            return None;
-        }
         let len = self.queue.len();
-        if self.index + 1 < len {
-            Some(self.index + 1)
-        } else if self.repeat == 1 {
-            Some(0)
-        } else {
-            None
-        }
-    }
-
-    fn order(&self, first: usize) -> Vec<usize> {
-        let mut o: Vec<usize> = (0..self.queue.len()).collect();
-        shuffle(&mut o, first);
-        o
+        (self.index + 1 < len)
+            .then_some(self.index + 1)
+            .or((self.repeat == 1 && len > 0).then_some(0))
     }
 
     fn start(&mut self, i: usize, shuffled: bool) -> Task<Message> {
-        self.shuffle = shuffled.then(|| self.order(i));
+        self.shuffle = shuffled.then(|| shuffle(0..self.queue.len(), i));
         self.play_index(if shuffled { 0 } else { i }, 0.0)
     }
 
@@ -831,11 +818,10 @@ impl App {
                     && self.covers.want.insert((id.clone(), *size))
             })
             .map(|(id, size)| {
-                let s = s.clone();
-                let id2 = id.clone();
+                let (s, k) = (s.clone(), id.clone());
                 Task::perform(
                     async move {
-                        let b = s.cover(&id2, size).await.map_err(|e| e.to_string())?;
+                        let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
                         tokio::task::spawn_blocking(move || decode(&b, size))
                             .await
                             .expect("decode task")
@@ -857,10 +843,7 @@ fn decode(b: &[u8], size: u32) -> Result<(u32, u32, Color, Vec<u8>), String> {
     } else {
         img
     };
-    let (w, h) = (img.width(), img.height());
-    let px = img.to_rgba8().into_raw();
-    let c = dominant(&img);
-    Ok((w, h, c, px))
+    Ok((img.width(), img.height(), dominant(&img), img.to_rgba8().into_raw()))
 }
 
 fn dominant(img: &::image::DynamicImage) -> Color {
@@ -890,6 +873,14 @@ fn dominant(img: &::image::DynamicImage) -> Color {
     let [r, g, b] = [r / w, g / w, b / w];
     let k = 0.5 / r.max(g).max(b).max(0.05);
     Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0))
+}
+
+macro_rules! pager {
+    ($v:expr, $p:ident => $e:expr) => {
+        ($v.downcast_ref::<Pager<Album>>().map(|$p| $e))
+            .or_else(|| $v.downcast_ref::<Pager<Artist>>().map(|$p| $e))
+            .or_else(|| $v.downcast_ref::<Pager<Song>>().map(|$p| $e))
+    };
 }
 
 fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {
@@ -922,14 +913,14 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 "info" => Arc::new(s.artist_info(arg).await?),
                 "appears" => Arc::new(s.appears(arg).await?),
                 "playlist" => Arc::new(s.playlist(arg).await?),
-                "liked" => pager(s.songs("starred", &[], offset, PAGE).await?, offset),
+                "liked" => pager(s.songs("starred", offset, PAGE).await?, offset),
                 "albums" => {
                     let sort = if arg.is_empty() { "newest" } else { arg };
                     pager(s.albums(sort, &[], offset, PAGE).await?, offset)
                 }
                 "artists" => pager(s.artists(offset, PAGE).await?, offset),
                 "songs" => pager(
-                    s.songs(if arg.is_empty() { "name" } else { arg }, &[], offset, PAGE).await?,
+                    s.songs(if arg.is_empty() { "name" } else { arg }, offset, PAGE).await?,
                     offset,
                 ),
                 "genres" => Arc::new(s.genres().await?),
@@ -1201,7 +1192,7 @@ impl App {
                 if self.shuffle.take().is_some() {
                     self.index = cur;
                 } else {
-                    self.shuffle = Some(self.order(cur));
+                    self.shuffle = Some(shuffle(0..self.queue.len(), cur));
                     self.index = 0;
                 }
                 self.queue_next_refresh();
@@ -1263,10 +1254,8 @@ impl App {
                 if let Some(o) = &mut self.shuffle {
                     let base = self.queue.len();
                     self.queue.extend(songs);
-                    let mut extra: Vec<usize> = (base..base + n).collect();
-                    shuffle(&mut extra, usize::MAX);
                     let at = at.min(o.len());
-                    o.splice(at..at, extra);
+                    o.splice(at..at, shuffle(base..base + n, usize::MAX));
                 } else {
                     let at = at.min(self.queue.len());
                     if at <= self.index && !self.queue.is_empty() {
@@ -1405,16 +1394,13 @@ impl App {
                     },
                 )
             }
-            Message::Toast(n, text) => {
-                if text.is_empty() {
-                    if self.toast.as_ref().is_some_and(|(tn, _)| *tn == n || n == 0) {
-                        self.toast = None;
-                    }
-                    Task::none()
-                } else {
-                    self.toast(&text)
+            Message::Toast(n, text) if text.is_empty() => {
+                if self.toast.as_ref().is_some_and(|(tn, _)| *tn == n || n == 0) {
+                    self.toast = None;
                 }
+                Task::none()
             }
+            Message::Toast(_, text) => self.toast(&text),
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
                 self.covers_now()
@@ -1494,10 +1480,7 @@ impl App {
                 }
             }
             Message::RestoreQueue(songs, cur, pos) => {
-                if songs.is_empty() {
-                    return Task::none();
-                }
-                if self.loaded {
+                if songs.is_empty() || self.loaded {
                     return Task::none();
                 }
                 self.position = pos as f32 / 1000.0;
@@ -1586,9 +1569,8 @@ impl App {
                 ])
             }
             Message::ClearCache => {
-                self.covers.map.clear();
-                self.covers.bytes = 0;
-                self.covers.color.clear();
+                self.covers =
+                    Covers { want: std::mem::take(&mut self.covers.want), ..Default::default() };
                 Task::perform(tokio::fs::remove_dir_all(crate::api::cache_dir("")), |r| match r {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                         Message::Toast(0, format!("Could not clear the cache. {e}"))
@@ -1705,12 +1687,11 @@ impl App {
                                     tokio::try_join!(s.artist(&id), s.top_songs(&id))?;
                                 (t, a.name)
                             }
-                            "liked" => (
-                                s.songs("starred", &[], 0, PAGE * 5).await?.0,
-                                "Liked Songs".into(),
-                            ),
+                            "liked" => {
+                                (s.songs("starred", 0, PAGE * 5).await?.0, "Liked Songs".into())
+                            }
                             "songs" => (
-                                s.songs(if id.is_empty() { "name" } else { &id }, &[], 0, PAGE * 5)
+                                s.songs(if id.is_empty() { "name" } else { &id }, 0, PAGE * 5)
                                     .await?
                                     .0,
                                 "Songs".into(),
@@ -1915,12 +1896,12 @@ impl App {
                     hwnd: (hwnd != 0).then_some(hwnd as *mut std::ffi::c_void),
                 })
                 .and_then(|mut m| m.attach(move |e| drop(tx.send(Message::Media(e)))).map(|()| m));
-                self.media = match m {
-                    Ok(m) => Some(m),
+                match m {
+                    Ok(m) => self.media = Some(m),
                     Err(e) => {
                         return self.toast(&format!("Media controls are not available. {e:?}"));
                     }
-                };
+                }
                 self.os = Default::default();
                 Task::none()
             }
@@ -1991,41 +1972,18 @@ impl App {
         }
     }
 
-    fn merge(&mut self, key: &str, v: AnyData) -> AnyData {
-        if let Some(old) = self.cache.get(key) {
-            macro_rules! mrg {
-                ($t:ty) => {
-                    if let (Some(a), Some(b)) =
-                        (old.1.downcast_ref::<Pager<$t>>(), v.downcast_ref::<Pager<$t>>())
-                    {
-                        if b.offset > 0 {
-                            let mut items = a.items.clone();
-                            items.extend(b.items.iter().cloned());
-                            return Arc::new(Pager { items, total: b.total, offset: 0 });
-                        }
-                    }
-                };
-            }
-            mrg!(Album);
-            mrg!(Artist);
-            mrg!(Song);
-        }
-        v
+    fn merge(&self, key: &str, v: AnyData) -> AnyData {
+        let Some((_, old)) = self.cache.get(key) else { return v };
+        pager!(v, b => old.downcast_ref::<Pager<_>>().filter(|_| b.offset > 0).map(|a| {
+            Arc::new(Pager { items: [&a.items[..], &b.items[..]].concat(), total: b.total, offset: 0 }) as AnyData
+        }))
+        .flatten()
+        .unwrap_or(v)
     }
 
     fn page_len(&self, key: &str) -> Option<usize> {
-        let (_, v) = self.cache.get(key)?;
-        macro_rules! chk {
-            ($t:ty) => {
-                if let Some(p) = v.downcast_ref::<Pager<$t>>() {
-                    return (p.items.len() < p.total).then_some(p.items.len());
-                }
-            };
-        }
-        chk!(Album);
-        chk!(Artist);
-        chk!(Song);
-        None
+        let v = &self.cache.get(key)?.1;
+        pager!(v, p => (p.items.len() < p.total).then_some(p.items.len())).flatten()
     }
 
     fn visible_covers<'a>(&'a self) -> Vec<(String, u32)> {
@@ -2035,6 +1993,7 @@ impl App {
             let lo = (off / h).max(0.0) as usize;
             (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
         };
+        let grid = |n| span(n, cw + 52.0, cols);
         let mut out: Vec<(&str, u32)> = Vec::new();
         fn rows(v: &[Song], r: std::ops::Range<usize>) -> impl Iterator<Item = &str> {
             v[r].iter().map(|s| s.cover.as_str())
@@ -2068,17 +2027,9 @@ impl App {
             out.extend(similar.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
             out.extend(appears.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
         } else if let Some(p) = self.data::<Pager<Album>>(key) {
-            out.extend(
-                p.items[span(p.items.len(), cw + 52.0, cols)]
-                    .iter()
-                    .map(|a| (a.cover.as_str(), 300)),
-            );
+            out.extend(p.items[grid(p.items.len())].iter().map(|a| (a.cover.as_str(), 300)));
         } else if let Some(p) = self.data::<Pager<Artist>>(key) {
-            out.extend(
-                p.items[span(p.items.len(), cw + 52.0, cols)]
-                    .iter()
-                    .map(|a| (a.cover.as_str(), 300)),
-            );
+            out.extend(p.items[grid(p.items.len())].iter().map(|a| (a.cover.as_str(), 300)));
         } else if let Some(r) = self.data::<SearchRes>(key) {
             out.extend(r.artists.iter().take(cols).map(|a| (a.cover.as_str(), 300)));
             out.extend(r.albums.iter().take(cols).map(|a| (a.cover.as_str(), 300)));
@@ -2162,26 +2113,15 @@ fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
         .or_else(|| v.downcast_ref::<Vec<Song>>().map(|s| (&s[..], "Folder")))
 }
 
-fn shuffle(order: &mut [usize], keep_first: usize) {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let mut h = RandomState::new().build_hasher();
-    let mut v: Vec<(u64, usize)> = order
-        .iter()
-        .enumerate()
-        .map(|(i, &x)| {
-            h.write_usize(x);
-            h.write_usize(i);
-            (h.finish(), x)
-        })
-        .collect();
-    v.sort_by_key(|(k, _)| *k);
-    for (d, (_, x)) in order.iter_mut().zip(v) {
-        *d = x;
+fn shuffle(r: std::ops::Range<usize>, first: usize) -> Vec<usize> {
+    use std::hash::BuildHasher;
+    let h = std::collections::hash_map::RandomState::new();
+    let mut o: Vec<usize> = r.collect();
+    o.sort_by_cached_key(|&x| h.hash_one(x));
+    if let Some(p) = o.iter().position(|&x| x == first) {
+        o.swap(0, p);
     }
-    if let Some(p) = order.iter().position(|&x| x == keep_first) {
-        order.swap(0, p);
-    }
+    o
 }
 
 pub static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

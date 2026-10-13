@@ -550,10 +550,7 @@ fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
                 column![
                     theme::bold("Could not load this page.", 24.0),
                     theme::sub(e, 14.0),
-                    button(theme::bold("Try again", 14.0))
-                        .style(theme::pill)
-                        .padding([8, 16])
-                        .on_press(Message::Retry),
+                    theme::pill_btn("Try again", Message::Retry),
                 ]
                 .spacing(16)
                 .align_x(Alignment::Center),
@@ -1043,11 +1040,11 @@ fn artist<'a>(app: &'a App) -> El<'a> {
                     Message::PlayCtx(key.into(), 0),
                     Message::PlayCtx(key.into(), 1),
                     vec![
-                        button(theme::bold(if on { "Following" } else { "Follow" }, 14.0))
-                            .style(theme::pill)
-                            .padding([7, 15])
-                            .on_press(Message::Star(vec![a.id.clone()], !on))
-                            .into(),
+                        theme::pill_btn(
+                            if on { "Following" } else { "Follow" },
+                            Message::Star(vec![a.id.clone()], !on)
+                        )
+                        .into(),
                         bar_btn(icon::DOTS, Message::Menu(Box::new(MenuKind::Artist(a.clone())))),
                     ],
                 ),
@@ -1437,12 +1434,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             ]
             .spacing(2)
             .width(Fill),
-            (app.cfg.active.as_ref() == Some(&s.id)).then(|| {
-                button(theme::bold("Log out", 14.0))
-                    .style(theme::pill)
-                    .padding([7, 15])
-                    .on_press(Message::LogOut)
-            }),
+            (app.cfg.active.as_ref() == Some(&s.id))
+                .then(|| theme::pill_btn("Log out", Message::LogOut)),
         ]
         .align_y(Alignment::Center)
         .height(56)
@@ -1556,10 +1549,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                     ),
                     14.0
                 ),
-                button(theme::bold("Clear", 14.0))
-                    .style(theme::pill)
-                    .padding([7, 15])
-                    .on_press(Message::ClearCache)
+                theme::pill_btn("Clear", Message::ClearCache)
             ]
             .spacing(16)
             .align_y(Alignment::Center)

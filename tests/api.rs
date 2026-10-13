@@ -118,7 +118,7 @@ fn search_returns_results() {
 fn lyrics_call_succeeds() {
     rt().block_on(async {
         let s = live().await;
-        let (songs, _) = s.songs("frequent", &[], 0, 10).await.expect("songs");
+        let (songs, _) = s.songs("frequent", 0, 10).await.expect("songs");
         for song in &songs {
             if s.lyrics(&song.id).await.is_ok_and(|l| !l.is_empty()) {
                 return;
@@ -153,7 +153,7 @@ fn subsonic_fallback_lists_albums() {
         let (albums, _) = s.albums("name", &[], 0, 10).await.expect("subsonic albums");
         assert_eq!(albums.len(), 10);
         assert!(albums.iter().all(|a| !a.name.is_empty() && !a.cover.is_empty()));
-        let songs = s.songs("starred", &[], 0, 10).await.expect("starred songs");
+        let songs = s.songs("starred", 0, 10).await.expect("starred songs");
         assert!(songs.0.iter().all(|s| s.starred));
     });
 }
@@ -235,7 +235,7 @@ fn song_deserializes_native_and_subsonic() {
 fn local_star_rate_scrobble() {
     rt().block_on(async {
         let s = local().await;
-        let (songs, _) = s.songs("name", &[], 0, 5).await.expect("songs");
+        let (songs, _) = s.songs("name", 0, 5).await.expect("songs");
         assert!(!songs.is_empty());
         let id = songs[0].id.clone();
         s.star(std::slice::from_ref(&id), true).await.expect("star");
@@ -255,7 +255,7 @@ fn local_star_rate_scrobble() {
 fn local_playlist_roundtrip() {
     rt().block_on(async {
         let s = local().await;
-        let (songs, _) = s.songs("name", &[], 0, 5).await.expect("songs");
+        let (songs, _) = s.songs("name", 0, 5).await.expect("songs");
         let ids: Vec<String> = songs.iter().take(3).map(|x| x.id.clone()).collect();
         let pl = s.playlist_create("navify test", &ids[..2]).await.expect("create");
         assert_eq!(pl.song_count, 2);
@@ -278,7 +278,7 @@ fn local_playlist_roundtrip() {
 fn local_play_queue_roundtrip() {
     rt().block_on(async {
         let s = local().await;
-        let (songs, _) = s.songs("name", &[], 0, 4).await.expect("songs");
+        let (songs, _) = s.songs("name", 0, 4).await.expect("songs");
         let ids: Vec<String> = songs.iter().map(|x| x.id.clone()).collect();
         s.save_play_queue(&ids, &ids[1], 1234).await.expect("save queue");
         let (queue, current, position) = s.play_queue().await.expect("queue");
@@ -300,7 +300,7 @@ fn local_subsonic_read_suite() {
                 s.albums(k, &[], 0, 5).await.unwrap_or_else(|e| panic!("albums {k} {native}: {e}"));
             }
             for k in ["name", "artist", "album", "newest", "recent", "frequent", "year", "rating"] {
-                s.songs(k, &[], 0, 5).await.unwrap_or_else(|e| panic!("songs {k} {native}: {e}"));
+                s.songs(k, 0, 5).await.unwrap_or_else(|e| panic!("songs {k} {native}: {e}"));
             }
         }
         let (albums, _) = s.albums("name", &[], 0, 10).await.expect("albums");
