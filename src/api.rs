@@ -219,11 +219,10 @@ fn normalize(v: &mut Value) {
 
 pub fn parse<T: Data>(mut v: Value) -> Result<T> {
     normalize(&mut v);
-    if v.is_null() {
-        return Ok(T::default());
-    }
     let e = |e| anyhow!("The server returned an unexpected response: {e}");
-    serde_json::from_value(v).map_err(e)
+    Ok(serde_json::from_value::<Option<T>>(v)
+        .map_err(e)?
+        .unwrap_or_default())
 }
 
 fn net_err(e: reqwest::Error) -> anyhow::Error {
@@ -254,11 +253,8 @@ fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
     let asc = matches!(sort, "name" | "artist" | "album" | "genre" | "year");
     let order = if asc { "ASC" } else { "DESC" };
     let field = sort_row(sort)[col];
-    let mut q = json!({"_sort": field, "_order": order, "_start": off, "_end": off + n});
-    if sort == "starred" {
-        q["starred"] = true.into();
-    }
-    q
+    let starred = (sort == "starred").then_some(true);
+    json!({"_sort": field, "_order": order, "_start": off, "_end": off + n, "starred": starred})
 }
 
 impl std::fmt::Debug for Session {
