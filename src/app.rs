@@ -1227,15 +1227,13 @@ impl App {
                 let key = format!("playlist:{pid}");
                 self.edit::<(Playlist, Vec<Song>)>(&key, |(_, s)| s.extend(songs));
                 self.edit_pl(&pid, |p| p.song_count += n);
-                let name = self
-                    .playlist(&pid)
-                    .map(|p| p.name.clone())
-                    .unwrap_or_default();
+                let done = format!("Added to {}.", self.playlist(&pid).map_or("", |p| &p.name));
+                let done = self.toast(&done);
                 let add = |s: Session| async move {
                     s.playlist_update(&pid, None, None, &ids, &[]).await
                 };
                 let add = self.send(add, "Could not add the song to the playlist.");
-                return Task::batch([add, self.toast(&format!("Added to {name}."))]);
+                return Task::batch([add, done]);
             }
             Message::PlNew(name, ids) => {
                 self.menu = None;
