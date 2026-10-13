@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::OnceLock};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::api::Server;
@@ -63,70 +63,49 @@ impl Default for Settings {
     }
 }
 
-impl Config {
-    pub fn path() -> PathBuf {
-        dirs::config_dir()
-            .expect("The system has no configuration directory.")
-            .join("navify/config.json")
-    }
+fn path() -> PathBuf {
+    let dir = dirs::config_dir().expect("The system has no configuration directory.");
+    dir.join("navify/config.json")
+}
 
+impl Config {
     pub fn load() -> Self {
-        let p = Self::path();
-        match std::fs::read_to_string(&p) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
-            r => r
-                .map_err(anyhow::Error::from)
-                .and_then(|s| Ok(serde_json::from_str(&s)?))
-                .unwrap_or_else(|e| {
-                    panic!("Cannot read the configuration file {}: {e}", p.display())
-                }),
-        }
+        let p = path();
+        let s = match std::fs::read_to_string(&p) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            r => r.map_err(anyhow::Error::from),
+        };
+        s.and_then(|s| Ok(serde_json::from_str(&s)?))
+            .unwrap_or_else(|e| panic!("Cannot read the configuration file {}: {e}", p.display()))
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
+        let (path, mut o) = (path(), std::fs::OpenOptions::new());
+        std::fs::create_dir_all(path.parent().expect("the path has a directory"))?;
         let tmp = path.with_extension("tmp");
-        {
-            let mut o = std::fs::OpenOptions::new();
-            o.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-            let mut f = o.open(&tmp)?;
-            std::io::Write::write_all(&mut f, serde_json::to_string_pretty(self)?.as_bytes())?;
-        }
-        std::fs::rename(&tmp, &path)?;
-        Ok(())
+        o.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+        std::io::Write::write_all(&mut o.open(&tmp)?, &serde_json::to_vec_pretty(self)?)?;
+        Ok(std::fs::rename(&tmp, &path)?)
     }
 }
 
-fn store() -> Result<()> {
-    static STORE: OnceLock<Result<(), String>> = OnceLock::new();
-    STORE
-        .get_or_init(|| {
-            (|| -> Result<()> {
-                #[cfg(target_os = "macos")]
-                let s = apple_native_keyring_store::keychain::Store::new();
-                #[cfg(target_os = "windows")]
-                let s = windows_native_keyring_store::Store::new();
-                #[cfg(all(unix, not(target_os = "macos")))]
-                let s = dbus_secret_service_keyring_store::Store::new();
-                keyring_core::set_default_store(
-                    s.context("No credential store on this platform.")?,
-                );
-                Ok(())
-            })()
-            .map_err(|e| e.to_string())
-        })
-        .as_ref()
-        .map_err(|e| anyhow::anyhow!("The credential store is not available: {e}"))
-        .copied()
-}
-
 fn entry(server_id: &str) -> Result<keyring_core::Entry> {
-    store()?;
+    static STORE: OnceLock<Result<(), String>> = OnceLock::new();
+    let store = STORE.get_or_init(|| {
+        #[cfg(target_os = "macos")]
+        let s = apple_native_keyring_store::keychain::Store::new();
+        #[cfg(target_os = "windows")]
+        let s = windows_native_keyring_store::Store::new();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let s = dbus_secret_service_keyring_store::Store::new();
+        s.map(|s| keyring_core::set_default_store(s))
+            .map_err(|e| e.to_string())
+    });
+    store
+        .clone()
+        .map_err(|e| anyhow!("The credential store is not available: {e}"))?;
     keyring_core::Entry::new("navify", server_id).context("Could not access the credential store.")
 }
 
