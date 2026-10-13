@@ -733,6 +733,18 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let b = container(c).padding([0.0, PAD]).center_y(64).width(Fill);
         b.style(fill(bg, 0.0))
     };
+    if app.route == "lyrics" && app.lyric.1.is_none() {
+        let t = bold("Show the current line", 14.0);
+        let b = button(t).padding([10, 20]).on_press(Message::Follow);
+        let b = b.style(theme::btn([TEXT; 3], [BG; 3], 500.0));
+        return Some(
+            container(b)
+                .center_x(Fill)
+                .align_bottom(Fill)
+                .padding(24)
+                .into(),
+        );
+    }
     if let Some((id, f, _, albums)) = disc_args(app) {
         let tools = disc_tools(app, albums, id, f);
         return (off > GRID_Y - 64.0).then(|| bar(tools, theme::PANEL).into());
@@ -988,8 +1000,19 @@ fn lyrics(app: &App) -> El<'_> {
         }
     });
     let col = Column::with_children(lines).spacing(16).max_width(900);
-    let col = container(col).padding([48.0, PAD * 2.0]);
-    col.width(Fill).style(bg).into()
+    let pad = Padding::new(PAD * 2.0).top(48).bottom(app.scroll().1 * 0.6);
+    container(col).padding(pad).width(Fill).style(bg).into()
+}
+
+pub fn lyric_scroll(app: &App) -> Option<(usize, f32)> {
+    let (l, cur, _) = lyric_at(app, app.current_song()?)?;
+    let w = (app.main_w() - 4.0 * PAD).min(900.0);
+    let rows = |s: &str| (s.chars().count() as f32 * 17.6 / w).ceil().max(1.0);
+    let y: f32 = l.lines[..cur]
+        .iter()
+        .map(|x| rows(&x.1) * 41.6 + 16.0)
+        .sum();
+    Some((cur, (48.0 + y - app.scroll().1 * 0.3).max(0.0)))
 }
 
 fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, usize, bool)> {

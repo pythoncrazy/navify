@@ -125,6 +125,7 @@ pub enum Message {
     Back,
     Fwd,
     Scrolled(f32, f32, f32),
+    Follow,
     Search(String),
     SearchGo(u64),
     Play(Vec<Song>, usize, String),
@@ -255,6 +256,7 @@ pub struct App {
     seeds: HashMap<String, AnyData>,
     pub pending: HashSet<String>,
     pub scrolls: HashMap<String, (f32, f32)>,
+    pub lyric: (usize, Option<f32>),
     pub covers: Covers,
     pub player: Option<navify_audio::Player>,
     media: Option<souvlaki::MediaControls>,
@@ -737,6 +739,7 @@ impl App {
 
     fn began(&mut self) -> Task<Message> {
         (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
+        self.lyric = (usize::MAX, Some(0.0));
         self.queue_next_refresh();
         let Some(song) = self.current_song().cloned() else {
             return Task::none();
@@ -900,7 +903,10 @@ impl App {
         let keys = [key.as_str(), "lib"].into_iter().chain(keys);
         let mut tasks: Vec<_> = keys.map(|k| self.request(k, 0)).collect();
         tasks.push(self.disc_load());
-        tasks.push(self.scroll_to(self.scrolls.get(&route).map_or(0.0, |s| s.0)));
+        match route == "lyrics" {
+            true => self.lyric = (usize::MAX, Some(0.0)),
+            false => tasks.push(self.scroll_to(self.scrolls.get(&route).map_or(0.0, |s| s.0))),
+        }
         if route == "login" {
             let l = &self.login;
             let n = [&l.url, &l.user].iter().position(|v| v.is_empty());
@@ -973,7 +979,13 @@ impl App {
     pub fn update(&mut self, m: Message) -> Task<Message> {
         use souvlaki::MediaPlayback as P;
         let seek = matches!(m, Message::Seek(_));
-        let t = self.handle(m);
+        let mut t = self.handle(m);
+        let follow = self.lyric.1.is_some() && self.route == "lyrics";
+        let line = crate::pages::lyric_scroll(self).filter(|l| follow && l.0 != self.lyric.0);
+        if let Some((n, y)) = line {
+            self.lyric = (n, Some(y));
+            t = Task::batch([t, self.scroll_to(y)]);
+        }
         if let Some(p) = &self.player {
             p.set_volume(if self.muted { 0.0 } else { self.volume });
             p.set_crossfade(self.cfg.settings.crossfade_secs);
@@ -1055,6 +1067,10 @@ impl App {
             Message::Scrolled(off, view, content) => {
                 let key = self.route.clone();
                 self.scrolls.insert(key.clone(), (off, view));
+                let max = (content - view).max(0.0);
+                if key == "lyrics" && self.lyric.1.is_some_and(|y| (y.min(max) - off).abs() > 2.0) {
+                    self.lyric.1 = None;
+                }
                 let more = self
                     .page_len(&key)
                     .filter(|_| content > 0.0 && off + view * 3.0 >= content);
@@ -1102,7 +1118,7 @@ impl App {
             }
             Message::Seek(pos) => {
                 let again = pos < 5.0 && self.pos() > 10.0;
-                self.position = pos;
+                (self.position, self.lyric) = (pos, (usize::MAX, Some(0.0)));
                 self.player.iter().for_each(|p| p.seek(pos));
                 if again {
                     let done = self.listen(false);
@@ -1558,6 +1574,7 @@ impl App {
                 return Task::batch(seek.map(|v| self.update(Message::Seek(v))));
             }
             Message::Tick => self.position = self.pos(),
+            Message::Follow => self.lyric = (usize::MAX, Some(0.0)),
             Message::Modal(id, kind) => {
                 self.menu = None;
                 let p = self.playlist(&id).expect("the dialog has a playlist");
