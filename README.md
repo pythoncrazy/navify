@@ -1,17 +1,62 @@
-# navify
+<p align="center">
+  <img src="assets/navify.svg" width="96" height="96" alt="Navify logo">
+</p>
 
-A desktop client for Navidrome and OpenSubsonic servers. It looks like Spotify.
-It uses few resources. It runs on Linux, macOS, and Windows.
+<h1 align="center">Navify</h1>
+
+<p align="center">
+  A desktop music player for Navidrome and OpenSubsonic servers.<br>
+  It looks like Spotify. It uses few resources. It runs on Linux, macOS, and Windows.
+</p>
+
+<p align="center">
+  <a href="https://github.com/pythoncrazy/navify/actions/workflows/ci.yml"><img src="https://github.com/pythoncrazy/navify/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/pythoncrazy/navify/releases"><img src="https://img.shields.io/github/v/release/pythoncrazy/navify?include_prereleases" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License"></a>
+</p>
 
 ## Features
 
-- Play your music with gapless playback, crossfade, and ReplayGain.
-- Browse albums, artists, playlists, and folders.
-- Search, lyrics, artist radio, and liked songs.
-- Sync the play queue with the server.
-- Control playback with media keys and the system media controls.
-- Keep Navify in the system tray when you close the window (set this in the settings).
-  Ctrl+W always sends the window to the tray. Ctrl+Q quits.
+- **Playback:** gapless playback, crossfade, ReplayGain (track or album), speed control, and fast seek.
+  Navify can ask the server to transcode to a different format or a lower bit rate.
+- **Library:** albums, artists, songs, playlists, genres, folders, and liked songs.
+  Long lists load in pages of 100 as you scroll.
+- **Search:** one search box for songs, artists, and albums, with genre tiles to browse.
+- **Artists:** popular songs, discography, similar artists, and artist radio.
+- **Lyrics:** synced lyrics follow the song. Click a line to go to that time.
+- **Queue:** play next, add to queue, shuffle, and repeat. Navify can save the queue on the server.
+- **Playlists:** make, rename, change, and delete playlists.
+- **Scrobble:** Navify sends plays to the server, which can send them to Last.fm or ListenBrainz.
+- **System:** media keys, MPRIS on Linux, the media overlay on Windows, and Now Playing on macOS.
+  An optional tray icon keeps Navify open when you close the window.
+- **Layout:** drag the edges of the library panel and the right panel to change their width.
+- **Resources:** no CPU use when paused, a small memory footprint, and a small binary.
+  Covers are kept in a disk cache.
+
+## Keyboard shortcuts
+
+On macOS, use Cmd in place of Ctrl.
+
+| Keys | Action |
+| --- | --- |
+| Space | Play or pause |
+| Ctrl+Left, Ctrl+Right | Previous or next song |
+| Shift+Left, Shift+Right | Go back or forward 5 seconds |
+| Ctrl+Up, Ctrl+Down | Volume up or down |
+| Ctrl+K or Ctrl+L | Search |
+| Ctrl+S | Shuffle on or off |
+| Ctrl+R | Repeat off, all, or one |
+| Alt+Left, Alt+Right | Go back or forward a page |
+| Alt+Shift+H | Home |
+| Alt+Shift+S | Liked Songs |
+| Alt+Shift+J | Now Playing panel |
+| Alt+Shift+Q | Queue panel |
+| Alt+Shift+L | Collapse or expand the library |
+| Alt+Shift+B | Like the current song |
+| Shift+< , Shift+> | Slower or faster |
+| Ctrl+, | Settings |
+| Ctrl+W | Close the window (Navify stays in the tray when the tray is on) |
+| Ctrl+Q | Quit |
 
 ## Install
 
@@ -72,7 +117,8 @@ Then build and run:
 cargo run --release
 ```
 
-The release profile uses full LTO, so a release build takes some minutes.
+The release profile uses full LTO and one codegen unit for the fastest binary,
+so a release build takes some minutes. Cargo uses 4 build jobs (`.cargo/config.toml`).
 Use `cargo run` for fast development builds.
 
 To make packages, install cargo-packager and run it after the release build:
