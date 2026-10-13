@@ -966,6 +966,7 @@ struct Mixer {
     rate: u32,
     cur: Option<Source>,
     inc: Option<Source>,
+    old: Option<Source>,
     fade: (usize, usize),
     next: Option<Track>,
     pre: Option<(Track, JoinHandle<Result<Source, String>>)>,
@@ -979,6 +980,7 @@ impl Mixer {
             rate,
             cur: None,
             inc: None,
+            old: None,
             fade: (0, 1),
             next: None,
             pre: None,
@@ -1124,21 +1126,26 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             id => host.device_by_id(&id.parse().map_err(|e: cpal::Error| e.to_string())?),
         }
         .ok_or("The audio output device is not available. Select a device in Settings.")?;
-        let fits = dev.supported_output_configs().into_iter().flatten().any(|c| {
-            c.channels() == 2 && (c.min_sample_rate()..=c.max_sample_rate()).contains(&want)
-        });
-        let rate = match fits {
-            true => want,
-            false => dev.default_output_config().map_err(|e| e.to_string())?.sample_rate(),
+        let sup = dev
+            .supported_output_configs()
+            .into_iter()
+            .flatten()
+            .find(|c| {
+                c.channels() == 2 && (c.min_sample_rate()..=c.max_sample_rate()).contains(&want)
+            })
+            .map(|c| c.with_sample_rate(want));
+        let sup = sup.map_or_else(|| dev.default_output_config(), Ok).map_err(|e| e.to_string())?;
+        let rate = sup.sample_rate();
+        let buffer_size = match *sup.buffer_size() {
+            cpal::SupportedBufferSize::Range { min, max } => {
+                cpal::BufferSize::Fixed((rate / 40).clamp(min, max))
+            }
+            cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
         };
         let (prod, mut cons) = RingBuffer::<f32>::new(rate as usize / 2);
         let (csh, etx, me, half) = (sh.clone(), tx.clone(), me.clone(), rate as usize / 4);
         let (mut read, mut vol, ramp) = (0u64, 0f32, 1000.0 / rate as f32);
-        let config = cpal::StreamConfig {
-            channels: 2,
-            sample_rate: rate,
-            buffer_size: cpal::BufferSize::Default,
-        };
+        let config = cpal::StreamConfig { channels: 2, sample_rate: rate, buffer_size };
         let stream = dev
             .build_output_stream(
                 config,
@@ -1192,7 +1199,17 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             match cmd {
                 Cmd::Play(t, at) => {
                     let pre = mix.pre.take_if(|p| at == 0.0 && p.0 == t).map(|p| p.1);
-                    (mix.cur, mix.inc, play) = (None, None, Some((t, at, pre)));
+                    let mut was = [mix.cur.take(), mix.old.take()];
+                    let hit = was
+                        .iter_mut()
+                        .find(|s| {
+                            s.as_ref().is_some_and(|s| {
+                                !t.transcoded && s.track.id == t.id && s.track.url == t.url
+                            })
+                        })
+                        .and_then(Option::take);
+                    mix.old = was.into_iter().flatten().next();
+                    (mix.inc, play) = (None, Some((t, at, pre, hit)));
                 }
                 Cmd::Next(t) if mix.pre.as_ref().is_some_and(|p| Some(&p.0) == t.as_ref()) => {}
                 Cmd::Next(t) => (mix.next, mix.pre) = (t, None),
@@ -1212,11 +1229,15 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         }
         let paused = sh.paused.load(Relaxed);
         let fresh = play.is_some();
-        if let Some((t, at, pre)) = play {
-            match pre.map_or_else(
-                || Source::open(t, &mix.io, mix.rate, at),
-                |h| h.join().expect("open thread"),
-            ) {
+        if let Some((t, at, pre, hit)) = play {
+            let s = match (hit, pre) {
+                (Some(mut s), _) => {
+                    s.seek(at).map(|()| (s.track = t, s).1).map_err(|e| e.to_string())
+                }
+                (None, Some(h)) => h.join().expect("open thread"),
+                (None, None) => Source::open(t, &mix.io, mix.rate, at),
+            };
+            match s {
                 Ok(s) => mix.cur = Some(s),
                 Err(e) => drop(tx.send(Event::Error(e))),
             }
