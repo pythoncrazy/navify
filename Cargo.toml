@@ -134,7 +134,6 @@ proc-macro2.opt-level = 0
 navify-audio.opt-level = 3
 
 [profile.release]
-lto = "fat"
-codegen-units = 1
+lto = "thin"
 strip = true
 panic = "abort"

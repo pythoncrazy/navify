@@ -49,6 +49,9 @@ jobs:
         run: test "$GITHUB_REF_NAME" = "v$(cargo pkgid | sed 's/.*[#@]//')"
       - run: cargo install --locked cargo-packager@0.11.8
       - run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          CARGO_PROFILE_RELEASE_LTO: fat
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
       - run: cargo packager --release --target ${{ matrix.target }} -f ${{ matrix.formats }} -o dist
       - name: Portable archive
         shell: bash
