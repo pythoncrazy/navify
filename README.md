@@ -11,6 +11,7 @@ It uses few resources. It runs on Linux, macOS, and Windows.
 - Sync the play queue with the server.
 - Control playback with media keys and the system media controls.
 - Keep Navify in the system tray when you close the window (set this in the settings).
+  Ctrl+W always sends the window to the tray. Ctrl+Q quits.
 
 ## Install
 

@@ -175,6 +175,7 @@ pub enum Message {
     Media(souvlaki::MediaControlEvent),
     MediaInit(isize),
     Window(bool),
+    CloseWindow,
     Win(iced::window::Id),
 }
 
@@ -1752,8 +1753,13 @@ impl App {
                     .collect()
                     .map(|_| Message::Quit)
             }
-            Message::Window(false) if self.tray.is_none() || !self.cfg.settings.tray => {
-                self.update(Message::Close)
+            Message::CloseWindow => self.update(if self.tray.is_some() && self.cfg.settings.tray {
+                Message::Window(false)
+            } else {
+                Message::Close
+            }),
+            Message::Window(false) if self.tray.is_none() => {
+                self.win.map_or(Task::none(), |id| iced::window::minimize(id, true))
             }
             Message::Window(show) => {
                 let Some(id) = self.win else {
@@ -2386,9 +2392,7 @@ impl App {
             }
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::Focus(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::Focus(false)),
-            iced::Event::Window(iced::window::Event::CloseRequested) => {
-                Some(Message::Window(false))
-            }
+            iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::CloseWindow),
             iced::Event::Window(iced::window::Event::Resized(s)) => {
                 Some(Message::Resize(s.width, s.height))
             }
