@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::f32::consts::FRAC_PI_2;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
@@ -155,10 +155,13 @@ impl Player {
 type Io = (Handle, reqwest::Client);
 
 const TAIL: u64 = 64 * 1024;
+const AHEAD: u64 = 4 << 20;
+const BACK: u64 = 1 << 20;
 
 #[derive(Default)]
 struct Net0 {
-    buf: Vec<u8>,
+    buf: BTreeMap<u64, Vec<u8>>,
+    size: u64,
     have: Vec<(u64, u64)>,
     len: Option<u64>,
     want: u64,
@@ -171,28 +174,43 @@ struct Net0 {
 }
 
 #[derive(Default)]
-struct Net(Mutex<Net0>, Condvar);
+struct Net(Mutex<Net0>, Condvar, tokio::sync::Notify);
 
 impl Net0 {
     fn add(&mut self, at: u64, data: &[u8]) {
-        let end = at + data.len() as u64;
-        if self.buf.len() < end as usize {
-            self.buf.resize(end as usize, 0);
+        let (s, e) = self.free(at, at + data.len() as u64);
+        if s >= e {
+            return;
         }
-        self.buf[at as usize..end as usize].copy_from_slice(data);
-        let i = self.have.partition_point(|r| r.1 < at);
-        let j = self.have.partition_point(|r| r.0 <= end);
-        let r = self.have[i..j].iter().fold((at, end), |a, r| (a.0.min(r.0), a.1.max(r.1)));
+        self.buf.insert(s, data[(s - at) as usize..(e - at) as usize].to_vec());
+        self.size += e - s;
+        let i = self.have.partition_point(|r| r.1 < s);
+        let j = self.have.partition_point(|r| r.0 <= e);
+        let r = self.have[i..j].iter().fold((s, e), |a, r| (a.0.min(r.0), a.1.max(r.1)));
         self.have.splice(i..j, [r]);
+        if self.size > 2 * AHEAD {
+            let (lo, hi) = (self.want.saturating_sub(BACK), self.want + AHEAD + BACK);
+            let tail = self.len.map_or(u64::MAX, |l| l.saturating_sub(TAIL));
+            self.buf.retain(|&k, v| k >= tail || (k + v.len() as u64 > lo && k < hi));
+            self.size = self.buf.values().map(|v| v.len() as u64).sum();
+            self.have = self.buf.iter().fold(Vec::new(), |mut h, (&k, v)| {
+                match h.last_mut() {
+                    Some((_, e)) if *e == k => *e += v.len() as u64,
+                    _ => h.push((k, k + v.len() as u64)),
+                }
+                h
+            });
+        }
+    }
+
+    fn free(&self, from: u64, to: u64) -> (u64, u64) {
+        let s = self.have.iter().find(|r| r.0 <= from && from < r.1).map_or(from, |r| r.1);
+        (s, self.have.iter().find(|r| r.0 > s).map_or(to, |r| r.0.min(to)))
     }
 
     fn gap(&self) -> Option<(u64, u64)> {
         let len = self.len?;
-        let find = |from: u64| {
-            let s = self.have.iter().find(|r| r.0 <= from && from < r.1).map_or(from, |r| r.1);
-            (s < len).then(|| (s, self.have.iter().find(|r| r.0 > s).map_or(len, |r| r.0)))
-        };
-        find(self.want).or_else(|| find(0))
+        Some(self.free(self.want, len)).filter(|g| g.0 < len && g.0 < self.want + AHEAD)
     }
 }
 
@@ -213,14 +231,19 @@ async fn fetch(
             let mut resp = match first.take() {
                 Some(r) => r,
                 None => {
-                    let Some((s, e)) = ({
-                        let mut st = net.0.lock().expect("net lock");
-                        st.jump = false;
-                        let g = st.gap();
-                        st.cur = g.unwrap_or_default();
-                        g
-                    }) else {
-                        break;
+                    let (s, e) = loop {
+                        {
+                            let mut st = net.0.lock().expect("net lock");
+                            st.jump = false;
+                            let g = st.gap();
+                            st.cur = g.unwrap_or_default();
+                            match g {
+                                Some(g) => break g,
+                                None if st.len.is_none() => return Ok(()),
+                                None => {}
+                            }
+                        }
+                        net.2.notified().await;
                     };
                     let t = Instant::now();
                     let r = http.get(url.clone()).header(RANGE, format!("bytes={s}-{}", e - 1));
@@ -241,7 +264,8 @@ async fn fetch(
                 (at, n) = (at + c.len() as u64, n + c.len());
                 (st.cur.0, st.rate) = (at, n as f64 / (t.elapsed().as_secs_f64() + st.ttfb));
                 net.1.notify_all();
-                if std::mem::take(&mut st.jump) || at >= st.cur.1 {
+                let far = st.len.is_some() && at > st.want + AHEAD;
+                if std::mem::take(&mut st.jump) || at >= st.cur.1 || far {
                     break;
                 }
             }
@@ -270,10 +294,17 @@ impl Read for Http {
         let mut st = self.net.0.lock().expect("net lock");
         st.want = self.pos;
         loop {
-            if let Some(r) = st.have.iter().find(|r| r.0 <= self.pos && self.pos < r.1) {
-                let n = buf.len().min((r.1 - self.pos) as usize);
-                buf[..n].copy_from_slice(&st.buf[self.pos as usize..][..n]);
+            let idle = st.cur == (0, 0);
+            if let Some(&(_, end)) = st.have.iter().find(|r| r.0 <= self.pos && self.pos < r.1) {
+                let (k, v) =
+                    st.buf.range(..=self.pos).next_back().expect("a chunk covers the range");
+                let d = &v[(self.pos - k) as usize..];
+                let n = buf.len().min(d.len());
+                buf[..n].copy_from_slice(&d[..n]);
                 self.pos += n as u64;
+                if idle && end - self.pos < AHEAD / 2 && st.len.is_some_and(|l| end < l) {
+                    self.net.2.notify_one();
+                }
                 return Ok(n);
             }
             if let Some(e) = &st.err {
@@ -285,6 +316,9 @@ impl Read for Http {
             let (c, e) = st.cur;
             let ahead = self.pos.wrapping_sub(c) as f64;
             st.jump |= self.pos >= e || ahead > st.rate * st.ttfb + 65536.0;
+            if idle {
+                self.net.2.notify_one();
+            }
             st = self.net.1.wait(st).expect("net lock");
         }
     }
@@ -695,7 +729,7 @@ impl Source {
                         let at = range(&tail).map_or(0, |r| r.0);
                         let body = tail.bytes().await?;
                         let mut st = net.0.lock().expect("net lock");
-                        (st.ttfb, st.len, st.buf) = (ttfb, Some(len), vec![0; len as usize]);
+                        (st.ttfb, st.len) = (ttfb, Some(len));
                         st.add(at, &body);
                         head
                     }
