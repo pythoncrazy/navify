@@ -153,6 +153,8 @@ type Q<'a> = [(&'a str, &'a str)];
 pub trait Data: DeserializeOwned + Default {}
 impl<T: DeserializeOwned + Default> Data for T {}
 
+const INVALID: &str = "The server returned an invalid response.";
+
 const SORTS: [[&str; 4]; 11] = [
     ["recent", "recent", "play_date", "play_date"],
     ["newest", "newest", "recently_added", "created_at"],
@@ -172,11 +174,9 @@ fn normalize(v: &mut Value) {
         Value::Array(a) => a.iter_mut().for_each(normalize),
         Value::Object(m) => {
             m.retain(|_, v| !v.is_null());
-            if let Some(Value::Object(p)) = m.remove("participants") {
+            if let Some(Value::Object(mut p)) = m.remove("participants") {
                 for (role, key) in [("artist", "artists"), ("albumartist", "albumArtists")] {
-                    if let Some(list) = p.get(role) {
-                        m.insert(key.into(), list.clone());
-                    }
+                    m.extend(p.remove(role).map(|l| (key.to_string(), l)));
                 }
             }
             if let Some(Value::Object(rg)) = m.remove("replayGain") {
@@ -235,6 +235,17 @@ fn net_err(e: reqwest::Error) -> anyhow::Error {
     })
 }
 
+fn pairs(q: &Value) -> Vec<(&str, String)> {
+    let text = |v: &Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
+    let all = q.as_object().into_iter().flatten();
+    all.flat_map(|(k, v)| {
+        let vs = v.as_array().map_or(std::slice::from_ref(v), Vec::as_slice);
+        let vs = vs.iter().filter(|v| !v.is_null());
+        vs.map(move |v| (k.as_str(), text(v)))
+    })
+    .collect()
+}
+
 fn sort_row(sort: &str) -> &'static [&'static str; 4] {
     SORTS.iter().find(|r| r[0] == sort).expect("a known sort")
 }
@@ -279,10 +290,7 @@ impl Session {
 
     pub async fn login(url: &str, user: &str, pass: &str) -> Result<Session> {
         let url = url.trim().trim_end_matches('/');
-        let url = match url.contains("://") {
-            true => url.to_string(),
-            false => format!("https://{url}"),
-        };
+        let url = format!("{}{url}", if url.contains("://") { "" } else { "https://" });
         let parsed = reqwest::Url::parse(&url).ok();
         let host = parsed.as_ref().and_then(reqwest::Url::host_str);
         let name = host.ok_or_else(|| anyhow!("The server address is not valid."))?;
@@ -325,59 +333,26 @@ impl Session {
         Ok(Session::new(s.server))
     }
 
-    pub fn url(&self, method: &str, q: impl Serialize) -> String {
-        let s = &self.server;
-        let req = self.http.get(format!("{}/rest/{method}", s.url));
-        let auth = [("u", &*s.user), ("t", &s.token), ("s", &s.salt)];
-        let fixed = [("v", "1.16.1"), ("c", "navify"), ("f", "json")];
-        let req = req.query(&auth).query(&fixed).query(&q).build();
+    pub fn url(&self, method: &str, q: &Value) -> String {
+        let (s, url) = (&self.server, format!("{}/rest/{method}", self.server.url));
+        let auth = json!({"u": s.user, "t": s.token, "s": s.salt,
+            "v": "1.16.1", "c": "navify", "f": "json"});
+        let req = self.http.get(url).query(&auth).query(&pairs(q)).build();
         req.expect("the server URL is valid").url().to_string()
     }
 
     pub async fn rest<T: Data>(&self, method: &str, q: &Q<'_>, ptr: &str) -> Result<T> {
-        self.get(method, q, ptr).await
+        self.get(method, Value::from_iter(q.iter().copied()), ptr)
+            .await
     }
 
-    async fn get<T: Data>(&self, method: &str, q: impl Serialize, ptr: &str) -> Result<T> {
-        let mut v = self.fetch(false, method, q).await?.0;
-        parse(v.pointer_mut(ptr).map(Value::take).unwrap_or_default())
-    }
-
-    async fn nd<T: Data>(&self, path: &str, q: impl Serialize) -> Result<(T, usize)> {
-        let (v, total) = self.fetch(true, path, q).await?;
-        Ok((parse(v)?, total))
-    }
-
-    async fn fetch(&self, native: bool, path: &str, q: impl Serialize) -> Result<(Value, usize)> {
-        let req = match native {
-            false => self.http.get(self.url(path, q)),
-            true => {
-                let listed = usize::from(matches!(path, "album" | "song" | "artist"));
-                let req = self.http.get(format!("{}/api/{path}", self.server.url));
-                let req = req.query(&q).query(&[("missing", false)][..listed]);
-                req.header("x-nd-authorization", format!("Bearer {}", self.jwt()))
-            }
-        };
-        let res = req.send().await.map_err(net_err)?;
-        let header = |k| res.headers().get(k).and_then(|v| v.to_str().ok());
-        if let Some(t) = header("x-nd-authorization").filter(|t| !t.is_empty()) {
-            *self.jwt.lock().expect("JWT lock") = t.to_string();
-        }
-        let total = header("x-total-count").and_then(|v| v.parse().ok());
+    async fn get<T: Data>(&self, method: &str, q: impl Into<Value>, ptr: &str) -> Result<T> {
+        let url = self.url(method, &q.into());
+        let res = self.http.get(url).send().await.map_err(net_err)?;
         let status = res.status().as_u16();
-        if native && status == 401 {
-            let msg = "The server session expired. Log in again.";
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg).into());
-        }
-        let http = format!("The server returned HTTP {status}.");
-        ensure!(!native || res.status().is_success(), "{http}");
-        let invalid = |_| anyhow!("The server returned an invalid response.");
-        let mut v: Value = res.json().await.map_err(invalid)?;
-        if native {
-            return Ok((v, total.unwrap_or_default()));
-        }
+        let mut v: Value = res.json().await.map_err(|_| anyhow!(INVALID))?;
         let mut v = v["subsonic-response"].take();
-        ensure!(!v.is_null(), "{http}");
+        ensure!(!v.is_null(), "The server returned HTTP {status}.");
         let e = v["error"].take();
         let msg = match e["code"].as_u64().unwrap_or_default() {
             40 => "Wrong username or password.",
@@ -385,15 +360,35 @@ impl Session {
             50 => "You do not have permission for this action.",
             _ => e["message"].as_str().unwrap_or("Unknown error."),
         };
-        ensure!(
-            v["status"] != "failed",
-            "The server reported error {}: {msg}",
-            e["code"]
-        );
-        Ok((v, 0))
+        let failed = format!("The server reported error {}: {msg}", e["code"]);
+        ensure!(v["status"] != "failed", failed);
+        parse(v.pointer_mut(ptr).map(Value::take).unwrap_or_default())
     }
 
-    async fn act(&self, method: &str, q: impl Serialize) -> Result<()> {
+    async fn nd<T: Data>(&self, path: &str, q: impl Into<Value>) -> Result<(T, usize)> {
+        let listed = usize::from(matches!(path, "album" | "song" | "artist"));
+        let url = format!("{}/api/{path}", self.server.url);
+        let req = self.http.get(url).query(&pairs(&q.into()));
+        let req = req.query(&[("missing", false)][..listed]);
+        let req = req.header("x-nd-authorization", format!("Bearer {}", self.jwt()));
+        let res = req.send().await.map_err(net_err)?;
+        let header = |k| res.headers().get(k).and_then(|v| v.to_str().ok());
+        if let Some(t) = header("x-nd-authorization").filter(|t| !t.is_empty()) {
+            *self.jwt.lock().expect("JWT lock") = t.to_string();
+        }
+        let total = header("x-total-count").and_then(|v| v.parse().ok());
+        let status = res.status().as_u16();
+        if status == 401 {
+            let msg = "The server session expired. Log in again.";
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg).into());
+        }
+        let http = format!("The server returned HTTP {status}.");
+        ensure!(res.status().is_success(), http);
+        let v = res.json().await.map_err(|_| anyhow!(INVALID))?;
+        Ok((parse(v)?, total.unwrap_or_default()))
+    }
+
+    async fn act(&self, method: &str, q: impl Into<Value>) -> Result<()> {
         self.get::<Value>(method, q, "").await.map(drop)
     }
 
@@ -403,7 +398,7 @@ impl Session {
         id: &str,
         key: &str,
         list: &str,
-        q: Value,
+        q: impl Into<Value>,
     ) -> Result<(T, Vec<U>)> {
         if self.server.native {
             let item = format!("{kind}/{id}");
@@ -411,7 +406,8 @@ impl Session {
             return Ok((a.0, b.0));
         }
         let method = format!("get{}{}", kind[..1].to_uppercase(), &kind[1..]);
-        let mut v: Value = self.get(&method, [("id", id)], &format!("/{kind}")).await?;
+        let ptr = format!("/{kind}");
+        let mut v: Value = self.get(&method, json!({"id": id}), &ptr).await?;
         let list = parse(v[key].take())?;
         Ok((parse(v)?, list))
     }
@@ -429,15 +425,9 @@ impl Session {
     }
 
     pub fn stream_url(&self, song: &Song, format: Option<&str>, br: u32) -> (String, bool) {
-        let max = (br > 0).then(|| br.to_string());
-        let id = Some(song.id.as_str());
-        let q = [
-            ("id", id),
-            ("format", format),
-            ("maxBitRate", max.as_deref()),
-        ];
+        let q = json!({"id": song.id, "format": format, "maxBitRate": (br > 0).then_some(br)});
         let transcoded = br > 0 || format.is_some_and(|f| f != "raw");
-        (self.url("stream", q), transcoded)
+        (self.url("stream", &q), transcoded)
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
@@ -450,13 +440,11 @@ impl Session {
         if let Ok(b) = fs::read(&file).await {
             return Ok(b.into());
         }
-        let url = self.url("getCoverArt", json!({"id": id, "size": size}));
+        let url = self.url("getCoverArt", &json!({"id": id, "size": size}));
         let res = self.http.get(url).send().await.map_err(net_err)?;
         let status = res.status().as_u16();
-        ensure!(
-            status < 300,
-            "The server returned HTTP {status} for cover art."
-        );
+        let http = format!("The server returned HTTP {status} for cover art.");
+        ensure!(status < 300, http);
         let b = res.bytes().await.map_err(net_err)?;
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
@@ -476,10 +464,9 @@ impl Session {
         }
         let genre = filter.iter().any(|f| f.0 == "genre");
         let t = if genre { "byGenre" } else { sort_row(sort)[1] };
-        let mut q = json!({"type": t, "size": n, "offset": off});
-        if t == "byYear" {
-            (q["fromYear"], q["toYear"]) = (0.into(), 9999.into());
-        }
+        let y = t == "byYear";
+        let mut q = json!({"type": t, "size": n, "offset": off,
+            "fromYear": y.then_some(0), "toYear": y.then_some(9999)});
         filter.iter().for_each(|&(k, v)| q[k] = v.into());
         let list: Vec<Album> = self.get("getAlbumList2", q, "/albumList2/album").await?;
         let total = off + list.len() + usize::from(list.len() == n);
@@ -546,8 +533,7 @@ impl Session {
 
     pub async fn playlist(&self, id: &str) -> Result<(Playlist, Vec<Song>)> {
         let tracks = format!("playlist/{id}/tracks");
-        self.detail("playlist", id, "entry", &tracks, json!({}))
-            .await
+        self.detail("playlist", id, "entry", &tracks, ()).await
     }
 
     pub async fn songs(&self, sort: &str, off: usize, n: usize) -> Paged<Song> {
@@ -558,8 +544,8 @@ impl Session {
             let all = self.starred().await?.2;
             return Ok((all.iter().skip(off).take(n).cloned().collect(), all.len()));
         }
-        let mut q = json!({"query": "", "songCount": n, "songOffset": off});
-        (q["artistCount"], q["albumCount"]) = (0.into(), 0.into());
+        let q = json!({"query": "", "songCount": n, "songOffset": off,
+            "artistCount": 0, "albumCount": 0});
         let list: Vec<Song> = self.get("search3", q, "/searchResult3/song").await?;
         let total = off + list.len() + usize::from(list.len() == n);
         Ok((list, total))
@@ -571,7 +557,7 @@ impl Session {
     }
 
     pub async fn starred(&self) -> Result<Trio> {
-        self.trio("getStarred2", json!({}), "/starred2").await
+        self.trio("getStarred2", ().into(), "/starred2").await
     }
 
     pub async fn genres(&self) -> Result<Vec<Genre>> {
@@ -580,7 +566,7 @@ impl Session {
 
     pub async fn lyrics(&self, id: &str) -> Result<Vec<Lyrics>> {
         let ptr = "/lyricsList/structuredLyrics";
-        self.get("getLyricsBySongId", [("id", id)], ptr).await
+        self.get("getLyricsBySongId", json!({"id": id}), ptr).await
     }
 
     pub async fn indexes(&self) -> Result<Vec<Artist>> {
@@ -589,7 +575,7 @@ impl Session {
 
     pub async fn directory(&self, id: &str) -> Result<Vec<Song>> {
         let ptr = "/directory/child";
-        self.get("getMusicDirectory", [("id", id)], ptr).await
+        self.get("getMusicDirectory", json!({"id": id}), ptr).await
     }
 
     pub async fn similar_songs(&self, id: &str, n: usize) -> Result<Vec<Song>> {
@@ -597,24 +583,22 @@ impl Session {
         self.get("getSimilarSongs2", q, "/similarSongs2/song").await
     }
 
-    pub async fn scrobble(&self, id: &str, submission: bool) -> Result<()> {
-        let q = json!({"id": id, "submission": submission});
-        self.act("scrobble", q).await
-    }
-
-    pub async fn star(&self, ids: &[String], on: bool) -> Result<()> {
-        let q: Vec<_> = ids.iter().map(|i| ("id", i)).collect();
-        self.act(if on { "star" } else { "unstar" }, q).await
-    }
-
-    pub async fn rate(&self, id: &str, rating: u8) -> Result<()> {
-        self.act("setRating", json!({"id": id, "rating": rating}))
+    pub async fn scrobble(&self, id: &str, on: bool) -> Result<()> {
+        self.act("scrobble", json!({"id": id, "submission": on}))
             .await
     }
 
+    pub async fn star(&self, ids: &[String], on: bool) -> Result<()> {
+        let method = if on { "star" } else { "unstar" };
+        self.act(method, json!({"id": ids})).await
+    }
+
+    pub async fn rate(&self, id: &str, n: u8) -> Result<()> {
+        self.act("setRating", json!({"id": id, "rating": n})).await
+    }
+
     pub async fn playlist_create(&self, name: &str, ids: &[String]) -> Result<Playlist> {
-        let ids = ids.iter().map(|i| ("songId", i.as_str()));
-        let q: Vec<_> = ids.chain([("name", name)]).collect();
+        let q = json!({"name": name, "songId": ids});
         self.get("createPlaylist", q, "/playlist").await
     }
 
@@ -626,17 +610,13 @@ impl Session {
         add: &[String],
         remove: &[usize],
     ) -> Result<()> {
-        let rm: Vec<String> = remove.iter().map(usize::to_string).collect();
-        let id = Some(id);
-        let q = [("playlistId", id), ("name", name), ("comment", comment)];
-        let add = add.iter().map(|i| ("songIdToAdd", Some(i.as_str())));
-        let rm = rm.iter().map(|i| ("songIndexToRemove", Some(i.as_str())));
-        let q: Vec<_> = q.into_iter().chain(add).chain(rm).collect();
+        let q = json!({"playlistId": id, "name": name, "comment": comment,
+            "songIdToAdd": add, "songIndexToRemove": remove});
         self.act("updatePlaylist", q).await
     }
 
     pub async fn playlist_delete(&self, id: &str) -> Result<()> {
-        self.act("deletePlaylist", [("id", id)]).await
+        self.act("deletePlaylist", json!({"id": id})).await
     }
 
     pub async fn play_queue(&self) -> Result<(Vec<Song>, String, u64)> {
@@ -647,9 +627,7 @@ impl Session {
     }
 
     pub async fn save_play_queue(&self, ids: &[String], current: &str, pos: u64) -> Result<()> {
-        let (cur, pos) = (current.to_string(), pos.to_string());
-        let ids = ids.iter().map(|i| ("id", i.clone()));
-        let q: Vec<_> = ids.chain([("current", cur), ("position", pos)]).collect();
+        let q = json!({"id": ids, "current": current, "position": pos});
         self.act("savePlayQueue", q).await
     }
 }
