@@ -579,10 +579,8 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
         let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
         let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
         let title = ell(p.title, tw, size, Black).line_height(1.1);
-        let img = app
-            .covers
-            .get(url, 640)
-            .map(|h| image(h).width(Fill).height(bh));
+        let img = app.covers.get(url, 640);
+        let img = img.map(|h| image(h).width(Fill).height(bh));
         let img = img.map(|i| i.content_fit(iced::ContentFit::Fill));
         let dim_stops = [
             (0.0, CLEAR),

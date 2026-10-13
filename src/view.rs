@@ -361,31 +361,23 @@ fn lib_panel(app: &App) -> El<'_> {
         let round = r.starts_with("artist:");
         item(cover(app, c, 48.0, round), n, &s, r)
     });
-    let liked = (f < 2 && hit("Liked Songs"))
-        .then(|| item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into()));
-    let list = column![liked]
-        .extend(pins)
-        .push(top)
-        .extend(rows)
-        .push(bottom);
+    let liked = || item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into());
+    let liked = (f < 2 && hit("Liked Songs")).then(liked);
+    let list = column![liked].extend(pins).push(top);
+    let list = list.extend(rows).push(bottom);
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
     let find = task(|a| {
         a.lib_find = a.lib_find.is_none().then(String::new);
         iced::widget::operation::focus("libfind")
     });
-    let find = tip(
-        icon_btn(i::SEARCH, 16.0, find),
-        "Search in Your Library",
-        Bottom,
-    );
+    let find = icon_btn(i::SEARCH, 16.0, find);
+    let find = tip(find, "Search in Your Library", Bottom);
     let field = app.lib_find.as_ref().map(|v| {
         let style = theme::input([CHIP, CHIP], [CHIP, CHIP], [0.0, 0.0], 4.0);
         let t = text_input("Search in Your Library", v).id("libfind");
         let t = t.on_input(|v| act(move |a| a.lib_find = Some(v.clone())));
-        t.style(style)
-            .font(theme::fw(Normal))
-            .size(14)
-            .padding([6, 8])
+        let t = t.style(style).font(theme::fw(Normal)).size(14);
+        t.padding([6, 8]).width(Fill)
     });
     let names = ["Custom order", "Alphabetical", "Creator"];
     let order = row![txt(names[sort as usize], 14.0), i(i::LIST, 16.0)].spacing(8);
@@ -394,7 +386,7 @@ fn lib_panel(app: &App) -> El<'_> {
     let order = tip(order, "Change the sort order", Bottom);
     let gap = field.is_none().then(|| Space::new().width(Fill));
     let tools = row![find].push(field).push(gap).push(order);
-    let tools = tools.spacing(8).align_y(Center);
+    let tools = tools.spacing(8).align_y(Center).width(Fill);
     let tools = (!mini).then(|| container(tools).padding([0, 4]));
     let list = scrollable(list).style(theme::scroll).height(Fill);
     let list = list.on_scroll(|v| Message::LibScrolled(v.absolute_offset().y, v.bounds().height));

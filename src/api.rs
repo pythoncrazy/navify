@@ -449,7 +449,9 @@ impl Session {
 
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
         let file = self.cover_file(id, size);
-        if let Ok(b) = fs::read(&file).await {
+        if let Ok(b) = fs::read(&file).await
+            && !b.is_empty()
+        {
             return Ok(b.into());
         }
         let url = match id.starts_with("https://") {
@@ -464,6 +466,7 @@ impl Session {
         let http = format!("The server returned HTTP {status} for cover art.");
         ensure!(status < 300, http);
         let b = res.bytes().await.map_err(net_err)?;
+        ensure!(!b.is_empty(), "The server returned an empty cover image.");
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         let tmp = file.with_extension(format!("{}.{n}.tmp", std::process::id()));
