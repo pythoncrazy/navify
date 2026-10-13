@@ -33,6 +33,8 @@ pub struct Settings {
     pub disc_grid: bool,
     pub system_frame: bool,
     pub tray: bool,
+    pub panels: (f32, f32),
+    pub lib_collapsed: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +57,8 @@ impl Default for Settings {
             disc_grid: false,
             system_frame: true,
             tray: false,
+            panels: (300.0, 320.0),
+            lib_collapsed: false,
         }
     }
 }

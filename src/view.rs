@@ -3,17 +3,17 @@ use iced::widget::{
     Column, Space, button, column, container, image, mouse_area, row, scrollable, slider, stack,
     text, text_input, tooltip,
 };
-use iced::{Alignment, Color, Element, Fill, Length};
+use iced::{Alignment, Color, Element, Fill, Length, padding};
 
 use crate::api::Artist;
-use crate::app::{App, MenuKind, Message, set};
+use crate::app::{App, Lib, MenuKind, Message, set};
 use crate::pages;
-use crate::theme::{self, icon, icon as i};
+use crate::theme::{self, fill, icon, icon as i};
 
 pub const SCROLL: &str = "main-scroll";
 
 pub fn btn<'a>(c: impl Into<Element<'a, Message>>, msg: Message) -> button::Button<'a, Message> {
-    button(c).on_press(msg).padding(0).style(theme::ghost)
+    theme::link_btn(c, theme::TEXT, msg)
 }
 
 pub fn icon_btn<'a>(c: char, size: f32, msg: Message) -> button::Button<'a, Message> {
@@ -65,15 +65,14 @@ pub fn focusable<'a>(
         ) {
             use iced::advanced::Renderer;
             self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
+            let e = self.2.min(4.0);
             if t.state.downcast_ref::<Ring>().0 {
                 r.fill_quad(
                     renderer::Quad {
-                        bounds: l.bounds().expand(self.2.min(4.0)),
-                        border: iced::Border {
-                            color: Color::WHITE,
-                            width: 2.0,
-                            radius: (self.2 + self.2.min(4.0)).into(),
-                        },
+                        bounds: l.bounds().expand(e),
+                        border: iced::border::rounded(self.2 + e)
+                            .color(Color::WHITE)
+                            .width(2),
                         ..Default::default()
                     },
                     Color::TRANSPARENT,
@@ -117,33 +116,25 @@ pub fn focusable<'a>(
                 .as_widget_mut()
                 .update(&mut t.children[0], e, l, c, r, cb, sh, v);
             let ring = t.state.downcast_mut::<Ring>();
-            if !ring.0 {
-                return;
-            }
             match e {
-                Event::Mouse(mouse::Event::ButtonPressed(_)) => {
+                _ if !ring.0 => return,
+                Event::Mouse(mouse::Event::ButtonPressed(_)) => ring.0 = false,
+                Event::Keyboard(KeyPressed { key, .. }) if *key == Key::Named(Named::Escape) => {
                     ring.0 = false;
-                    sh.request_redraw();
-                }
-                Event::Keyboard(KeyPressed {
-                    key: Key::Named(Named::Escape),
-                    ..
-                }) => {
-                    ring.0 = false;
-                    sh.request_redraw();
                     sh.capture_event();
                 }
-                Event::Keyboard(KeyPressed {
-                    key: Key::Named(Named::Enter | Named::Space),
-                    ..
-                }) if !sh.is_event_captured() => {
+                Event::Keyboard(KeyPressed { key, .. })
+                    if matches!(key, Key::Named(Named::Enter | Named::Space))
+                        && !sh.is_event_captured() =>
+                {
                     if let Some(m) = &self.1 {
                         sh.publish(m.clone());
                     }
                     sh.capture_event();
                 }
-                _ => {}
+                _ => return,
             }
+            sh.request_redraw();
         }
         fn mouse_interaction(
             &self,
@@ -162,13 +153,8 @@ pub fn focusable<'a>(
 }
 
 pub fn cover(app: &App, id: &str, size: u32, px: f32, round: bool) -> Element<'static, Message> {
-    let r = if round {
-        px / 2.0
-    } else if px < 100.0 {
-        4.0
-    } else {
-        6.0
-    };
+    let r = if px < 100.0 { 4.0 } else { 6.0 };
+    let r = if round { px / 2.0 } else { r };
     match app.covers.get(id, size) {
         Some(h) => image(h)
             .width(px)
@@ -197,28 +183,21 @@ pub fn pin_art<'a>(px: f32, c: char, bg: Color, fg: Color) -> Element<'a, Messag
 }
 
 pub fn liked_art<'a>(px: f32) -> Element<'a, Message> {
-    container(
-        theme::filled(theme::fill::HEART, px * 0.38)
-            .color(theme::TEXT)
-            .center(),
-    )
-    .center(px)
-    .style(theme::diagonal(if px < 100.0 { 4.0 } else { 6.0 }))
-    .into()
+    let heart = theme::filled(fill::HEART, px * 0.38).color(theme::TEXT);
+    container(heart.center())
+        .center(px)
+        .style(theme::diagonal(if px < 100.0 { 4.0 } else { 6.0 }))
+        .into()
 }
 
 pub fn artists_line<'a>(artists: &[Artist], size: f32, w: f32) -> Element<'a, Message> {
     let mut left = w;
     let mut r = iced::widget::Row::new();
     for (n, a) in artists.iter().enumerate() {
-        let name = if n > 0 {
-            format!(", {}", a.name)
-        } else {
-            a.name.clone()
-        };
         if left < size {
             break;
         }
+        let name = format!("{}{}", if n > 0 { ", " } else { "" }, a.name);
         let t = theme::ell(&name, left, size, Weight::Normal);
         left -= theme::width(&name, size, Weight::Normal);
         r = r.push(if a.id.is_empty() {
@@ -247,10 +226,9 @@ pub fn fmt_n(n: usize) -> String {
 }
 
 pub fn fmt_long(s: f32) -> String {
-    let s = s as u64;
-    match s {
-        3600.. => format!("{} hr {} min", s / 3600, s % 3600 / 60),
-        _ => format!("{} min {} sec", s / 60, s % 60),
+    match s as u64 {
+        s @ 3600.. => format!("{} hr {} min", s / 3600, s % 3600 / 60),
+        s => format!("{} min {} sec", s / 60, s % 60),
     }
 }
 
@@ -265,6 +243,7 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
             Bottom,
         )
     };
+    let fwd = app.hi + 1 < app.history.len();
     let initial = app
         .session
         .as_ref()
@@ -280,12 +259,7 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
         container(
             row![
                 nav(icon::LEFT, app.hi > 0, "Go back", Message::Back),
-                nav(
-                    icon::RIGHT,
-                    app.hi + 1 < app.history.len(),
-                    "Go forward",
-                    Message::Fwd
-                )
+                nav(icon::RIGHT, fwd, "Go forward", Message::Fwd)
             ]
             .spacing(8)
         )
@@ -294,7 +268,7 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
             tip(
                 round(
                     if app.route == "home" {
-                        theme::filled(theme::fill::HOME, 24.0).color(theme::TEXT)
+                        theme::filled(fill::HOME, 24.0).color(theme::TEXT)
                     } else {
                         i(icon::HOME, 24.0).color(theme::SUB)
                     }
@@ -357,21 +331,18 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
 
 fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
     let w = app.lib_w();
-    let item = |art: Element<'a, Message>, title: &str, sub: String, route: String| {
+    let item = |art: Element<'a, Message>, title: &str, sub: &str, route: String| {
         let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
         let (on, playing) = (same(&app.route), !app.ctx.is_empty() && same(&app.ctx));
-        let body: Element<'a, Message> = if app.lib_collapsed {
+        let fg = if playing { theme::ACCENT } else { theme::TEXT };
+        let body: Element<'a, Message> = if app.cfg.settings.lib_collapsed {
             art
         } else {
             row![
                 art,
                 column![
-                    theme::ell(title, w - 112.0, 16.0, Weight::Normal).color(if playing {
-                        theme::ACCENT
-                    } else {
-                        theme::TEXT
-                    }),
-                    theme::ell(&sub, w - 112.0, 14.0, Weight::Normal).color(theme::SUB),
+                    theme::ell(title, w - 112.0, 16.0, Weight::Normal).color(fg),
+                    theme::ell(sub, w - 112.0, 14.0, Weight::Normal).color(theme::SUB),
                 ]
                 .spacing(2),
             ]
@@ -387,7 +358,7 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
                 .on_press(Message::Nav(route)),
         )
     };
-    let head: Element<'a, Message> = if app.lib_collapsed {
+    let head: Element<'a, Message> = if app.cfg.settings.lib_collapsed {
         container(tip(
             icon_btn(icon::LIBRARY, 20.0, Message::LibCollapse),
             "Expand Your Library",
@@ -420,7 +391,7 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
         .align_y(Alignment::Center)
         .into()
     };
-    let chips = (!app.lib_collapsed).then(|| {
+    let chips = (!app.cfg.settings.lib_collapsed).then(|| {
         container(
             iced::widget::Row::with_children(
                 [(1u8, "Playlists"), (2, "Albums"), (3, "Artists")].map(|(n, name)| {
@@ -432,83 +403,35 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
         .padding([0, 8])
     });
     let f = app.lib_filter;
-    let pin = |c: char, bg: Color, fg: Color, title: &str, route: &str| {
-        item(
-            pin_art(48.0, c, bg, fg),
-            title,
-            "Library".into(),
-            route.into(),
-        )
-    };
-    let mut list = Column::new()
-        .push((f < 2).then(|| {
-            item(
-                liked_art(48.0),
-                "Liked Songs",
-                "Playlist".into(),
-                "liked".into(),
-            )
-        }))
-        .push((f == 0).then(|| pin(icon::MUSIC, SONGS_BG, theme::ACCENT, "Songs", "songs")))
-        .push((f == 2).then(|| {
-            pin(
-                icon::ALBUM,
-                theme::ELEVATED,
-                theme::SUB,
-                "All albums",
-                "albums",
-            )
-        }))
-        .push((f == 3).then(|| {
-            pin(
-                icon::USER,
-                theme::ELEVATED,
-                theme::SUB,
-                "All artists",
-                "artists",
-            )
-        }))
-        .push((f == 0).then(|| {
-            pin(
-                icon::FOLDER,
-                theme::ELEVATED,
-                theme::SUB,
-                "Folders",
-                "folders",
-            )
-        }));
-    if let Some(l) = app.data::<crate::app::Lib>("lib") {
+    let (green, dim) = ((SONGS_BG, theme::ACCENT), (theme::ELEVATED, theme::SUB));
+    let pins = [
+        (f == 0, icon::MUSIC, green, "Songs", "songs"),
+        (f == 2, icon::ALBUM, dim, "All albums", "albums"),
+        (f == 3, icon::USER, dim, "All artists", "artists"),
+        (f == 0, icon::FOLDER, dim, "Folders", "folders"),
+    ]
+    .into_iter()
+    .filter(|p| p.0)
+    .map(|(_, c, (bg, fg), t, r)| item(pin_art(48.0, c, bg, fg), t, "Library", r.into()));
+    let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
         let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
-            (
-                &p.cover,
-                &p.name,
-                format!("Playlist \u{2022} {}", p.owner),
-                format!("playlist:{}", p.id),
-            )
+            let s = format!("Playlist \u{2022} {}", p.owner);
+            (&p.cover, &p.name, s, format!("playlist:{}", p.id), false)
         });
         let als = l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
-            (
-                &a.cover,
-                &a.name,
-                format!("Album \u{2022} {}", a.artist),
-                format!("album:{}", a.id),
-            )
+            let s = format!("Album \u{2022} {}", a.artist);
+            (&a.cover, &a.name, s, format!("album:{}", a.id), false)
         });
-        let ars = l.artists.iter().filter(|_| f == 0 || f == 3);
-        list = list
-            .extend(
-                pls.chain(als)
-                    .map(|(c, n, s, r)| item(cover(app, c, 128, 48.0, false), n, s, r)),
-            )
-            .extend(ars.map(|a| {
-                item(
-                    cover(app, &a.cover, 128, 48.0, true),
-                    &a.name,
-                    "Artist".into(),
-                    format!("artist:{}", a.id),
-                )
-            }));
-    }
+        let ars = l.artists.iter().filter(|_| matches!(f, 0 | 3)).map(|a| {
+            let r = format!("artist:{}", a.id);
+            (&a.cover, &a.name, "Artist".into(), r, true)
+        });
+        pls.chain(als).chain(ars)
+    });
+    let list = Column::new()
+        .push((f < 2).then(|| item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into())))
+        .extend(pins)
+        .extend(rows.map(|(c, n, s, r, round)| item(cover(app, c, 128, 48.0, round), n, &s, r)));
     container(
         column![
             container(head).padding([4, 8]),
@@ -561,36 +484,28 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
             Top,
         )
     };
-    let left: Element<Message> = song.map_or_else(
-        || Space::new().into(),
-        |s| {
-            let starred = app.is_starred(&s.id, s.starred);
-            row![
-                btn(cover(app, &s.cover, 128, 56.0, false), Message::Panel(1)),
-                column![
-                    btn(
-                        theme::ell(&s.title, 200.0, 14.0, Weight::Normal),
-                        Message::Nav(format!("album:{}", s.album_id))
-                    ),
-                    artists_line(&s.artists, 12.0, 200.0),
-                ]
-                .spacing(2),
-                side(
-                    theme::heart(starred, 16.0).color_maybe(starred.then_some(theme::ACCENT)),
-                    false,
-                    if starred {
-                        "Remove from Liked Songs"
-                    } else {
-                        "Add to Liked Songs"
-                    },
-                    Message::Star(vec![s.id.clone()], !starred)
+    let left = song.map(|s| {
+        let starred = app.is_starred(&s.id, s.starred);
+        row![
+            btn(cover(app, &s.cover, 128, 56.0, false), Message::Panel(1)),
+            column![
+                btn(
+                    theme::ell(&s.title, 200.0, 14.0, Weight::Normal),
+                    Message::Nav(format!("album:{}", s.album_id))
                 ),
+                artists_line(&s.artists, 12.0, 200.0),
             ]
-            .spacing(12)
-            .align_y(Alignment::Center)
-            .into()
-        },
-    );
+            .spacing(2),
+            side(
+                theme::heart(starred, 16.0).color_maybe(starred.then_some(theme::ACCENT)),
+                false,
+                ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(starred)],
+                Message::Star(vec![s.id.clone()], !starred)
+            ),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center)
+    });
     let dur = song.map_or(0.0, |s| s.duration).max(1.0);
     let pos = app.seek_preview.unwrap_or(app.position.min(dur));
     let progress: Element<Message> = match song {
@@ -625,69 +540,29 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .align_y(Alignment::Center)
         .into(),
     };
-    let play = theme::sq(
-        theme::filled(
-            if app.playing {
-                theme::fill::PAUSE
-            } else {
-                theme::fill::PLAY
-            },
-            16.0,
-        )
-        .color(theme::BG)
-        .center(),
-        32.0,
-    )
-    .style(move |_, _| button::Style {
-        background: Some(
-            if song.is_some() {
-                theme::TEXT
-            } else {
-                theme::DIM
-            }
-            .into(),
-        ),
-        border: iced::Border::default().rounded(500.0),
-        ..button::Style::default()
-    })
-    .on_press(Message::Toggle);
-    let on = app.shuffle.is_some();
+    let playing = usize::from(app.playing);
+    let glyph = theme::filled([fill::PLAY, fill::PAUSE][playing], 16.0);
+    let bg = song.map_or(theme::DIM, |_| theme::TEXT);
+    let play = theme::sq(glyph.color(theme::BG).center(), 32.0)
+        .style(theme::solid([bg; 3], theme::BG))
+        .on_press(Message::Toggle);
+    let (ic, fi) = (|c| i(c, 16.0), |c| theme::filled(c, 16.0));
+    let (on, repeat) = (app.shuffle.is_some(), usize::from(app.repeat));
     let center = column![
         row![
             side(
-                i(icon::SHUFFLE, 16.0),
+                ic(icon::SHUFFLE),
                 on,
-                if on {
-                    "Disable shuffle"
-                } else {
-                    "Enable shuffle"
-                },
+                ["Enable shuffle", "Disable shuffle"][usize::from(on)],
                 Message::Shuffle
             ),
+            side(fi(fill::PREV), false, "Previous", Message::Prev),
+            tip(play, ["Play", "Pause"][playing], Top),
+            side(fi(fill::NEXT), false, "Next", Message::Next(true)),
             side(
-                theme::filled(theme::fill::PREV, 16.0),
-                false,
-                "Previous",
-                Message::Prev
-            ),
-            tip(play, if app.playing { "Pause" } else { "Play" }, Top),
-            side(
-                theme::filled(theme::fill::NEXT, 16.0),
-                false,
-                "Next",
-                Message::Next(true)
-            ),
-            side(
-                i(
-                    if app.repeat == 2 {
-                        icon::REPEAT1
-                    } else {
-                        icon::REPEAT
-                    },
-                    16.0
-                ),
-                app.repeat > 0,
-                ["Enable repeat", "Enable repeat one", "Disable repeat"][usize::from(app.repeat)],
+                ic([icon::REPEAT, icon::REPEAT, icon::REPEAT1][repeat]),
+                repeat > 0,
+                ["Enable repeat", "Enable repeat one", "Disable repeat"][repeat],
                 Message::Repeat
             ),
         ]
@@ -698,22 +573,21 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
     .spacing(4)
     .align_x(Alignment::Center)
     .max_width(722);
-    let vol_icon = match app.volume {
-        _ if app.muted => icon::MUTE,
+    let vol = if app.muted { 0.0 } else { app.volume };
+    let vol_icon = match vol {
         0.0 => icon::MUTE,
         v if v < 0.5 => icon::VOL1,
         _ => icon::VOL2,
     };
-    let vol = if app.muted { 0.0 } else { app.volume };
     let right = row![
         side(
-            i(icon::PR, 16.0),
+            ic(icon::PR),
             app.panel == 1,
             "Now playing view",
             Message::Panel(1)
         ),
         side(
-            i(icon::LYRICS, 16.0),
+            ic(icon::LYRICS),
             app.route == "lyrics",
             "Lyrics",
             if app.route == "lyrics" {
@@ -722,12 +596,7 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
                 Message::Nav("lyrics".into())
             }
         ),
-        side(
-            i(icon::QUEUE, 16.0),
-            app.panel == 2,
-            "Queue",
-            Message::Panel(2)
-        ),
+        side(ic(icon::QUEUE), app.panel == 2, "Queue", Message::Panel(2)),
         tip(
             button(theme::bold(format!("{}x", app.cfg.settings.speed), 12.0).center())
                 .width(40)
@@ -743,7 +612,7 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
             Top
         ),
         side(
-            i(vol_icon, 16.0),
+            ic(vol_icon),
             false,
             if app.muted { "Unmute" } else { "Mute" },
             Message::Mute
@@ -777,7 +646,10 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
     .into()
 }
 
-fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
+pub fn view(app: &App) -> Element<'_, Message> {
+    if app.session.is_none() {
+        return pages::login(app);
+    }
     let scrim = |c: Color| {
         mouse_area(
             container(Space::new())
@@ -788,19 +660,18 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
         .on_press(Message::MenuClose)
         .on_right_press(Message::MenuClose)
     };
-    let mut layers = Vec::new();
-    if let Some((id, kind)) = &app.modal {
+    let modal = app.modal.as_ref().map(|(id, kind)| {
         let pl = app
-            .data::<crate::app::Lib>("lib")
+            .data::<Lib>("lib")
             .and_then(|l| l.playlists.iter().find(|p| &p.id == id));
-        let act = |b: button::Button<'a, Message>, m: Option<Message>| {
+        let act = |b: button::Button<'static, Message>, m: Option<Message>| {
             focusable(b.on_press_maybe(m.clone()), m, 500.0, Some("layer"))
         };
-        let card: Element<'a, Message> = if *kind == 1 {
+        let card: Element<'_, Message> = if *kind == 1 {
             let named = !app.new_pl.trim().is_empty();
             let ok = named
                 .then(|| Message::Edit(id.clone(), app.new_pl.clone(), app.new_pl_desc.clone()));
-            let input = |hint: &'a str, v: &'a str, n: u8| {
+            let input = |hint: &'static str, v: &str, n: u8| {
                 text_input(hint, v)
                     .id("layer")
                     .on_input(move |v| Message::LField(n, v))
@@ -848,10 +719,7 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
                 .width(524)
                 .padding(24),
             )
-            .style(|_| container::Style {
-                border: iced::Border::default().rounded(8.0),
-                ..theme::menu(&iced::Theme::Dark)
-            })
+            .style(|t| theme::menu(t).border(iced::border::rounded(8)))
             .into()
         } else {
             container(
@@ -871,10 +739,7 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
                         Space::new().width(Fill),
                         act(
                             button(theme::bold("Cancel", 16.0))
-                                .style(|_, _| button::Style {
-                                    text_color: theme::BG,
-                                    ..button::Style::default()
-                                })
+                                .style(theme::solid([Color::TRANSPARENT; 3], theme::BG))
                                 .padding([12, 16]),
                             Some(Message::MenuClose)
                         ),
@@ -887,7 +752,7 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
                     ]
                     .spacing(16)
                     .align_y(Alignment::Center)
-                    .padding(theme::pad(16.0, 0.0, 0.0, 0.0)),
+                    .padding(padding::top(16)),
                 ]
                 .spacing(8)
                 .width(420)
@@ -896,18 +761,12 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
             .style(theme::fill(theme::TEXT, 8.0))
             .into()
         };
-        layers.push(
-            stack![
-                scrim(Color {
-                    a: 0.7,
-                    ..theme::BG
-                }),
-                container(card).center(Fill)
-            ]
-            .into(),
-        );
-    }
-    if let Some(m) = &app.menu {
+        stack![
+            scrim(theme::BG.scale_alpha(0.7)),
+            container(card).center(Fill)
+        ]
+    });
+    let menu = app.menu.as_ref().map(|m| {
         let (el, w, h) = pages::menu(app, m);
         let (ww, wh) = app.view_size();
         let (x, y) = match m.kind {
@@ -918,35 +777,22 @@ fn overlays<'a>(app: &'a App) -> Vec<Element<'a, Message>> {
             ),
         };
         let (x, y) = (x.clamp(8.0, ww - w - 8.0), y.clamp(8.0, wh - h - 8.0));
-        layers.push(
-            stack![
-                scrim(Color::TRANSPARENT),
-                column![Space::new().height(y), row![Space::new().width(x), el]]
-            ]
-            .into(),
-        );
-    }
-    if let Some((_, t)) = &app.toast {
-        layers.push(
-            container(
-                container(theme::med(t, 14.0).color(theme::BG))
-                    .padding([12, 16])
-                    .style(theme::fill(theme::TEXT, 8.0)),
-            )
-            .center_x(Fill)
-            .height(Fill)
-            .align_y(Alignment::End)
-            .padding(theme::pad(0.0, 0.0, 104.0, 0.0))
-            .into(),
-        );
-    }
-    layers
-}
-
-pub fn view(app: &App) -> Element<'_, Message> {
-    if app.session.is_none() {
-        return pages::login(app);
-    }
+        stack![
+            scrim(Color::TRANSPARENT),
+            column![Space::new().height(y), row![Space::new().width(x), el]]
+        ]
+    });
+    let toast = app.toast.as_ref().map(|(_, t)| {
+        container(
+            container(theme::med(t, 14.0).color(theme::BG))
+                .padding([12, 16])
+                .style(theme::fill(theme::TEXT, 8.0)),
+        )
+        .center_x(Fill)
+        .height(Fill)
+        .align_y(Alignment::End)
+        .padding(padding::bottom(104))
+    });
     let scroll = scrollable(pages::route(app))
         .id(SCROLL)
         .on_scroll(|v| {
@@ -963,18 +809,23 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .height(Fill)
         .clip(true)
         .style(theme::panel);
-    let panels = row![lib_panel(app), main]
+    let grip = |n| {
+        mouse_area(Space::new().width(8).height(Fill))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally)
+            .on_press(Message::Drag(Some(n)))
+    };
+    let panels = row![lib_panel(app), grip(0), main]
+        .push((app.panel > 0).then(|| grip(1)))
         .push((app.panel > 0).then(|| {
             container(if app.panel == 1 {
                 pages::now_playing(app)
             } else {
                 pages::queue_panel(app)
             })
-            .width(crate::app::RIGHT_W)
+            .width(app.right_w())
             .height(Fill)
             .style(theme::panel)
         }))
-        .spacing(8)
         .height(Fill);
     let base = container(column![
         top_bar(app),
@@ -982,5 +833,5 @@ pub fn view(app: &App) -> Element<'_, Message> {
         player_bar(app)
     ])
     .style(theme::fill(theme::BG, 0.0));
-    stack(std::iter::once(base.into()).chain(overlays(app))).into()
+    stack![base, modal, menu, toast].into()
 }

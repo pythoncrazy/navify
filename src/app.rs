@@ -13,7 +13,6 @@ use crate::api::{Album, Artist, Info, Playlist, Session, Song};
 use crate::config::{self, Config};
 
 pub const PAGE: usize = 100;
-pub const RIGHT_W: f32 = 320.0;
 const STALE: Duration = Duration::from_secs(300);
 const COVER_CAP: usize = 64 * 1024 * 1024;
 pub const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/navify.png");
@@ -69,16 +68,20 @@ pub struct Menu {
 }
 
 #[derive(Clone)]
-pub struct Edit(Arc<dyn Fn(&mut config::Settings) + Send + Sync>);
+pub struct Act(Arc<dyn Fn(&mut App) + Send + Sync>);
 
-impl std::fmt::Debug for Edit {
+impl std::fmt::Debug for Act {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("Edit")
+        f.write_str("Act")
     }
 }
 
+pub fn act(f: impl Fn(&mut App) + Send + Sync + 'static) -> Message {
+    Message::Do(Act(Arc::new(f)))
+}
+
 pub fn set<T: Clone + Send + Sync + 'static>(f: fn(&mut config::Settings, T), v: T) -> Message {
-    Message::Set(Edit(Arc::new(move |s| f(s, v.clone()))))
+    Message::Set(Act(Arc::new(move |a| f(&mut a.cfg.settings, v.clone()))))
 }
 
 #[derive(Clone, Debug)]
@@ -118,15 +121,17 @@ pub enum Message {
     Panel(u8),
     LibFilter(u8),
     LibCollapse,
+    Drag(Option<u8>),
+    DragTo(f32),
     NewPlaylist,
     LField(u8, String),
-    LRemember(bool),
     LSubmit,
     LoggedIn(Result<Session, String>),
     LogOut,
     UseServer(String),
     DropServer(String),
-    Set(Edit),
+    Set(Act),
+    Do(Act),
     ClearCache,
     Focus(bool),
     Shown(bool),
@@ -144,14 +149,11 @@ pub enum Message {
     NativeFailed,
     PlayCtx(String, u8),
     PlayCtxDone(Vec<Song>, String, u8),
-    Select(String, usize),
     RowMenu(String, usize),
     SelectAll,
     DeleteSel,
-    Hover(String, bool),
     PlayAt(String, usize),
     Retry,
-    Popular,
     DiscChip(u8),
     DiscOrder,
     FocusSearch,
@@ -288,7 +290,7 @@ pub struct App {
     pub save_seq: u64,
     pub panel: u8,
     pub lib_filter: u8,
-    pub lib_collapsed: bool,
+    pub drag: Option<u8>,
     pub volume: f32,
     pub muted: bool,
     pub login: Login,
@@ -382,6 +384,7 @@ impl App {
                         });
                     }
                 }
+                "collapsed" => self.cfg.settings.lib_collapsed = true,
                 "toast" => {
                     self.toast = Some((u64::MAX, "Added to queue".into()));
                 }
@@ -456,7 +459,7 @@ impl App {
         (w / s, h / s)
     }
 
-    fn pick(&mut self, key: String, n: usize) {
+    pub(crate) fn pick(&mut self, key: String, n: usize) {
         let m = iced::keyboard::Modifiers::from_bits_truncate(
             MODS.load(std::sync::atomic::Ordering::Relaxed),
         );
@@ -475,11 +478,26 @@ impl App {
     }
 
     pub fn lib_w(&self) -> f32 {
-        if self.lib_collapsed { 72.0 } else { 300.0 }
+        if self.cfg.settings.lib_collapsed {
+            72.0
+        } else {
+            self.cfg.settings.panels.0
+        }
+    }
+
+    pub fn right_w(&self) -> f32 {
+        self.cfg.settings.panels.1
     }
 
     pub fn main_w(&self) -> f32 {
-        self.view_size().0 - 24.0 - self.lib_w() - if self.panel > 0 { RIGHT_W + 8.0 } else { 0.0 }
+        self.view_size().0
+            - 24.0
+            - self.lib_w()
+            - if self.panel > 0 {
+                self.right_w() + 8.0
+            } else {
+                0.0
+            }
     }
 
     pub fn grid(&self) -> (usize, f32) {
@@ -610,7 +628,6 @@ impl App {
                 });
                 p
             }),
-            lib_collapsed: shot.as_deref().is_some_and(|s| s.contains("collapsed")),
             shot,
             cfg,
             ..Default::default()
@@ -1580,8 +1597,28 @@ impl App {
                 self.lib_filter = if self.lib_filter == n { 0 } else { n };
                 Task::none()
             }
+            Message::Drag(d) => {
+                self.drag = d;
+                if d.is_some() {
+                    return Task::none();
+                }
+                Task::batch([self.persist(), self.covers_now()])
+            }
+            Message::DragTo(x) => {
+                let vw = self.view_size().0;
+                let p = &mut self.cfg.settings.panels;
+                match self.drag {
+                    Some(0) if x < 208.0 => self.cfg.settings.lib_collapsed = true,
+                    Some(0) => {
+                        p.0 = (x - 8.0).clamp(280.0, 480.0);
+                        self.cfg.settings.lib_collapsed = false;
+                    }
+                    _ => p.1 = (vw - 8.0 - x).clamp(280.0, 420.0),
+                }
+                Task::none()
+            }
             Message::LibCollapse => {
-                self.lib_collapsed = !self.lib_collapsed;
+                self.cfg.settings.lib_collapsed = !self.cfg.settings.lib_collapsed;
                 self.covers_now()
             }
             Message::NewPlaylist => {
@@ -1596,10 +1633,6 @@ impl App {
                     3 => self.new_pl = v,
                     _ => self.new_pl_desc = v,
                 }
-                Task::none()
-            }
-            Message::LRemember(b) => {
-                self.login.remember = b;
                 Task::none()
             }
             Message::LSubmit => {
@@ -1714,10 +1747,14 @@ impl App {
                     .map_or_else(|e| self.toast(&e.to_string()), |()| Task::none());
                 Task::batch([self.persist(), gone])
             }
-            Message::Set(Edit(f)) => {
+            Message::Do(Act(f)) => {
+                f(self);
+                Task::none()
+            }
+            Message::Set(Act(f)) => {
                 self.menu = None;
                 let o = self.cfg.settings.clone();
-                f(&mut self.cfg.settings);
+                f(self);
                 let n = &self.cfg.settings;
                 if let Some(p) = &self.player {
                     (o.crossfade_secs != n.crossfade_secs)
@@ -1913,10 +1950,6 @@ impl App {
                 self.source = src;
                 self.start(0, mode == 1)
             }
-            Message::Select(key, n) => {
-                self.pick(key, n);
-                Task::none()
-            }
             Message::RowMenu(key, n) => {
                 if !self.sel.as_ref().is_some_and(|s| s.0 == key) || !self.picked.contains(&n) {
                     (self.sel, self.picked, self.anchor) = (Some((key.clone(), n)), [n].into(), n);
@@ -1949,14 +1982,6 @@ impl App {
                 }
                 _ => Task::none(),
             },
-            Message::Hover(k, on) => {
-                self.hover = if on {
-                    Some(k)
-                } else {
-                    self.hover.take().filter(|h| *h != k)
-                };
-                Task::none()
-            }
             Message::PlayAt(key, n) => match self.songs_of(&key) {
                 Some((list, src)) => {
                     let n = n - list[..n.min(list.len())]
@@ -2055,10 +2080,6 @@ impl App {
                 let h = self.view_size().1;
                 self.scrolls.values_mut().for_each(|s| s.1 = h - 136.0);
                 self.covers_now()
-            }
-            Message::Popular => {
-                self.popular_all = !self.popular_all;
-                Task::none()
             }
             Message::DiscChip(n) => {
                 self.disc_chip = n;
@@ -2518,6 +2539,17 @@ impl App {
             }
             _ => None,
         })];
+        if self.drag.is_some() {
+            subs.push(event::listen_with(|e, _, _| match e {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::DragTo(position.x))
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_)) => {
+                    Some(Message::Drag(None))
+                }
+                _ => None,
+            }));
+        }
         if self.playing && !self.hidden {
             subs.push(
                 iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tick),

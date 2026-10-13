@@ -6,7 +6,7 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Fill, color};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Song};
-use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, set};
+use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, act, set};
 use crate::config::Settings;
 use crate::theme::{self, fill, icon, icon as i};
 use crate::view::{
@@ -214,11 +214,17 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     .align_y(Alignment::Center);
     let a = if sel { 0.3 } else { 0.1 * hot as u8 as f32 };
     mouse_area(container(r).style(theme::fill(theme::tint(a), 4.0)))
-        .on_press(Message::Select(key.into(), n))
+        .on_press(act({
+            let k = key.to_string();
+            move |a| a.pick(k.clone(), n)
+        }))
         .on_double_click(Message::PlayAt(key.into(), n))
         .on_right_press(Message::RowMenu(key.into(), n))
-        .on_enter(Message::Hover(hk.clone(), true))
-        .on_exit(Message::Hover(hk, false))
+        .on_enter(act({
+            let k = hk.clone();
+            move |a| a.hover = Some(k.clone())
+        }))
+        .on_exit(act(move |a| a.hover = a.hover.take().filter(|h| *h != hk)))
         .into()
 }
 
@@ -1044,7 +1050,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
         .text_size(14)
         .font(theme::fw(Weight::Normal))
         .padding([8, 12])
-        .style(theme::pick_flat)
+        .style(theme::pick(true))
         .menu_style(theme::pick_menu)
         .into()
     });
@@ -1204,7 +1210,7 @@ fn artist<'a>(app: &'a App) -> El<'a> {
                     ))
                     .padding(16)
                     .style(theme::link(theme::SUB))
-                    .on_press(Message::Popular),
+                    .on_press(act(|a| a.popular_all = !a.popular_all)),
                 )
                 .padding([0.0, PAD])
             }))
@@ -1683,7 +1689,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         .font(theme::fw(Weight::Normal))
         .padding([8, 12])
         .width(268)
-        .style(theme::pick)
+        .style(theme::pick(false))
         .menu_style(theme::pick_menu)
         .into()
     }
@@ -1828,7 +1834,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
 }
 
 pub fn now_playing<'a>(app: &'a App) -> El<'a> {
-    let w = crate::app::RIGHT_W - 32.0;
+    let w = app.right_w() - 32.0;
     let Some(s) = app.current_song() else {
         return container(theme::sub("Nothing is playing.", 14.0))
             .padding(16)
@@ -1934,7 +1940,7 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: usize, w: f32) -> El<'a> {
 }
 
 pub fn queue_panel<'a>(app: &'a App) -> El<'a> {
-    let w = crate::app::RIGHT_W - 16.0;
+    let w = app.right_w() - 16.0;
     let next: Vec<El> = (app.index + 1..app.queue.len())
         .take(100)
         .filter_map(|n| {
@@ -2340,16 +2346,16 @@ pub fn login<'a>(app: &'a App) -> El<'a> {
                 btn(
                     row![
                         toggler(l.remember)
-                            .on_toggle(Message::LRemember)
+                            .on_toggle(|b| act(move |a| a.login.remember = b))
                             .style(theme::tog)
                             .size(20),
                         theme::txt("Remember password", 14.0, Weight::Normal),
                     ]
                     .spacing(12)
                     .align_y(Alignment::Center),
-                    Message::LRemember(!l.remember),
+                    act(|a| a.login.remember = !a.login.remember),
                 ),
-                Some(Message::LRemember(!l.remember)),
+                Some(act(|a| a.login.remember = !a.login.remember)),
                 4.0,
                 None,
             ),
