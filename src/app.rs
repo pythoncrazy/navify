@@ -568,7 +568,7 @@ impl App {
             covers: Covers::default(),
             cover_tasks: 0,
             player: tokio::runtime::Handle::try_current().ok().map(|h| {
-                let (p, mut rx) = navify_audio::Player::new(h.clone());
+                let (p, mut rx) = navify_audio::Player::new(h.clone(), Session::client());
                 let tx = tx.clone();
                 h.spawn(async move {
                     while let Some(e) = rx.recv().await {
@@ -758,6 +758,7 @@ impl App {
             gain: self.gain(song),
             transcoded,
             duration: song.duration,
+            cache: None,
         }
     }
 

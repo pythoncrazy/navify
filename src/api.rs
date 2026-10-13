@@ -356,7 +356,7 @@ impl std::fmt::Debug for Session {
 }
 
 impl Session {
-    fn client() -> reqwest::Client {
+    pub fn client() -> reqwest::Client {
         static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
         HTTP.get_or_init(|| {
             let _ = rustls::crypto::ring::default_provider().install_default();

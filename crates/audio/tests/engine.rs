@@ -8,6 +8,11 @@ fn rt() -> &'static tokio::runtime::Handle {
     RT.get_or_init(|| tokio::runtime::Runtime::new().expect("runtime")).handle()
 }
 
+fn io() -> (tokio::runtime::Handle, reqwest::Client) {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    (rt().clone(), reqwest::Client::new())
+}
+
 fn server() -> (String, String) {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let [host, user, pass] =
@@ -40,6 +45,7 @@ fn tracks(titles: &[&str], format: Option<&str>) -> Vec<Track> {
                 gain: 1.0,
                 transcoded: format.is_some(),
                 duration: s["duration"].as_f64().expect("duration") as f32,
+                cache: None,
             }
         })
         .collect()
@@ -57,14 +63,14 @@ fn near(got: f32, want: f32, tol: f32) {
 #[ignore = "needs the local test server"]
 fn gapless_across_sample_rates() {
     let t = tracks(&["One", "Two"], None);
-    near(secs(&render(rt(), t, RATE, 0.0, 0.0, 1.0).expect("render")), 5.0, 0.005);
+    near(secs(&render(io(), t, RATE, 0.0, 0.0, 1.0).expect("render")), 5.0, 0.005);
 }
 
 #[test]
 #[ignore = "needs the local test server"]
 fn seek_in_raw_stream() {
     let t = tracks(&["One"], None);
-    near(secs(&render(rt(), t, RATE, 1.0, 0.0, 1.0).expect("render")), 2.0, 0.005);
+    near(secs(&render(io(), t, RATE, 1.0, 0.0, 1.0).expect("render")), 2.0, 0.005);
 }
 
 #[test]
@@ -72,7 +78,7 @@ fn seek_in_raw_stream() {
 fn speed_changes_length() {
     for v in [0.5, 3.5] {
         let t = tracks(&["One"], None);
-        near(secs(&render(rt(), t, RATE, 0.0, 0.0, v).expect("render")), 3.0 / v, 0.01);
+        near(secs(&render(io(), t, RATE, 0.0, 0.0, v).expect("render")), 3.0 / v, 0.01);
     }
 }
 
@@ -80,21 +86,30 @@ fn speed_changes_length() {
 #[ignore = "needs the local test server"]
 fn crossfade_overlaps_tracks() {
     let t = tracks(&["One", "Two"], None);
-    near(secs(&render(rt(), t, RATE, 0.0, 1.0, 1.0).expect("render")), 4.0, 0.02);
+    near(secs(&render(io(), t, RATE, 0.0, 1.0, 1.0).expect("render")), 4.0, 0.02);
 }
 
 #[test]
 #[ignore = "needs the local test server"]
 fn mp3_and_opus_trim_padding() {
     let t = tracks(&["Three", "Four"], None);
-    near(secs(&render(rt(), t, RATE, 0.0, 0.0, 1.0).expect("render")), 5.0, 0.03);
+    near(secs(&render(io(), t, RATE, 0.0, 0.0, 1.0).expect("render")), 5.0, 0.03);
+}
+
+#[test]
+#[ignore = "needs the local test server"]
+fn seek_in_raw_mp3_and_opus() {
+    for (title, len) in [("Three", 3.0), ("Four", 2.0)] {
+        let t = tracks(&[title], None);
+        near(secs(&render(io(), t, RATE, 1.0, 0.0, 1.0).expect("render")), len - 1.0, 0.03);
+    }
 }
 
 #[test]
 #[ignore = "needs the local test server"]
 fn seek_in_transcoded_stream() {
     let t = tracks(&["One"], Some("mp3"));
-    near(secs(&render(rt(), t, RATE, 1.0, 0.0, 1.0).expect("render")), 2.0, 0.08);
+    near(secs(&render(io(), t, RATE, 1.0, 0.0, 1.0).expect("render")), 2.0, 0.08);
 }
 
 #[cfg(target_os = "linux")]
@@ -105,10 +120,9 @@ fn player_sends_events_on_null_device() {
     use std::time::{Duration, Instant};
     let t = tracks(&["One", "Two"], None);
     let conf = std::env::temp_dir().join("navify-null-asound.conf");
-    std::fs::write(&conf, "</usr/share/alsa/alsa.conf>\npcm.!default { type null }\n")
-        .expect("conf");
+    std::fs::write(&conf, "pcm.!default { type null }\n").expect("conf");
     unsafe { std::env::set_var("ALSA_CONFIG_PATH", &conf) };
-    let (p, mut rx) = Player::new(rt().clone());
+    let (p, mut rx) = Player::new(io().0, io().1);
     p.play(t[0].clone(), 0.0);
     p.queue_next(Some(t[1].clone()));
     let start = Instant::now();
@@ -126,11 +140,29 @@ fn player_sends_events_on_null_device() {
 
 #[test]
 #[ignore = "needs the local test server"]
+fn cache_file_replaces_stream() {
+    let dir = std::env::temp_dir().join(format!("navify-cache-{}", std::process::id()));
+    let file = dir.join("three.mp3");
+    let mut t = tracks(&["Three"], None);
+    t[0].cache = Some(file.clone());
+    let first = render(io(), t.clone(), RATE, 0.0, 0.0, 1.0).expect("render");
+    let start = std::time::Instant::now();
+    while !file.exists() && start.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read_dir(&dir).expect("cache dir").count(), 1, "no temp file is left");
+    t[0].url = "http://127.0.0.1:9/stream".into();
+    assert!(render(io(), t, RATE, 0.0, 0.0, 1.0).expect("render from cache") == first);
+    std::fs::remove_dir_all(dir).expect("remove cache dir");
+}
+
+#[test]
+#[ignore = "needs the local test server"]
 fn gain_scales_samples() {
     let t = tracks(&["One"], None);
     let peak = |g: f32| {
         let t = vec![Track { gain: g, ..t[0].clone() }];
-        render(rt(), t, RATE, 0.0, 0.0, 1.0)
+        render(io(), t, RATE, 0.0, 0.0, 1.0)
             .expect("render")
             .iter()
             .fold(0f32, |m, s| m.max(s.abs()))
