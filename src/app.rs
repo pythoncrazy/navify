@@ -70,7 +70,6 @@ pub enum MenuKind {
     Album(Box<Album>),
     Artist(Artist),
     Playlist(Playlist),
-    Speed,
     User,
 }
 
@@ -386,6 +385,8 @@ impl App {
                     (self.queue, self.index) = (songs.iter().take(20).cloned().collect(), 0);
                     self.source = "Liked Songs".into();
                     self.panel = if s == "queue" { 2 } else { 1 };
+                    let first = songs.first().map(|s| format!("lyrics:{}", s.id));
+                    task = Task::batch(first.map(|k| self.request(&k, 0)));
                 }
                 "menu" if !songs.is_empty() => {
                     CURSOR.store(
@@ -744,9 +745,9 @@ impl App {
     }
 
     fn listen(&mut self, on: bool) -> Task<Message> {
-        let (speed, enabled) = (self.cfg.settings.speed, self.cfg.settings.scrobble);
+        let enabled = self.cfg.settings.scrobble;
         let since = self.since.take();
-        self.heard += since.map_or(0.0, |t| t.elapsed().as_secs_f32() * speed);
+        self.heard += since.map_or(0.0, |t| t.elapsed().as_secs_f32());
         self.since = on.then(Instant::now);
         self.listen_seq += 1;
         let ok = |s: &&Song| enabled && !self.scrobbled && s.duration > 0.0;
@@ -763,7 +764,7 @@ impl App {
         let n = self.listen_seq;
         let heard =
             task(move |a| Task::batch((n == a.listen_seq).then(|| a.listen(a.since.is_some()))));
-        Task::batch(on.then(|| later(left / speed, heard)))
+        Task::batch(on.then(|| later(left, heard)))
     }
 
     fn restore(&self) -> Task<Message> {
@@ -929,7 +930,7 @@ impl App {
             let t = (s.transcode_format.clone(), s.transcode_max_bitrate);
             (s.replaygain.clone(), s.preamp_db, s.fallback_db, t)
         };
-        let heard = self.loaded && (o.speed, o.scrobble) != (n.speed, n.scrobble);
+        let heard = self.loaded && o.scrobble != n.scrobble;
         let (grid, zoom) = (o.disc_grid != n.disc_grid, o.zoom != n.zoom);
         if gain(&o) != gain(n)
             && let (Some(p), Some(s)) = (&self.player, self.current_song())
@@ -964,7 +965,6 @@ impl App {
         let t = self.handle(m);
         if let Some(p) = &self.player {
             p.set_volume(if self.muted { 0.0 } else { self.volume });
-            p.set_speed(self.cfg.settings.speed);
             p.set_crossfade(self.cfg.settings.crossfade_secs);
         }
         let id = self.current_song().map_or("", |s| s.id.as_str());
@@ -1166,7 +1166,7 @@ impl App {
                 return Task::batch([done, self.save_later()]);
             }
             Message::Menu(kind) => {
-                let (bits, speed) = (CURSOR.load(Relaxed), matches!(*kind, MenuKind::Speed));
+                let bits = CURSOR.load(Relaxed);
                 let x = f32::from_bits((bits >> 32) as u32);
                 let y = f32::from_bits(bits as u32);
                 self.menu = Some(Menu {
@@ -1175,11 +1175,6 @@ impl App {
                     kind: *kind,
                     sub: 0,
                 });
-                let row = (self.cfg.settings.speed * 10.0).round() - 5.0;
-                let y = (row * 40.0 - (crate::pages::SPEED_H - 88.0) / 2.0).max(0.0);
-                return Task::batch(
-                    speed.then(|| op::scroll_to("speed", AbsoluteOffset { x: 0.0, y })),
-                );
             }
             Message::MenuClose => {
                 if self.menu.is_none() && self.modal.is_none() {
@@ -1796,12 +1791,6 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
     };
     let vol = |d: f32| task(move |a| a.update(Message::Vol((a.volume + d).clamp(0.0, 1.0))));
     let seek = |d: f32| task(move |a| a.update(Message::Seek((a.pos() + d).max(0.0))));
-    let faster = |d: f32| {
-        task(move |a| {
-            let n = ((a.cfg.settings.speed * 10.0).round() + d).clamp(5.0, 35.0) / 10.0;
-            a.update(set(|s, v| s.speed = v, n))
-        })
-    };
     let like = |a: &mut App| {
         let s = a
             .current_song()
@@ -1835,8 +1824,6 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
         ((_, true, true), "q") => Message::Panel(2),
         ((_, true, true), "l") => Message::LibCollapse,
         ((_, true, true), "b") => task(like),
-        ((_, false, true), "<" | ",") => faster(-1.0),
-        ((_, false, true), ">" | ".") => faster(1.0),
         (_, "ArrowUp") => Message::Arrow(true),
         (_, "ArrowDown") => Message::Arrow(false),
         (_, "Enter") => Message::Enter,

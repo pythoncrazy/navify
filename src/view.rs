@@ -282,10 +282,13 @@ fn lib_panel(app: &App) -> El<'_> {
         let b = tip(b, "Expand Your Library", Right);
         container(b).center_x(Fill).into()
     } else {
-        let title = row![i(i::LIBRARY, 22.0), bold("Your Library", 16.0)].spacing(12);
-        let title = theme::link_btn(title.align_y(Center), SUB, Message::LibCollapse);
-        let plus = theme::sq(i(i::PLUS, 18.0).center(), 32.0).style(theme::round(CHIP));
-        let plus = plus.on_press(Message::NewPlaylist);
+        let title = bold("Your Library", 16.0);
+        let title = theme::link_btn(title, TEXT, Message::LibCollapse);
+        let plus = row![i(i::PLUS, 16.0), bold("Create", 14.0)].spacing(8);
+        let plus = button(container(plus.align_y(Center)).center_y(32)).padding([0, 16]);
+        let plus = plus
+            .style(theme::round(CHIP))
+            .on_press(Message::NewPlaylist);
         let plus = tip(plus, "Create playlist", Bottom);
         let title = tip(title, "Collapse Your Library", Bottom);
         let r = row![title, Space::new().width(Fill), plus];
@@ -350,7 +353,7 @@ fn player_bar(app: &App) -> El<'_> {
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 128, 56.0, false), Message::Panel(1));
         let lines = column![title, artists_line(&s.artists, 12.0, 200.0)].spacing(2);
-        let heart = side(theme::heart(on, 16.0), false, label, like);
+        let heart = side(theme::saved(on, 16.0), false, label, like);
         row![art, lines, heart].spacing(12).align_y(Center)
     });
     let dur = song.map_or(0.0, |s| s.duration).max(1.0);
@@ -396,12 +399,6 @@ fn player_bar(app: &App) -> El<'_> {
     let level = usize::from(vol > 0.0) + usize::from(vol >= 0.5);
     let vol_icon = ic([i::MUTE, i::VOL1, i::VOL2][level]);
     let lyrics = app.route == "lyrics";
-    let speed = app.cfg.settings.speed;
-    let speed_fg = if speed == 1.0 { SUB } else { ACCENT };
-    let speed = bold(format!("{speed}x"), 12.0).center();
-    let speed = button(speed).width(40).height(32);
-    let speed = speed.padding(0).style(theme::link(speed_fg));
-    let speed = speed.on_press(Message::Menu(Box::new(MenuKind::Speed)));
     let volume = slider(0.0..=1.0, vol, Message::Vol).step(0.01f32).width(93);
     let volume = mouse_area(volume.style(theme::seek)).on_scroll(move |d| {
         let step = match d {
@@ -418,7 +415,6 @@ fn player_bar(app: &App) -> El<'_> {
         side(ic(i::PR), app.panel == 1, "Now playing view", np),
         side(ic(i::LYRICS), lyrics, "Lyrics", words),
         side(ic(i::QUEUE), app.panel == 2, "Queue", Message::Panel(2)),
-        tip(speed, "Change speed", Top),
         side(vol_icon, false, mute, Message::Mute),
         volume,
     ];
@@ -504,8 +500,6 @@ pub fn view(app: &App) -> El<'_> {
         let (ww, wh) = app.view_size();
         let x = if m.x + w + 8.0 > ww { m.x - w } else { m.x };
         let y = if m.y + h + 8.0 > wh { m.y - h } else { m.y };
-        let speed = matches!(m.kind, MenuKind::Speed);
-        let (x, y) = [(x, y), (m.x - 20.0, wh - 64.0 - h)][usize::from(speed)];
         let (x, y) = (x.clamp(8.0, ww - w - 8.0), y.clamp(8.0, wh - h - 8.0));
         let at = padding::top(y).left(x);
         stack![scrim(theme::CLEAR), container(el).padding(at)]

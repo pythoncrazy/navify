@@ -67,10 +67,10 @@ pub fn filled<'a>(c: char, size: f32) -> Txt<'a> {
     text(c).font(Font::with_name("Phosphor-Fill")).size(size)
 }
 
-pub fn heart<'a>(on: bool, size: f32) -> Txt<'a> {
+pub fn saved<'a>(on: bool, size: f32) -> Txt<'a> {
     match on {
-        true => filled(fill::HEART, size).color(ACCENT),
-        false => icon(icon::HEART, size),
+        true => filled(fill::SAVED, size).color(ACCENT),
+        false => icon(icon::SAVE, size),
     }
 }
 
@@ -80,6 +80,7 @@ pub mod fill {
     pub const PREV: char = '\u{e5a4}';
     pub const NEXT: char = '\u{e5a6}';
     pub const HEART: char = '\u{e2a8}';
+    pub const SAVED: char = '\u{e184}';
     pub const HOME: char = '\u{e2c2}';
 }
 
@@ -87,7 +88,8 @@ pub mod icon {
     pub const SHUFFLE: char = '\u{e15e}';
     pub const REPEAT: char = '\u{e146}';
     pub const REPEAT1: char = '\u{e1fd}';
-    pub const HEART: char = '\u{e0f2}';
+    pub const SAVE: char = '\u{e081}';
+    pub const SAVED: char = '\u{e226}';
     pub const HOME: char = '\u{e0f5}';
     pub const SEARCH: char = '\u{e151}';
     pub const LIBRARY: char = '\u{e100}';

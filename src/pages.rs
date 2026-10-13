@@ -23,7 +23,6 @@ pub const ROW: f32 = 56.0;
 pub const GRID_Y: f32 = 136.0;
 pub const BAR: f32 = 84.0;
 pub const HEAD: f32 = 53.0;
-pub const SPEED_H: f32 = 436.0;
 const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
 const GREY: Color = color!(0x535353);
 const DOT: &str = " \u{2022} ";
@@ -87,7 +86,7 @@ fn play_over<'a>(app: &App, base: El<'a>, top: El<'a>, ctx: &str) -> El<'a> {
 }
 
 fn heart_btn<'a>(id: &str, on: bool, px: f32) -> El<'a> {
-    let b = theme::sq(theme::heart(on, px).center(), 32.0).style(theme::link(SUB));
+    let b = theme::sq(theme::saved(on, px).center(), 32.0).style(theme::link(SUB));
     b.on_press(Message::Star(vec![id.into()], !on)).into()
 }
 
@@ -569,7 +568,16 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
         blur_radius: 60.0,
         offset: iced::Vector::new(0.0, 4.0),
     };
-    let art = container(p.art).style(move |_| container::Style::default().shadow(shadow));
+    let r = if app.route.starts_with("artist:") {
+        px / 2.0
+    } else {
+        4.0
+    };
+    let art = container(p.art).style(move |_| {
+        container::Style::default()
+            .shadow(shadow)
+            .border(iced::Border::default().rounded(r))
+    });
     let title = ell(p.title, tw, size, Black).line_height(1.1);
     let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
     let info = column![kind, title, p.meta].spacing(8);
@@ -924,19 +932,12 @@ fn lyrics(app: &App) -> El<'_> {
         return s;
     }
     let bg = fill(head_color(app, &song.cover), 0.0);
-    let all = app.data::<Vec<Lyrics>>(&key);
-    let Some(l) = all.and_then(|v| v.iter().find(|l| !l.lines.is_empty())) else {
+    let Some((l, cur, synced)) = lyric_at(app, song) else {
         let t = bold("No lyrics are available for this song.", 24.0);
         let t = container(t).center_x(Fill).padding(80);
         return t.height(app.view_size().1 - 160.0).style(bg).into();
     };
-    let ms = (app.position * 1000.0) as i64;
-    let end = (song.duration * 1000.0) as i64;
     let at = |t: u64| t as i64 + l.offset;
-    let fits = l.lines.iter().filter_map(|x| x.0).all(|t| at(t) <= end);
-    let synced = l.synced && (end <= 0 || fits);
-    let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
-    let cur = l.lines.iter().rposition(past).unwrap_or(0);
     let lines = l.lines.iter().enumerate().map(|(n, (t, line))| -> El<'_> {
         let fg = match n {
             _ if !synced || n == cur => TEXT,
@@ -955,6 +956,28 @@ fn lyrics(app: &App) -> El<'_> {
     let col = Column::with_children(lines).spacing(16).max_width(900);
     let col = container(col).padding([48.0, PAD * 2.0]);
     col.width(Fill).style(bg).into()
+}
+
+fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, usize, bool)> {
+    let all = app.data::<Vec<Lyrics>>(&format!("lyrics:{}", song.id))?;
+    let l = all.iter().find(|l| !l.lines.is_empty())?;
+    let (ms, end) = (
+        (app.position * 1000.0) as i64,
+        (song.duration * 1000.0) as i64,
+    );
+    let at = |t: u64| t as i64 + l.offset;
+    let fits = l.lines.iter().filter_map(|x| x.0).all(|t| at(t) <= end);
+    let synced = l.synced && (end <= 0 || fits);
+    let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
+    Some((
+        l,
+        if synced {
+            l.lines.iter().rposition(past).unwrap_or(0)
+        } else {
+            0
+        },
+        synced,
+    ))
 }
 
 fn pick<'a, T: Clone + Send + Sync + 'static>(
@@ -1086,7 +1109,22 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let lines = column![title, artists_line(&s.artists, 16.0, w - 40.0)].spacing(4);
     let info = row![lines.width(Fill), heart_btn(&s.id, starred, 20.0)].align_y(Center);
     let about = card(column![bold("About the artist", 16.0), artist]);
-    let body = column![cover(app, &s.cover, 300, w, false), info, about].push(next);
+    let preview = lyric_at(app, s).map(|(l, cur, _)| {
+        let lines = l.lines[cur..].iter().take(3).zip([1.0, 1.0, 0.4]);
+        let lines =
+            lines.map(|((_, t), a)| ell(t, w - 32.0, 20.0, Bold).color(TEXT.scale_alpha(a)));
+        let body = column![bold("Lyrics preview", 16.0)].extend(lines.map(Into::into));
+        let body = container(body.spacing(8).padding(16).width(Fill));
+        let bg = head_color(app, &s.cover);
+        let b = button(body).padding(0).style(move |_, _| button::Style {
+            background: Some(bg.into()),
+            border: iced::Border::default().rounded(8),
+            ..Default::default()
+        });
+        b.on_press(Message::Nav("lyrics".into()))
+    });
+    let art = cover(app, &s.cover, 300, w, false);
+    let body = column![art, info].push(preview).push(about).push(next);
     let body = body.spacing(16).padding(Padding::new(16.0).top(0));
     let head = panel_head(app, &app.source, 1, None);
     column![head, scrollable(body).style(theme::scroll)].into()
@@ -1162,7 +1200,11 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let star = |id: &str, server: bool, yes: &str, no: &str| {
         let on = app.is_starred(id, server);
         let m = Message::Star(vec![id.into()], !on);
-        it(i::HEART, if on { yes } else { no }, m)
+        it(
+            [i::SAVE, i::SAVED][usize::from(on)],
+            if on { yes } else { no },
+            m,
+        )
     };
     let ctx = |kind: &str, id: &str| {
         let r = format!("{kind}:{id}");
@@ -1176,21 +1218,6 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let ids = |s: &[Song]| s.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
     let mut head: Option<El> = None;
     let list: Vec<Item> = match &m.kind {
-        MenuKind::Speed => {
-            let list = (5..=35u8).map(|n| {
-                let v = f32::from(n) / 10.0;
-                let on = app.cfg.settings.speed * 10.0 == f32::from(n);
-                let label = txt(format!("{v}x"), 14.0).width(Fill);
-                let label = label.color(if on { ACCENT } else { TEXT });
-                let check = on.then(|| i(i::CHECK, 16.0).color(ACCENT));
-                entry(row![label].push(check), set(|s, v| s.speed = v, v))
-            });
-            let head = bold("Playback speed", 12.0).color(SUB);
-            let list = scrollable(Column::with_children(list)).id("speed");
-            let head = container(head).padding([0, 12]).center_y(40);
-            let body = column![head, list.style(theme::scroll).height(Fill)];
-            return boxed(body.into(), 160.0, SPEED_H, 4);
-        }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if m.sub == 2 && v.len() == 1 => {
             let id = &v[0].id;
             let cur = app.ratings.get(id).copied().unwrap_or(v[0].user_rating);
@@ -1247,7 +1274,11 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 v.push(it(i::TRASH, "Remove from this playlist", rm));
             }
             let star = Message::Star(ids(songs), !on);
-            v.push(it(i::HEART, like[usize::from(on)], star));
+            v.push(it(
+                [i::SAVE, i::SAVED][usize::from(on)],
+                like[usize::from(on)],
+                star,
+            ));
             if let [s] = &songs[..] {
                 let radio = Message::Radio(s.id.clone());
                 let radio = it(i::RADIO, "Go to song radio", radio);

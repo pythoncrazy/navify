@@ -27,7 +27,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 - Credentials (Feishin-style): config file (0600) holds servers with url, username, subsonic salt+token, JWT. Optional "remember password" stores password in OS keyring for re-login when JWT expires; without it, fall back to Subsonic-only paths.
 - Caching (Feishin-style): in-memory query cache keyed by request with a stale time; in-flight request coalescing; optimistic local updates (star/rating/playlist edits) instead of refetching. Cover art: requested only in size buckets, cached forever on disk (server serves immutable covers) and in a bounded in-memory LRU of `image::Handle`s.
 - UI: never block `update`; all IO via `Task`. Virtualized long lists (render visible rows only). Bundled fonts: Figtree (text) + an icon font. No svg feature.
-- Playback: gapless, crossfade, ReplayGain (gain computed by app, applied by engine), speed, seek (range requests for raw streams, `timeOffset` for transcoded), optional transcode format/max bitrate, server play-queue sync, scrobble (`submission=false` on start, `true` after 50% or 4 min).
+- Playback: gapless, crossfade, ReplayGain (gain computed by app, applied by engine), seek (range requests for raw streams, `timeOffset` for transcoded), optional transcode format/max bitrate, server play-queue sync, scrobble (`submission=false` on start, `true` after 50% or 4 min).
 - OS: souvlaki (MPRIS/SMTC/macOS Now Playing). No Discord Rich Presence. Linux uses libdbus (no zbus) for both souvlaki and keyring.
 
 ## Resource budget (strict)
@@ -96,7 +96,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 
 ### Phase C: integration and release
 
-- Finish `crates/audio` (symphonia 0.6 + `opus-decoder` + cpal + rubato + stream-download): gapless, crossfade, seek, speed, volume, pause stops the stream. Use the shared tokio runtime of the app.
+- Finish `crates/audio` (symphonia 0.6 + `opus-decoder` + cpal + rubato + stream-download): gapless, crossfade, seek, volume, pause stops the stream. Use the shared tokio runtime of the app.
 - souvlaki for MPRIS, SMTC, and macOS Now Playing (libdbus on Linux; HWND on Windows).
 - Measure RSS and idle CPU with wgpu and with `ICED_BACKEND=tiny-skia`. Count network requests for cold start, album open, and album reopen (reopen must make 0 requests in the stale time).
 - Check that `prek run --all-files`, clippy, and tests pass on all three platforms. Then tag a release.

@@ -17,7 +17,7 @@
 
 ## Features
 
-- **Playback:** gapless playback, crossfade, ReplayGain (track or album), speed control, and fast seek.
+- **Playback:** gapless playback, crossfade, ReplayGain (track or album), and fast seek.
   Navify can ask the server to transcode to a different format or a lower bit rate.
 - **Library:** albums, artists, songs, playlists, genres, folders, and liked songs.
   Long lists load in pages of 100 as you scroll.
@@ -53,7 +53,6 @@ On macOS, use Cmd in place of Ctrl.
 | Alt+Shift+Q | Queue panel |
 | Alt+Shift+L | Collapse or expand the library |
 | Alt+Shift+B | Like the current song |
-| Shift+< , Shift+> | Slower or faster |
 | Ctrl+, | Settings |
 | Ctrl+W | Close the window (Navify stays in the tray when the tray is on) |
 | Ctrl+Q | Quit |

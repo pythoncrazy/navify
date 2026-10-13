@@ -42,21 +42,19 @@ fn setup(titles: &str, format: Option<&str>) -> ((Handle, reqwest::Client), Vec<
 #[test]
 #[ignore = "needs the local test server"]
 fn render_gives_exact_length_and_gain() {
-    for (titles, format, seek, fade, speed, want, tol) in [
-        ("One Two", None, 0.0, 0.0, 1.0, 5.0, 0.005),
-        ("Three Four", None, 0.0, 0.0, 1.0, 5.0, 0.03),
-        ("One Two", None, 0.0, 1.0, 1.0, 4.0, 0.02),
-        ("One", None, 1.0, 0.0, 1.0, 2.0, 0.005),
-        ("Three", None, 1.0, 0.0, 1.0, 2.0, 0.03),
-        ("Four", None, 1.0, 0.0, 1.0, 1.0, 0.03),
-        ("One", Some("mp3"), 1.0, 0.0, 1.0, 2.0, 0.08),
-        ("One", None, 0.0, 0.0, 0.5, 6.0, 0.01),
-        ("One", None, 0.0, 0.0, 3.5, 3.0 / 3.5, 0.01),
+    for (titles, format, seek, fade, want, tol) in [
+        ("One Two", None, 0.0, 0.0, 5.0, 0.005),
+        ("Three Four", None, 0.0, 0.0, 5.0, 0.03),
+        ("One Two", None, 0.0, 1.0, 4.0, 0.02),
+        ("One", None, 1.0, 0.0, 2.0, 0.005),
+        ("Three", None, 1.0, 0.0, 2.0, 0.03),
+        ("Four", None, 1.0, 0.0, 1.0, 0.03),
+        ("One", Some("mp3"), 1.0, 0.0, 2.0, 0.08),
     ] {
         let (io, t) = setup(titles, format);
-        let pcm = render(io, t, RATE, seek, fade, speed).expect("render");
+        let pcm = render(io, t, RATE, seek, fade).expect("render");
         let got = pcm.len() as f32 / 2.0 / RATE as f32;
-        let case = format!("{titles} {format:?} seek {seek} fade {fade} speed {speed}");
+        let case = format!("{titles} {format:?} seek {seek} fade {fade}");
         assert!(
             (got - want).abs() <= tol,
             "{case}: {got:.4} s, not {want:.4} s"
@@ -66,7 +64,7 @@ fn render_gives_exact_length_and_gain() {
     let peak = |gain| {
         let mut t = t.clone();
         t[0].gain = gain;
-        let pcm = render(io.clone(), t, RATE, 0.0, 0.0, 1.0).expect("render");
+        let pcm = render(io.clone(), t, RATE, 0.0, 0.0).expect("render");
         pcm.iter().fold(0f32, |m, s| m.max(s.abs()))
     };
     let ratio = peak(0.25) / peak(1.0);
@@ -78,7 +76,10 @@ fn render_gives_exact_length_and_gain() {
 #[ignore = "needs the local test server"]
 fn player_sends_events_on_null_device() {
     let alsa = std::env::var_os("ALSA_CONFIG_PATH");
-    assert!(alsa.is_some(), "set ALSA_CONFIG_PATH=crates/audio/tests/null.conf");
+    assert!(
+        alsa.is_some(),
+        "set ALSA_CONFIG_PATH=crates/audio/tests/null.conf"
+    );
     let ((rt, http), t) = setup("One Two", None);
     let (p, mut rx) = Player::new(rt.clone(), http);
     p.play(t[0].clone(), 0.0);

@@ -14,8 +14,8 @@ use reqwest::{Client, Response, Url};
 use rtrb::{Producer, RingBuffer};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
-    Adjustable, Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters,
-    SincInterpolationType, WindowFunction,
+    Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
 };
 use rusty_opus::OpusDecoder;
 use symphonia::core::codecs::audio::AudioCodecParameters;
@@ -79,7 +79,6 @@ pub fn devices() -> Result<Vec<(String, String)>, String> {
 #[derive(Default)]
 struct Shared {
     volume: AtomicU32,
-    speed: AtomicU32,
     crossfade: AtomicU32,
     pos: AtomicU32,
     paused: AtomicBool,
@@ -103,7 +102,6 @@ impl Player {
         let (etx, erx) = unbounded_channel();
         let sh = Arc::new(Shared::default());
         sh.volume.store(1f32.to_bits(), Relaxed);
-        sh.speed.store(1f32.to_bits(), Relaxed);
         let esh = sh.clone();
         let th = thread::spawn(move || engine(rx, etx, esh, (rt, http)));
         let th = th.thread().clone();
@@ -149,11 +147,6 @@ impl Player {
 
     pub fn set_volume(&self, v: f32) {
         self.sh.volume.store(v.clamp(0.0, 1.0).to_bits(), Relaxed);
-    }
-
-    pub fn set_speed(&self, s: f32) {
-        assert!((0.5..=3.5).contains(&s), "speed {s} is out of range");
-        self.sh.speed.store(s.to_bits(), Relaxed);
     }
 
     pub fn set_crossfade(&self, secs: f32) {
@@ -636,7 +629,6 @@ struct Source {
     dec: Decode,
     rs: Option<Async<f32>>,
     orate: u32,
-    rel: f64,
     tb: TimeBase,
     rate: f64,
     delay: f64,
@@ -774,7 +766,6 @@ impl Source {
                 net,
                 dec,
                 rs: None,
-                rel: 1.0,
                 tb,
                 rate: sr,
                 delay: pre as f64 / 48_000.0,
@@ -826,26 +817,17 @@ impl Source {
         (self.base + self.done as f64 / self.rate) as f32
     }
 
-    fn fill(&mut self, out: &mut [f32], rate: u32, rel: f64) -> Res<usize> {
+    fn fill(&mut self, out: &mut [f32], rate: u32) -> Res<usize> {
         if rate != self.orate {
             (self.orate, self.rs) = (rate, None);
         }
-        if let Some(r) = &mut self.rs
-            && rel != self.rel
-        {
-            r.set_resample_ratio_relative(rel, true)
-                .expect("speed is in range");
-        }
-        self.rel = rel;
-        if self.rel == 1.0 && self.orate as f64 == self.rate {
+        if self.orate as f64 == self.rate {
             self.rs = None;
         } else if self.rs.is_none() {
             let p = SincInterpolationParameters::new(128, WindowFunction::Blackman2)
                 .interpolation(SincInterpolationType::Linear);
             let ratio = self.orate as f64 / self.rate;
-            let mut rs = Async::new_sinc(ratio, 3.5, &p, CHUNK, 2, FixedAsync::Output)?;
-            rs.set_resample_ratio_relative(rel, false)
-                .expect("speed is in range");
+            let rs = Async::new_sinc(ratio, 1.0, &p, CHUNK, 2, FixedAsync::Output)?;
             (self.lead, self.owed) = (rs.output_delay(), 0.0);
             self.rs = Some(rs);
         }
@@ -950,8 +932,8 @@ impl Mixer {
         Ok(())
     }
 
-    fn step(&mut self, out: &mut [f32], speed: f32, cf: f32) -> Res<(usize, Option<Event>)> {
-        let (rel, rate) = (1.0 / speed as f64, self.rate);
+    fn step(&mut self, out: &mut [f32], cf: f32) -> Res<(usize, Option<Event>)> {
+        let rate = self.rate;
         let Some(cur) = &mut self.cur else {
             return Ok((0, None));
         };
@@ -962,17 +944,17 @@ impl Mixer {
             match self.pre.take().map(|p| p.1.join().expect("open thread")) {
                 Some(Ok(s)) => {
                     ev = Some(Event::Started(s.track.id.clone()));
-                    self.fade = (0, (rem.max(0.05) * rel * rate as f64) as usize);
+                    self.fade = (0, (rem.max(0.05) * rate as f64) as usize);
                     self.inc = Some(s);
                 }
                 e => ev = e.and_then(Result::err).map(Event::Error),
             }
         }
-        let n = cur.fill(out, rate, rel)?;
+        let n = cur.fill(out, rate)?;
         out[n * 2..].fill(0.0);
         if let Some(inc) = &mut self.inc {
             self.b.resize(out.len(), 0.0);
-            let m = inc.fill(&mut self.b, rate, rel)?;
+            let m = inc.fill(&mut self.b, rate)?;
             self.b[m * 2..].fill(0.0);
             let (pos, len) = self.fade;
             for (i, (o, b)) in out.chunks_mut(2).zip(self.b.chunks(2)).enumerate() {
@@ -991,7 +973,7 @@ impl Mixer {
         self.cur = None;
         match self.pre.take().map(|p| p.1.join().expect("open thread")) {
             Some(Ok(mut s)) => {
-                let m = s.fill(&mut out[n * 2..], rate, rel)?;
+                let m = s.fill(&mut out[n * 2..], rate)?;
                 let id = s.track.id.clone();
                 self.cur = Some(s);
                 Ok((n + m, Some(Event::Started(id))))
@@ -1003,14 +985,7 @@ impl Mixer {
 }
 
 #[doc(hidden)]
-pub fn render(
-    io: Io,
-    tracks: Vec<Track>,
-    rate: u32,
-    at: f32,
-    cf: f32,
-    speed: f32,
-) -> Res<Vec<f32>> {
+pub fn render(io: Io, tracks: Vec<Track>, rate: u32, at: f32, cf: f32) -> Res<Vec<f32>> {
     let (mut mix, mut it) = (
         Mixer {
             rate,
@@ -1025,7 +1000,7 @@ pub fn render(
         while mix.pre.as_ref().is_some_and(|p| !p.1.is_finished()) {
             thread::sleep(Duration::from_millis(1));
         }
-        let (n, ev) = mix.step(&mut buf, speed, cf)?;
+        let (n, ev) = mix.step(&mut buf, cf)?;
         match ev {
             Some(Event::Error(e)) => Err(e)?,
             Some(Event::Started(_)) => mix.queue(&io, it.next()),
@@ -1177,8 +1152,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         }
         if let Some((_, prod)) = &mut out {
             while !paused && mix.cur.is_some() && prod.slots() >= buf.len() {
-                let (speed, cf) = (get(&sh.speed), get(&sh.crossfade));
-                let (n, ev) = mix.step(&mut buf, speed, cf).unwrap_or_else(|e| {
+                let (n, ev) = mix.step(&mut buf, get(&sh.crossfade)).unwrap_or_else(|e| {
                     (mix.cur, mix.inc) = (None, None);
                     (0, Some(Event::Error(e.to_string())))
                 });
