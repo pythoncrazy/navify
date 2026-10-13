@@ -109,6 +109,8 @@ pub struct Album {
     pub explicit: bool,
     #[serde(alias = "isCompilation")]
     pub compilation: bool,
+    #[serde(rename = "releaseTypes")]
+    pub release_types: Vec<String>,
     #[serde(rename = "releaseDate", deserialize_with = "de_date")]
     pub release_date: String,
     #[serde(rename = "originalReleaseDate", alias = "originalDate", deserialize_with = "de_date")]
@@ -300,6 +302,16 @@ pub fn normalize(v: &mut Value) {
                         m.insert(dst.to_string(), g.clone());
                     }
                 }
+            }
+            if !m.contains_key("releaseTypes")
+                && let Some(t) =
+                    m.get("tags").and_then(|t| t.get("releasetype")).cloned().or_else(|| {
+                        m.get("mbzAlbumType").and_then(Value::as_str).map(|s| {
+                            s.split(['/', ';', ',']).map(|x| Value::from(x.trim())).collect()
+                        })
+                    })
+            {
+                m.insert("releaseTypes".to_string(), t);
             }
             if let Some(id) = m.get("mediaFileId").and_then(Value::as_str).map(str::to_string) {
                 m.insert("id".to_string(), Value::String(id));
@@ -709,6 +721,21 @@ impl Session {
             let v: Value = self.rest("getArtist", &[("id", id.to_string())], "/artist").await?;
             Ok((serde_json::from_value(v.clone())?, vlist(&v, "album")))
         }
+    }
+
+    pub async fn appears(&self, id: &str) -> Result<Vec<Album>> {
+        if !self.server.native {
+            return Ok(Vec::new());
+        }
+        let q = [
+            ("role_artist_id", id.to_string()),
+            ("_sort", "max_year".into()),
+            ("_order", "DESC".into()),
+        ];
+        let (v, _) = self.nd::<Vec<Album>>(Method::GET, "album", &q).await?;
+        Ok(v.into_iter()
+            .filter(|a| a.artist_id != id && a.album_artists.iter().all(|x| x.id != id))
+            .collect())
     }
 
     pub async fn top_songs(&self, id: &str) -> Result<Vec<Song>> {

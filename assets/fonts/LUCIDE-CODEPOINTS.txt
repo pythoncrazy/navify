@@ -58,3 +58,6 @@ image 0xe0f6
 fast-forward 0xe0bd
 rewind 0xe147
 list-checks 0xe1d0
+list 0xe106
+layout-grid 0xe0ff
+circle-plus 0xe081

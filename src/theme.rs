@@ -151,6 +151,11 @@ pub mod icon {
     pub const TRASH: char = '\u{e18e}';
     pub const PR: char = '\u{e431}';
     pub const SERVER: char = '\u{e153}';
+    pub const LIST: char = '\u{e106}';
+    pub const GRID: char = '\u{e0ff}';
+    pub const ADD: char = '\u{e081}';
+    pub const DOWN: char = '\u{e06d}';
+    pub const UP: char = '\u{e070}';
 }
 
 fn bg(color: impl Into<iced::Background>, radius: f32) -> container::Style {
