@@ -141,10 +141,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         }
     };
     let heart = (hot || starred).then(|| {
-        button(theme::heart(starred, 16.0).center())
-            .width(32)
-            .height(32)
-            .padding(0)
+        theme::sq(theme::heart(starred, 16.0).center(), 32.0)
             .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
             .on_press(Message::Star(vec![s.id.clone()], !starred))
     });
@@ -393,10 +390,7 @@ fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
                 .into()
         });
     let tool = |c: char, on: bool, m: Message| -> El<'a> {
-        button(i(c, 20.0).center())
-            .width(32)
-            .height(32)
-            .padding(0)
+        theme::sq(i(c, 20.0).center(), 32.0)
             .style(theme::link(if on { theme::TEXT } else { theme::SUB }))
             .on_press(m)
             .into()
@@ -493,10 +487,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
             Space::new().height(Fill),
             row![
                 play_btn(app, 40.0, &key, Message::PlayCtx(key.clone(), 0)),
-                button(theme::heart(on, 24.0).center())
-                    .width(32)
-                    .height(32)
-                    .padding(0)
+                theme::sq(theme::heart(on, 24.0).center(), 32.0)
                     .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
                     .on_press(Message::Star(vec![al.id.clone()], !on)),
                 bar_btn(icon::DOTS, Message::Menu(Box::new(MenuKind::Album(Box::new(al.clone()))))),
@@ -1982,10 +1973,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             let stars = Row::with_children((1..=5u8).map(|n| {
                 let m = Message::Rate(s.id.clone(), if n == cur { 0 } else { n });
                 focusable(
-                    button(i(icon::STAR, 20.0).center())
-                        .width(36)
-                        .height(36)
-                        .padding(0)
+                    theme::sq(i(icon::STAR, 20.0).center(), 36.0)
                         .style(theme::link(if n <= cur { theme::ACCENT } else { theme::SUB }))
                         .on_press(m.clone()),
                     Some(m),

@@ -248,10 +248,7 @@ fn top_bar<'a>(app: &'a App) -> Element<'a, Message> {
     use tooltip::Position::Bottom;
     let nav = |c: char, on: bool, label: &str, m: Message| {
         tip(
-            button(i(c, 22.0).center())
-                .width(32)
-                .height(32)
-                .padding(0)
+            theme::sq(i(c, 22.0).center(), 32.0)
                 .style(theme::link(if on { theme::SUB } else { theme::DIM }))
                 .on_press_maybe(on.then_some(m)),
             label,
@@ -396,10 +393,7 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
             ),
             Space::new().width(Fill),
             tip(
-                button(i(icon::PLUS, 18.0).center())
-                    .width(32)
-                    .height(32)
-                    .padding(0)
+                theme::sq(i(icon::PLUS, 18.0).center(), 32.0)
                     .style(theme::round(theme::CHIP))
                     .on_press(Message::NewPlaylist),
                 "Create playlist",
@@ -578,14 +572,12 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
         .align_y(Alignment::Center)
         .into(),
     };
-    let play = button(
+    let play = theme::sq(
         theme::filled(if app.playing { theme::fill::PAUSE } else { theme::fill::PLAY }, 16.0)
             .color(theme::BG)
             .center(),
+        32.0,
     )
-    .width(32)
-    .height(32)
-    .padding(0)
     .style(move |_, _| button::Style {
         background: Some(if song.is_some() { theme::TEXT } else { theme::DIM }.into()),
         border: iced::Border::default().rounded(500.0),

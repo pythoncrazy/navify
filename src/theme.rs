@@ -65,6 +65,13 @@ pub fn filled<'a>(c: char, size: f32) -> Txt<'a> {
     text(c).font(FILL).size(size)
 }
 
+pub fn sq<'a, M>(
+    c: impl Into<iced::Element<'a, M>>,
+    px: f32,
+) -> button::Button<'a, M, Theme, iced::Renderer> {
+    button(c).width(px).height(px).padding(0)
+}
+
 pub fn heart<'a>(on: bool, size: f32) -> Txt<'a> {
     if on { filled(fill::HEART, size) } else { icon(icon::HEART, size) }
 }

@@ -50,17 +50,20 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 - Tools: install all developer tools with `cargo install --locked` (not uv, pip, or system packages).
 - Linux build deps: `libasound2-dev libdbus-1-dev pkg-config` (Arch: `alsa-lib dbus pkgconf`).
 
-## Status (2026-10-12)
+## Status (2026-10-13)
 
 - `main`: project base, API client (`src/api.rs`), and configuration (`src/config.rs`). CI passes on Linux, macOS, and Windows.
 - `wip/ui`: the app compiles and runs. Clippy and tests pass on Linux.
   - `src/app.rs`, `src/pages.rs`, `src/view.rs`, `src/theme.rs`: the iced UI (Phase B done).
   - `crates/audio`: the playback engine. It uses the app runtime. It closes the device after 30 s of pause. `crates/audio/tests` test gapless, seek, crossfade, gain, and events on an ALSA null device.
-  - OS: souvlaki media controls.
+  - OS: souvlaki media controls. `src/tray.rs`: tray icon (Linux StatusNotifierItem and dbusmenu over `dbus-crossroads`; `tray-icon` on Windows and macOS). The app runs as an iced `daemon`. When the tray setting is on, close hides the window: Windows hides it (SMTC needs the HWND), other systems close it and open it again.
+  - Linux display: `main.rs` probes Wayland for `zxdg_decoration_manager_v1`. When the compositor draws no title bars (GNOME), Navify uses X11 to get the system title bar.
+  - Release: `[profile.release]` uses fat LTO and one codegen unit. `cargo packager --release` makes deb, AppImage, pacman, NSIS, and dmg (`[package.metadata.packager]`). `.github/workflows/release.yml` builds all targets on a `v*` tag and makes a draft release. The tag must match the Cargo version.
   - `examples/shots.rs`: renders screenshots of the routes with `iced_test`.
 - Do not enable the iced `tester` feature. It stops the boot tasks of the app.
 - Test the running app only on a virtual display: `env -u WAYLAND_DISPLAY dbus-run-session -- xvfb-run -a <command>`. Never open windows on the desktop of the user. wgpu fails on Xvfb (no DRI3), so use `ICED_BACKEND=tiny-skia` there.
 - Measurements (tiny-skia, Xvfb, home page loaded): RSS 62 MB, idle CPU 0 ticks in 30 s, 6 threads. Playback: about 1% CPU. Requests: cold start 12, album open 4 (2 data, 2 covers), album reopen 0 in the stale time (`tests/cache.rs`). The souvlaki D-Bus thread wakes one time each second (library limit).
+- Tray test (local scripts, not in git): `target/dev/tray-test.sh` with `target/dev/tray-host.py`, a fake StatusNotifierWatcher. Run it in headless mutter: `env -u WAYLAND_DISPLAY -u DISPLAY dbus-run-session -- mutter --headless --wayland --virtual-monitor 1280x800 --wayland-display navify-t -- bash target/dev/tray-test.sh`.
 - Local test server for tests that change data: `tests/` read `NAVIFY_TEST_LOCAL_URL` and related variables. A Navidrome release binary with generated test tracks works well (see Phase A tests). Never change data on the `.env` server; it is the real library of the user.
 
 ## Roadmap

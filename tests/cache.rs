@@ -15,14 +15,15 @@ fn album_reopen_in_stale_time_sends_no_request() {
     let mut app = App::new();
     app.session = Some(Session::new(server));
     let key = "album:a1".to_string();
+    let pend = format!("{key}#0");
     let _ = app.update(Message::Nav(key.clone()));
-    assert!(app.pending.contains(&key));
+    assert!(app.pending.contains(&pend));
     let data = Arc::new((Album { id: "a1".into(), ..Album::default() }, Vec::<Song>::new()));
     let _ = app.update(Message::Loaded(key.clone(), Ok(data)));
-    assert!(!app.pending.contains(&key));
+    assert!(!app.pending.contains(&pend));
     let _ = app.update(Message::Nav("home".into()));
     let _ = app.update(Message::Nav(key.clone()));
     assert_eq!(app.route, key);
-    assert!(!app.pending.contains(&key));
+    assert!(!app.pending.contains(&pend));
     let _ = std::fs::remove_dir_all(dir);
 }

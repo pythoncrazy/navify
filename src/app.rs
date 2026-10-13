@@ -700,18 +700,12 @@ impl App {
         }
     }
 
-    fn request(&mut self, key: &str) -> Task<Message> {
-        if self.cache.get(key).is_some_and(|(t, v)| t.elapsed() < STALE && !v.is::<String>()) {
+    fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
+        if offset == 0
+            && self.cache.get(key).is_some_and(|(t, v)| t.elapsed() < STALE && !v.is::<String>())
+        {
             return Task::none();
         }
-        let Some(s) = self.session.clone() else { return Task::none() };
-        if !self.pending.insert(key.to_string()) {
-            return Task::none();
-        }
-        fetch(s, key.to_string(), 0)
-    }
-
-    fn request_page(&mut self, key: &str, offset: usize) -> Task<Message> {
         let Some(s) = self.session.clone() else { return Task::none() };
         if !self.pending.insert(format!("{key}#{offset}")) {
             return Task::none();
@@ -830,7 +824,7 @@ impl App {
         (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
         self.queue_next_refresh();
         let Some(song) = self.current_song().cloned() else { return Task::none() };
-        let lyr = self.request(&format!("lyrics:{}", song.id));
+        let lyr = self.request(&format!("lyrics:{}", song.id), 0);
         let now = if self.cfg.settings.scrobble {
             self.send(
                 move |s| async move { s.scrobble(&song.id, false).await },
@@ -890,6 +884,11 @@ impl App {
             assert_eq!(o.len(), self.queue.len(), "the shuffle order covers the queue");
             o[i]
         })
+    }
+
+    fn covers_now(&mut self) -> Task<Message> {
+        let ids = self.visible_covers();
+        self.want_covers(ids)
     }
 
     fn want_covers(&mut self, ids: impl IntoIterator<Item = (String, u32)>) -> Task<Message> {
@@ -1072,9 +1071,8 @@ impl App {
             .filter(|_| !self.cfg.settings.disc_grid)
             .map(|a| format!("album:{}", a.id))
             .collect();
-        let ids = self.visible_covers();
-        let covers = self.want_covers(ids);
-        Task::batch(keys.iter().map(|k| self.request(k)).chain([covers]).collect::<Vec<_>>())
+        let covers = self.covers_now();
+        Task::batch(keys.iter().map(|k| self.request(k, 0)).chain([covers]).collect::<Vec<_>>())
     }
 
     fn show(&mut self) -> Task<Message> {
@@ -1091,10 +1089,9 @@ impl App {
             t.elapsed() < STALE || *k == key || k == "lib" || parts.contains(k)
         });
         self.seed(&key);
-        let mut tasks = vec![self.request(&key), self.request("lib")];
-        tasks.extend(parts.iter().map(|k| self.request(k)));
-        let ids = self.visible_covers();
-        tasks.push(self.want_covers(ids));
+        let mut tasks = vec![self.request(&key, 0), self.request("lib", 0)];
+        tasks.extend(parts.iter().map(|k| self.request(k, 0)));
+        tasks.push(self.covers_now());
         tasks.push(self.disc_load());
         let target = self.scrolls.get(&route).map(|(o, _)| *o).unwrap_or(0.0);
         tasks.push(iced::widget::operation::scroll_to(
@@ -1154,7 +1151,7 @@ impl App {
     fn handle(&mut self, m: Message) -> Task<Message> {
         match m {
             Message::Loaded(key, r) => {
-                self.pending.retain(|p| p != &key && !p.starts_with(&format!("{key}#")));
+                self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
                 let v = match r {
                     Ok(v) => v,
                     Err(e) => {
@@ -1205,7 +1202,7 @@ impl App {
                 if content > 0.0 && off + view * 3.0 >= content {
                     let key = self.route.clone();
                     if let Some(len) = self.page_len(&key) {
-                        t = self.request_page(&key, len);
+                        t = self.request(&key, len);
                     }
                 }
                 Task::batch([t, self.disc_load()])
@@ -1227,7 +1224,7 @@ impl App {
                 }
                 let q = self.search_q.trim().to_string();
                 let r = if q.is_empty() { "search".into() } else { format!("search:{q}") };
-                if r != self.route { self.nav(r) } else { self.request(&r) }
+                if r != self.route { self.nav(r) } else { self.request(&r, 0) }
             }
             Message::Play(songs, i, source) => {
                 self.queue = songs;
@@ -1533,8 +1530,7 @@ impl App {
             }
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
-                let ids = self.visible_covers();
-                self.want_covers(ids)
+                self.covers_now()
             }
             Message::LibFilter(n) => {
                 self.lib_filter = if self.lib_filter == n { 0 } else { n };
@@ -1542,8 +1538,7 @@ impl App {
             }
             Message::LibCollapse => {
                 self.lib_collapsed = !self.lib_collapsed;
-                let ids = self.visible_covers();
-                self.want_covers(ids)
+                self.covers_now()
             }
             Message::NewPlaylist => {
                 let n = self.data::<Lib>("lib").map_or(0, |l| l.playlists.len()) + 1;
@@ -1812,16 +1807,12 @@ impl App {
                 if n != self.save_seq || !self.cfg.settings.queue_sync {
                     return Task::none();
                 }
-                let Some(s) = self.session.clone() else { return Task::none() };
                 let ids: Vec<String> = self.queue.iter().map(|x| x.id.clone()).collect();
                 let cur = self.current_song().map(|x| x.id.clone()).unwrap_or_default();
                 let pos = (self.pos() * 1000.0) as u64;
-                Task::perform(
-                    async move { s.save_play_queue(&ids, &cur, pos).await },
-                    |r| match r {
-                        Ok(()) => Message::Noop,
-                        Err(e) => Message::Toast(0, format!("Could not save the play queue. {e}")),
-                    },
+                self.send(
+                    |s| async move { s.save_play_queue(&ids, &cur, pos).await },
+                    "Could not save the play queue.",
                 )
             }
             Message::PlayCtx(route, mode) => {
@@ -1936,7 +1927,7 @@ impl App {
             Message::Retry => {
                 let key = self.key_of(&self.route);
                 self.cache.remove(&key);
-                self.request(&key)
+                self.request(&key, 0)
             }
             Message::FocusSearch => iced::widget::operation::focus("search"),
             Message::FocusMove(back) => {
@@ -2007,8 +1998,7 @@ impl App {
                 self.cfg.settings.window = (w * s, h * s);
                 let h = self.view_size().1;
                 self.scrolls.values_mut().for_each(|s| s.1 = h - 136.0);
-                let ids = self.visible_covers();
-                self.want_covers(ids)
+                self.covers_now()
             }
             Message::Popular => {
                 self.popular_all = !self.popular_all;
@@ -2016,8 +2006,7 @@ impl App {
             }
             Message::DiscChip(n) => {
                 self.disc_chip = n;
-                let ids = self.visible_covers();
-                self.want_covers(ids)
+                self.covers_now()
             }
             Message::DiscOrder => {
                 self.disc_old = !self.disc_old;
