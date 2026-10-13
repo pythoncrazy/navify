@@ -886,7 +886,11 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     };
     let exact = r.artists.iter().find(|a| a.name.to_lowercase() == ql);
     let best = exact.map(art).or_else(|| r.albums.first().map(album));
-    let best = best.or_else(|| r.artists.first().map(art));
+    let best = best.or_else(|| r.artists.first().map(art)).or_else(|| {
+        let s = r.songs.first()?;
+        let sub = format!("Song{DOT}{}", s.artist);
+        Some((&s.cover, &s.title, sub, go("album", &s.album_id), false))
+    });
     let top = best.map(|(cid, name, s, to, round)| {
         let art = cover(app, cid, 300, 92.0, round);
         let body = column![art, ell(name, lw - 40.0, 32.0, Bold), sub(s, 14.0)];
