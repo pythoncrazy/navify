@@ -61,9 +61,7 @@ impl Default for Settings {
 
 impl Config {
     pub fn path() -> PathBuf {
-        dirs::config_dir()
-            .expect("The system has no configuration directory.")
-            .join("navify/config.json")
+        dirs::config_dir().expect("The system has no configuration directory.").join("navify/config.json")
     }
 
     pub fn load() -> Self {
@@ -73,9 +71,7 @@ impl Config {
             r => r
                 .map_err(anyhow::Error::from)
                 .and_then(|s| Ok(serde_json::from_str(&s)?))
-                .unwrap_or_else(|e| {
-                    panic!("Cannot read the configuration file {}: {e}", p.display())
-                }),
+                .unwrap_or_else(|e| panic!("Cannot read the configuration file {}: {e}", p.display())),
         }
     }
 
@@ -109,9 +105,7 @@ fn store() -> Result<()> {
                 let s = windows_native_keyring_store::Store::new();
                 #[cfg(all(unix, not(target_os = "macos")))]
                 let s = dbus_secret_service_keyring_store::Store::new();
-                keyring_core::set_default_store(
-                    s.context("No credential store on this platform.")?,
-                );
+                keyring_core::set_default_store(s.context("No credential store on this platform.")?);
                 Ok(())
             })()
             .map_err(|e| e.to_string())

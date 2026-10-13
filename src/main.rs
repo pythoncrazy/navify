@@ -37,12 +37,9 @@ impl
     > for Probe
 {
     fn event(
-        _: &mut Self,
-        _: &wayland_client::protocol::wl_registry::WlRegistry,
-        _: wayland_client::protocol::wl_registry::Event,
-        _: &wayland_client::globals::GlobalListContents,
-        _: &wayland_client::Connection,
-        _: &wayland_client::QueueHandle<Self>,
+        _: &mut Self, _: &wayland_client::protocol::wl_registry::WlRegistry,
+        _: wayland_client::protocol::wl_registry::Event, _: &wayland_client::globals::GlobalListContents,
+        _: &wayland_client::Connection, _: &wayland_client::QueueHandle<Self>,
     ) {
     }
 }
@@ -91,11 +88,7 @@ fn main() -> iced::Result {
         use wayland_client::{Connection, globals::registry_queue_init};
         let ssd = Connection::connect_to_env().ok().and_then(|c| {
             let (globals, _) = registry_queue_init::<Probe>(&c).ok()?;
-            Some(
-                globals
-                    .contents()
-                    .with_list(|l| l.iter().any(|g| g.interface == "zxdg_decoration_manager_v1")),
-            )
+            Some(globals.contents().with_list(|l| l.iter().any(|g| g.interface == "zxdg_decoration_manager_v1")))
         });
         if ssd.is_none() || (ssd == Some(false) && cfg.settings.system_frame) {
             unsafe { std::env::remove_var("WAYLAND_DISPLAY") };

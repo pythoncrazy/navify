@@ -62,24 +62,16 @@ pub fn filled<'a>(c: char, size: f32) -> Txt<'a> {
 }
 
 pub fn link_btn<'a, M: Clone + 'a>(
-    c: impl Into<iced::Element<'a, M>>,
-    color: Color,
-    m: M,
+    c: impl Into<iced::Element<'a, M>>, color: Color, m: M,
 ) -> button::Button<'a, M, Theme, iced::Renderer> {
     button(c).padding(0).style(link(color)).on_press(m)
 }
 
-pub fn pill_btn<'a, M: Clone + 'a>(
-    label: &'a str,
-    m: M,
-) -> button::Button<'a, M, Theme, iced::Renderer> {
+pub fn pill_btn<'a, M: Clone + 'a>(label: &'a str, m: M) -> button::Button<'a, M, Theme, iced::Renderer> {
     button(bold(label, 14.0)).style(pill).padding([7, 15]).on_press(m)
 }
 
-pub fn sq<'a, M>(
-    c: impl Into<iced::Element<'a, M>>,
-    px: f32,
-) -> button::Button<'a, M, Theme, iced::Renderer> {
+pub fn sq<'a, M>(c: impl Into<iced::Element<'a, M>>, px: f32) -> button::Button<'a, M, Theme, iced::Renderer> {
     button(c).width(px).height(px).padding(0)
 }
 
@@ -193,14 +185,7 @@ pub fn menu(_: &Theme) -> container::Style {
 }
 
 pub fn grad(top: Color, bottom: Color) -> impl Fn(&Theme) -> container::Style {
-    move |_| {
-        bg(
-            Gradient::Linear(
-                gradient::Linear::new(Radians::PI).add_stop(0.0, top).add_stop(1.0, bottom),
-            ),
-            0.0,
-        )
-    }
+    move |_| bg(Gradient::Linear(gradient::Linear::new(Radians::PI).add_stop(0.0, top).add_stop(1.0, bottom)), 0.0)
 }
 
 pub fn fade(top: Color, stop: f32) -> impl Fn(&Theme) -> container::Style {
@@ -237,31 +222,16 @@ pub fn color_of(s: &str) -> Color {
 
 pub fn diagonal(radius: f32) -> impl Fn(&Theme) -> container::Style {
     move |_| {
-        bg(
-            Gradient::Linear(
-                gradient::Linear::new(Radians(2.4)).add_stop(0.0, GRAD_A).add_stop(1.0, GRAD_B),
-            ),
-            radius,
-        )
+        bg(Gradient::Linear(gradient::Linear::new(Radians(2.4)).add_stop(0.0, GRAD_A).add_stop(1.0, GRAD_B)), radius)
     }
 }
 
-fn input(
-    s: text_input::Status,
-    bg: [Color; 2],
-    edge: [Color; 2],
-    width: [f32; 2],
-    radius: f32,
-) -> text_input::Style {
+fn input(s: text_input::Status, bg: [Color; 2], edge: [Color; 2], width: [f32; 2], radius: f32) -> text_input::Style {
     let focus = matches!(s, text_input::Status::Focused { .. });
     let hot = focus || matches!(s, text_input::Status::Hovered);
     text_input::Style {
         background: bg[hot as usize].into(),
-        border: Border {
-            color: edge[hot as usize],
-            width: width[focus as usize],
-            radius: radius.into(),
-        },
+        border: Border { color: edge[hot as usize], width: width[focus as usize], radius: radius.into() },
         icon: SUB,
         placeholder: SUB,
         value: TEXT,
@@ -402,11 +372,7 @@ pub fn seek(_: &Theme, s: slider::Status) -> slider::Style {
 }
 
 pub fn tog(_: &Theme, s: toggler::Status) -> toggler::Style {
-    let on = matches!(
-        s,
-        toggler::Status::Active { is_toggled: true }
-            | toggler::Status::Hovered { is_toggled: true }
-    );
+    let on = matches!(s, toggler::Status::Active { is_toggled: true } | toggler::Status::Hovered { is_toggled: true });
     toggler::Style {
         background: if on { ACCENT } else { FIELD }.into(),
         background_border_width: 0.0,

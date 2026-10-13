@@ -26,8 +26,7 @@ async fn live() -> Session {
 
 async fn local() -> Session {
     static S: tokio::sync::OnceCell<Session> = tokio::sync::OnceCell::const_new();
-    login(&S, ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"])
-        .await
+    login(&S, ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"]).await
 }
 
 #[test]
@@ -261,9 +260,7 @@ fn local_playlist_roundtrip() {
         assert_eq!(pl.song_count, 2);
         let (_pl2, tracks) = s.playlist(&pl.id).await.expect("playlist");
         assert_eq!(tracks.len(), 2);
-        s.playlist_update(&pl.id, Some("navify test 2"), None, &ids[2..3], &[0])
-            .await
-            .expect("update");
+        s.playlist_update(&pl.id, Some("navify test 2"), None, &ids[2..3], &[0]).await.expect("update");
         let (pl3, tracks) = s.playlist(&pl.id).await.expect("playlist 2");
         assert_eq!(pl3.name, "navify test 2");
         assert_eq!(tracks.len(), 2);
@@ -295,8 +292,7 @@ fn local_subsonic_read_suite() {
         let mut s = local().await;
         for native in [true, false] {
             s.server.native = native;
-            for k in ["recent", "newest", "frequent", "random", "name", "artist", "year", "rating"]
-            {
+            for k in ["recent", "newest", "frequent", "random", "name", "artist", "year", "rating"] {
                 s.albums(k, &[], 0, 5).await.unwrap_or_else(|e| panic!("albums {k} {native}: {e}"));
             }
             for k in ["name", "artist", "album", "newest", "recent", "frequent", "year", "rating"] {

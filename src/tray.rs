@@ -87,11 +87,9 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
             move |_, _, _: (i32, i32, Vec<String>)| {
                 let kids = (1..=items().len())
                     .map(|i| {
-                        Variant(Box::new((
-                            i as i32,
-                            props(i),
-                            Vec::<Variant<Box<dyn RefArg>>>::new(),
-                        )) as Box<dyn RefArg>)
+                        Variant(
+                            Box::new((i as i32, props(i), Vec::<Variant<Box<dyn RefArg>>>::new())) as Box<dyn RefArg>
+                        )
                     })
                     .collect();
                 Ok((1u32, (0, props(0), kids) as Node))
@@ -112,33 +110,24 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
         let s = s2.clone();
         let click = move |id: i32, ev: &str| {
             if ev == "clicked"
-                && let Some((_, m)) =
-                    usize::try_from(id - 1).ok().and_then(|i| items().into_iter().nth(i))
+                && let Some((_, m)) = usize::try_from(id - 1).ok().and_then(|i| items().into_iter().nth(i))
             {
                 s(m);
             }
         };
         let k = click.clone();
-        b.method(
-            "Event",
-            ("id", "eventId", "data", "timestamp"),
-            (),
-            move |_, _, (id, ev, _, _): Ev| {
-                k(id, &ev);
-                Ok(())
-            },
-        );
+        b.method("Event", ("id", "eventId", "data", "timestamp"), (), move |_, _, (id, ev, _, _): Ev| {
+            k(id, &ev);
+            Ok(())
+        });
         b.method("EventGroup", ("events",), ("idErrors",), move |_, _, (evs,): (Vec<Ev>,)| {
             evs.iter().for_each(|(id, ev, _, _)| click(*id, ev));
             Ok((Vec::<i32>::new(),))
         });
         b.method("AboutToShow", ("id",), ("needUpdate",), |_, _, _: (i32,)| Ok((false,)));
-        b.method(
-            "AboutToShowGroup",
-            ("ids",),
-            ("updatesNeeded", "idErrors"),
-            |_, _, _: (Vec<i32>,)| Ok((Vec::<i32>::new(), Vec::<i32>::new())),
-        );
+        b.method("AboutToShowGroup", ("ids",), ("updatesNeeded", "idErrors"), |_, _, _: (Vec<i32>,)| {
+            Ok((Vec::<i32>::new(), Vec::<i32>::new()))
+        });
     });
     cr.insert("/StatusNotifierItem", &[sni], ());
     cr.insert("/Menu", &[menu], ());
@@ -154,10 +143,7 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
     std::thread::Builder::new()
         .name("tray".into())
         .spawn(move || {
-            c.start_receive(
-                MatchRule::new_method_call(),
-                Box::new(move |m, c| cr.handle_message(m, c).is_ok()),
-            );
+            c.start_receive(MatchRule::new_method_call(), Box::new(move |m, c| cr.handle_message(m, c).is_ok()));
             while c.process(Duration::from_millis(i32::MAX as u64)).is_ok() {}
         })
         .map_err(|e| e.to_string())?;
@@ -185,12 +171,7 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
         }
     }));
     TrayIconEvent::set_event_handler(Some(move |e| {
-        if let TrayIconEvent::Click {
-            button: MouseButton::Left,
-            button_state: MouseButtonState::Up,
-            ..
-        } = e
-        {
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
             drop(tx.send(Message::Window(true)));
         }
     }));

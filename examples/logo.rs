@@ -7,10 +7,7 @@ const SPAN: f32 = 0.54 / 19.0;
 const JOIN: f32 = 0.05;
 
 fn arrow(s: f32) -> Vec<(f32, f32)> {
-    ARROW
-        .iter()
-        .map(|(x, y)| (s / 2.0 + (x - CENTER.0) * SPAN * s, s / 2.0 + (y - CENTER.1) * SPAN * s))
-        .collect()
+    ARROW.iter().map(|(x, y)| (s / 2.0 + (x - CENTER.0) * SPAN * s, s / 2.0 + (y - CENTER.1) * SPAN * s)).collect()
 }
 
 fn render(s: u32) -> Vec<u8> {
@@ -18,8 +15,7 @@ fn render(s: u32) -> Vec<u8> {
     let mut pm = Pixmap::new(s, s).expect("the size is not zero");
     let mut paint = Paint { anti_alias: true, ..Paint::default() };
     paint.set_color(Color::from_rgba8(0x1e, 0xd7, 0x60, 0xff));
-    let circle =
-        PathBuilder::from_circle(f / 2.0, f / 2.0, f / 2.0).expect("the radius is positive");
+    let circle = PathBuilder::from_circle(f / 2.0, f / 2.0, f / 2.0).expect("the radius is positive");
     pm.fill_path(&circle, &paint, FillRule::Winding, Transform::identity(), None);
     let mut pb = PathBuilder::new();
     let pts = arrow(f);
@@ -31,12 +27,8 @@ fn render(s: u32) -> Vec<u8> {
     pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
     let stroke = Stroke { width: JOIN * f, line_join: LineJoin::Round, ..Stroke::default() };
     pm.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-    let rgba: Vec<u8> = pm
-        .pixels()
-        .iter()
-        .map(|p| p.demultiply())
-        .flat_map(|c| [c.red(), c.green(), c.blue(), c.alpha()])
-        .collect();
+    let rgba: Vec<u8> =
+        pm.pixels().iter().map(|p| p.demultiply()).flat_map(|c| [c.red(), c.green(), c.blue(), c.alpha()]).collect();
     let mut png = Vec::new();
     image::codecs::png::PngEncoder::new(&mut png)
         .write_image(&rgba, s, s, image::ExtendedColorType::Rgba8)
@@ -69,8 +61,7 @@ fn main() -> std::io::Result<()> {
             ico.push((s, png));
         }
     }
-    let mut out =
-        [0u16, 1, ico.len() as u16].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    let mut out = [0u16, 1, ico.len() as u16].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
     let mut off = 6 + 16 * ico.len() as u32;
     for (s, png) in &ico {
         let b = (*s % 256) as u8;

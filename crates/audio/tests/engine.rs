@@ -15,23 +15,20 @@ fn io() -> (tokio::runtime::Handle, reqwest::Client) {
 
 fn server() -> (String, String) {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let [host, user, pass] =
-        ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"]
-            .map(|k| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set")));
+    let [host, user, pass] = ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"]
+        .map(|k| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set")));
     let salt = "navifytest";
-    let token: String =
-        Md5::digest(format!("{pass}{salt}")).iter().map(|b| format!("{b:02x}")).collect();
+    let token: String = Md5::digest(format!("{pass}{salt}")).iter().map(|b| format!("{b:02x}")).collect();
     (host, format!("u={user}&t={token}&s={salt}&v=1.16.1&c=navify-test&f=json"))
 }
 
 fn tracks(titles: &[&str], format: Option<&str>) -> Vec<Track> {
     let (host, auth) = server();
-    let v: serde_json::Value = reqwest::blocking::get(format!(
-        "{host}/rest/search3?{auth}&query=&songCount=100&albumCount=0&artistCount=0"
-    ))
-    .expect("search")
-    .json()
-    .expect("json");
+    let v: serde_json::Value =
+        reqwest::blocking::get(format!("{host}/rest/search3?{auth}&query=&songCount=100&albumCount=0&artistCount=0"))
+            .expect("search")
+            .json()
+            .expect("json");
     let songs = v["subsonic-response"]["searchResult3"]["song"].as_array().expect("songs").clone();
     titles
         .iter()
@@ -127,8 +124,7 @@ fn player_sends_events_on_null_device() {
     let start = Instant::now();
     let mut got = Vec::new();
     while got.last() != Some(&Event::Ended) && start.elapsed() < Duration::from_secs(20) {
-        match rt().block_on(async { tokio::time::timeout(Duration::from_secs(1), rx.recv()).await })
-        {
+        match rt().block_on(async { tokio::time::timeout(Duration::from_secs(1), rx.recv()).await }) {
             Ok(Some(e)) => got.push(e),
             Ok(None) => break,
             Err(_) => {}
@@ -143,10 +139,7 @@ fn gain_scales_samples() {
     let t = tracks(&["One"], None);
     let peak = |g: f32| {
         let t = vec![Track { gain: g, ..t[0].clone() }];
-        render(io(), t, RATE, 0.0, 0.0, 1.0)
-            .expect("render")
-            .iter()
-            .fold(0f32, |m, s| m.max(s.abs()))
+        render(io(), t, RATE, 0.0, 0.0, 1.0).expect("render").iter().fold(0f32, |m, s| m.max(s.abs()))
     };
     near(peak(0.25) / peak(1.0), 0.25, 0.001);
 }
