@@ -137,7 +137,21 @@ proc-macro2.opt-level = 0
 navify-audio.opt-level = 3
 
 [profile.release]
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[profile.release.package]
+navify-audio.opt-level = 3
+rubato.opt-level = 3
+rusty-opus.opt-level = 3
+symphonia-bundle-flac.opt-level = 3
+symphonia-bundle-mp3.opt-level = 3
+symphonia-codec-aac.opt-level = 3
+symphonia-codec-alac.opt-level = 3
+symphonia-codec-vorbis.opt-level = 3
+symphonia-core.opt-level = 3
+tiny-skia.opt-level = 3
+tiny-skia-path.opt-level = 3
