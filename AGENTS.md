@@ -45,7 +45,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings` · Format: `cargo fmt --all`
 - Logo: `cargo run --example logo` writes `assets/navify.svg`, `assets/navify.ico`, and `assets/icons/hicolor`. On Linux, `navify --install` writes the desktop entry and icons to the user data directory.
 - Hooks: install prek with `cargo install --locked prek`. Make sure `~/.cargo/bin` is on PATH. Then run `prek install` and `prek run --all-files`.
-- Server tests are `#[ignore]`. Run them with `cargo test --workspace -- --include-ignored`. Live tests read `.env` (`NAVIDROME_HOST`, `NAVIDROME_USERNAME`, `NAVIDROME_PASSWORD`). Local tests read `NAVIFY_TEST_LOCAL_URL`, `NAVIFY_TEST_LOCAL_USERNAME`, and `NAVIFY_TEST_LOCAL_PASSWORD`. A missing value makes the test fail. Never print or commit credentials.
+- Server tests are `#[ignore]`. Run them with `cargo test --workspace -- --include-ignored`. Live tests read `.env` (`NAVIDROME_HOST`, `NAVIDROME_USERNAME`, `NAVIDROME_PASSWORD`). Local tests read `NAVIFY_TEST_LOCAL_URL`, `NAVIFY_TEST_LOCAL_USERNAME`, and `NAVIFY_TEST_LOCAL_PASSWORD`. The audio player test also needs `ALSA_CONFIG_PATH=crates/audio/tests/null.conf`. A missing value makes the test fail. Never print or commit credentials.
 - Dependencies: only versions published ≥7 days ago.
 - Tools: install all developer tools with `cargo install --locked` (not uv, pip, or system packages).
 - Linux build deps: `libasound2-dev libdbus-1-dev pkg-config` (Arch: `alsa-lib dbus pkgconf`).

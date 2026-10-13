@@ -78,7 +78,7 @@ fn render_gives_exact_length_and_gain() {
 #[ignore = "needs the local test server"]
 fn player_sends_events_on_null_device() {
     let alsa = std::env::var_os("ALSA_CONFIG_PATH");
-    assert!(alsa.is_some(), "ALSA_CONFIG_PATH is not set");
+    assert!(alsa.is_some(), "set ALSA_CONFIG_PATH=crates/audio/tests/null.conf");
     let ((rt, http), t) = setup("One Two", None);
     let (p, mut rx) = Player::new(rt.clone(), http);
     p.play(t[0].clone(), 0.0);
