@@ -6,44 +6,36 @@ use navify::app::{App, Message};
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use wayland_client::protocol::wl_registry::{Event, WlRegistry};
-    use wayland_client::{Connection, Dispatch, QueueHandle, globals::GlobalListContents};
+    use wayland_client::globals::{Global, GlobalListContents as G};
+    use wayland_client::protocol::wl_registry::{Event as E, WlRegistry as R};
+    use wayland_client::{Connection as C, Dispatch, QueueHandle as Q};
 
     pub struct Probe;
 
-    impl Dispatch<WlRegistry, GlobalListContents> for Probe {
-        fn event(
-            _: &mut Self,
-            _: &WlRegistry,
-            _: Event,
-            _: &GlobalListContents,
-            _: &Connection,
-            _: &QueueHandle<Self>,
-        ) {
-        }
+    impl Dispatch<R, G> for Probe {
+        fn event(_: &mut Self, _: &R, _: E, _: &G, _: &C, _: &Q<Self>) {}
     }
 
-    pub fn decorations() -> Option<bool> {
-        let c = Connection::connect_to_env().ok()?;
-        let (globals, _) = wayland_client::globals::registry_queue_init::<Probe>(&c).ok()?;
-        let has = |l: &[_]| {
-            l.iter().any(|g: &wayland_client::globals::Global| {
-                g.interface == "zxdg_decoration_manager_v1"
-            })
+    pub fn x11() -> bool {
+        let set = ["DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET"].map(std::env::var_os);
+        let ssd = || {
+            let c = C::connect_to_env().ok()?;
+            let (globals, _) = wayland_client::globals::registry_queue_init::<Probe>(&c).ok()?;
+            let has = |l: &[Global]| l.iter().any(|g| g.interface.starts_with("zxdg_decoration"));
+            Some(globals.contents().with_list(has))
         };
-        Some(globals.contents().with_list(has))
+        let frame = || navify::config::Config::load().settings.system_frame;
+        set.map(|v| v.is_some()) == [true, true, false] && ssd().is_none_or(|s| !s && frame())
     }
 
     pub fn install() -> std::io::Result<()> {
         let data = dirs::data_dir().ok_or(std::io::ErrorKind::NotFound)?;
         let exe = format!("Exec=\"{}\"", std::env::current_exe()?.display());
         let desktop = include_str!("../assets/navify.desktop").replace("Exec=navify", &exe);
+        let svg = include_bytes!("../assets/navify.svg");
         for (path, bytes) in [
             ("icons/hicolor/256x256/apps/navify.png", navify::app::ICON),
-            (
-                "icons/hicolor/scalable/apps/navify.svg",
-                include_bytes!("../assets/navify.svg"),
-            ),
+            ("icons/hicolor/scalable/apps/navify.svg", &svg[..]),
             ("applications/navify.desktop", desktop.as_bytes()),
         ] {
             let path = data.join(path);
@@ -62,25 +54,13 @@ fn view(app: &App, _: iced::window::Id) -> iced::Element<'_, Message> {
 fn main() -> iced::Result {
     #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some("--install") {
-        if let Err(e) = linux::install() {
-            eprintln!("Cannot install the desktop entry: {e}");
-            std::process::exit(1);
-        }
-        return Ok(());
+        let r = linux::install().map_err(|e| eprintln!("Cannot install the desktop entry: {e}"));
+        std::process::exit(r.is_err() as i32);
     }
     unsafe { std::env::set_var("TOKIO_WORKER_THREADS", "2") };
     #[cfg(target_os = "linux")]
-    if ["DISPLAY", "WAYLAND_DISPLAY"]
-        .iter()
-        .all(|v| std::env::var_os(v).is_some())
-        && std::env::var_os("WAYLAND_SOCKET").is_none()
-    {
-        let ssd = linux::decorations();
-        if ssd.is_none()
-            || (ssd == Some(false) && navify::config::Config::load().settings.system_frame)
-        {
-            unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
-        }
+    if linux::x11() {
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
     }
     let fonts: [&[u8]; 6] = [
         include_bytes!("../assets/fonts/Figtree-Regular.ttf"),
