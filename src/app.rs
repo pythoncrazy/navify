@@ -110,7 +110,6 @@ pub enum Message {
     QDel(usize),
     QClear,
     Menu(Box<MenuKind>),
-    MenuSub(u8),
     MenuClose,
     PlAdd(String, Vec<String>),
     PlNew(String, Vec<String>),
@@ -119,7 +118,6 @@ pub enum Message {
     Radio(String),
     Toast(u64, String),
     Panel(u8),
-    LibFilter(u8),
     LibCollapse,
     Drag(Option<u8>),
     DragTo(f32),
@@ -165,7 +163,6 @@ pub enum Message {
     Like,
     VolDown,
     Resize(f32, f32),
-    SeekPreview(f32),
     SeekRelease,
     Audio(navify_audio::Event),
     Media(souvlaki::MediaControlEvent),
@@ -1470,12 +1467,6 @@ impl App {
                 let y = (row * 40.0 - (crate::pages::SPEED_H - 88.0) / 2.0).max(0.0);
                 op::scroll_to("speed", AbsoluteOffset { x: 0.0, y })
             }
-            Message::MenuSub(n) => {
-                if let Some(m) = &mut self.menu {
-                    m.sub = n;
-                }
-                Task::none()
-            }
             Message::MenuClose => {
                 if self.menu.is_none() && self.modal.is_none() {
                     (self.sel, self.picked) = (None, BTreeSet::new());
@@ -1592,10 +1583,6 @@ impl App {
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
                 self.covers_now()
-            }
-            Message::LibFilter(n) => {
-                self.lib_filter = if self.lib_filter == n { 0 } else { n };
-                Task::none()
             }
             Message::Drag(d) => {
                 self.drag = d;
@@ -2088,10 +2075,6 @@ impl App {
             Message::DiscOrder => {
                 self.disc_old = !self.disc_old;
                 self.disc_load()
-            }
-            Message::SeekPreview(v) => {
-                self.seek_preview = Some(v);
-                Task::none()
             }
             Message::SeekRelease => self
                 .seek_preview
