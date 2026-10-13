@@ -107,8 +107,7 @@ pub enum Message {
     Mute,
     Star(Vec<String>, bool),
     Rate(String, u8),
-    QNext(Vec<Song>),
-    QEnd(Vec<Song>),
+    Queue(Vec<Song>, bool),
     QDel(usize),
     QClear,
     Menu(Box<MenuKind>),
@@ -1356,15 +1355,22 @@ impl App {
                 self.menu = None;
                 self.send(|s| async move { s.rate(&id, n).await }, "Could not set the rating.")
             }
-            Message::QNext(songs) => {
-                let at = (self.index + 1).min(self.queue.len());
-                self.insert_queue(songs, at);
-                self.queue_next_refresh();
-                Task::batch([self.debounce_save_queue(), self.toast("Added to queue")])
-            }
-            Message::QEnd(songs) => {
-                let at = self.queue.len();
-                self.insert_queue(songs, at);
+            Message::Queue(songs, next) => {
+                let (n, at) = (songs.len(), if next { self.index + 1 } else { usize::MAX });
+                if let Some(o) = &mut self.shuffle {
+                    let base = self.queue.len();
+                    self.queue.extend(songs);
+                    let mut extra: Vec<usize> = (base..base + n).collect();
+                    shuffle(&mut extra, usize::MAX);
+                    let at = at.min(o.len());
+                    o.splice(at..at, extra);
+                } else {
+                    let at = at.min(self.queue.len());
+                    if at <= self.index && !self.queue.is_empty() {
+                        self.index += n;
+                    }
+                    self.queue.splice(at..at, songs);
+                }
                 self.queue_next_refresh();
                 Task::batch([self.debounce_save_queue(), self.toast("Added to queue")])
             }
@@ -1855,7 +1861,7 @@ impl App {
                     },
                 )
             }
-            Message::PlayCtxDone(songs, _, 2) => self.update(Message::QEnd(songs)),
+            Message::PlayCtxDone(songs, _, 2) => self.update(Message::Queue(songs, false)),
             Message::PlayCtxDone(songs, src, mode) => {
                 self.queue = songs;
                 self.source = src;
@@ -2117,29 +2123,6 @@ impl App {
             },
         }
     }
-
-    fn insert_queue(&mut self, songs: Vec<Song>, at: usize) {
-        let n = songs.len();
-        if let Some(o) = &mut self.shuffle {
-            let base = self.queue.len();
-            self.queue.extend(songs);
-            let mut extra: Vec<usize> = (base..base + n).collect();
-            shuffle(&mut extra, usize::MAX);
-            let pos = at.min(o.len());
-            for (k, x) in extra.into_iter().enumerate() {
-                o.insert(pos + k, x);
-            }
-        } else {
-            let at = at.min(self.queue.len());
-            if at <= self.index && !self.queue.is_empty() {
-                self.index += n;
-            }
-            for (k, s) in songs.into_iter().enumerate() {
-                self.queue.insert(at + k, s);
-            }
-        }
-    }
-
     fn queue_next_refresh(&self) {
         if let Some(p) = &self.player {
             let n = if self.repeat == 2 { Some(self.index) } else { self.next_index() };

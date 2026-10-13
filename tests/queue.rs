@@ -27,7 +27,7 @@ fn shuffle_keeps_the_current_song() {
     assert_eq!(cur(&app), "d");
     let _ = app.update(Message::Play(songs(&ids), 2, "t".into()));
     assert_eq!(cur(&app), "c");
-    let _ = app.update(Message::QEnd(songs(&["z"])));
+    let _ = app.update(Message::Queue(songs(&["z"]), false));
     let order = app.shuffle.clone().expect("shuffle is on");
     assert_eq!(app.queue[*order.last().expect("order")].id, "z");
     let _ = app.update(Message::PlayQueue(2));

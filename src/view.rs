@@ -17,12 +17,7 @@ pub fn btn<'a>(c: impl Into<Element<'a, Message>>, msg: Message) -> button::Butt
 }
 
 pub fn icon_btn<'a>(c: char, size: f32, msg: Message) -> button::Button<'a, Message> {
-    button(i(c, size).center())
-        .on_press(msg)
-        .padding(0)
-        .width(size * 2.0)
-        .height(size * 2.0)
-        .style(theme::link(theme::SUB))
+    theme::sq(i(c, size).center(), size * 2.0).on_press(msg).style(theme::link(theme::SUB))
 }
 
 pub fn focusable<'a>(
@@ -497,13 +492,11 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
     let side = |t: theme::Txt<'a>, on: bool, label: &str, m: Message| -> Element<'a, Message> {
         let dot = container(Space::new()).width(4).height(4).style(theme::fill(theme::ACCENT, 2.0));
         tip(
-            button(
+            theme::sq(
                 stack![container(t).center(Fill)]
                     .push(on.then(|| container(dot).center_x(Fill).align_bottom(Fill))),
+                32.0,
             )
-            .width(32)
-            .height(32)
-            .padding(0)
             .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
             .on_press(m),
             label,

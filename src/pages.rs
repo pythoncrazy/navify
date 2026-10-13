@@ -43,17 +43,11 @@ fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
 
 fn play_btn<'a>(app: &App, px: f32, ctx: &str, m: Message) -> El<'a> {
     let on = app.ctx == ctx && app.current_song().is_some();
-    button(
-        theme::filled(if on && app.playing { fill::PAUSE } else { fill::PLAY }, px * 0.4)
-            .color(theme::BG)
-            .center(),
-    )
-    .width(px)
-    .height(px)
-    .padding(0)
-    .style(theme::accent)
-    .on_press(if on { Message::Toggle } else { m })
-    .into()
+    let c = theme::filled(if on && app.playing { fill::PAUSE } else { fill::PLAY }, px * 0.4);
+    theme::sq(c.color(theme::BG).center(), px)
+        .style(theme::accent)
+        .on_press(if on { Message::Toggle } else { m })
+        .into()
 }
 
 fn play_over<'a>(app: &App, base: El<'a>, top: El<'a>, ctx: &str) -> El<'a> {
@@ -320,7 +314,7 @@ fn year_kind(a: &Album) -> String {
 
 pub fn disc_shelf<'a>(app: &App, albums: &'a [Album]) -> Vec<&'a Album> {
     let mut v: Vec<&Album> = albums.iter().collect();
-    v.sort_by_key(|a| std::cmp::Reverse(released(a)));
+    v.sort_by_cached_key(|a| std::cmp::Reverse(released(a)));
     match app.disc_chip {
         0 if v.len() > 1 => v[1..].sort_by_key(|a| std::cmp::Reverse(a.play_count)),
         0 => {}
@@ -333,7 +327,7 @@ pub fn disc_shelf<'a>(app: &App, albums: &'a [Album]) -> Vec<&'a Album> {
 fn disc_list<'a>(app: &'a App, id: &str, f: &str) -> Vec<&'a Album> {
     app.data::<(Artist, Vec<Album>)>(&format!("artist:{id}")).map_or_else(Vec::new, |(_, al)| {
         let mut v: Vec<&Album> = al.iter().filter(|a| f == "all" || group(a) == f).collect();
-        v.sort_by_key(|a| std::cmp::Reverse(released(a)));
+        v.sort_by_cached_key(|a| std::cmp::Reverse(released(a)));
         if app.disc_old {
             v.reverse();
         }
@@ -773,11 +767,8 @@ fn heart_btn<'a>(id: &str, on: bool, px: f32) -> El<'a> {
 }
 
 fn bar_btn<'a>(c: char, msg: Message) -> El<'a> {
-    button(theme::icon(c, 28.0).center())
+    theme::sq(theme::icon(c, 28.0).center(), 32.0)
         .on_press(msg)
-        .padding(0)
-        .width(32)
-        .height(32)
         .style(theme::link(theme::SUB))
         .into()
 }
@@ -1965,8 +1956,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
             let mut v = vec![
-                item(icon::LISTPLUS, "Add to queue".into(), Message::QEnd(songs.clone())),
-                item(icon::QUEUE, "Play next".into(), Message::QNext(songs.clone())),
+                item(icon::LISTPLUS, "Add to queue".into(), Message::Queue(songs.clone(), false)),
+                item(icon::QUEUE, "Play next".into(), Message::Queue(songs.clone(), true)),
                 sep(),
                 more(icon::PLUS, "Add to playlist", 1),
             ];
