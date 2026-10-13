@@ -1965,38 +1965,32 @@ fn layer_focus(
 ) -> Task<Message> {
     use iced::advanced::widget::operation::{Focusable, Outcome};
     use iced::advanced::widget::{Id, Operation};
-    struct Scan<F>(bool, F, usize, Option<usize>);
-    struct Nth(bool, usize, usize);
-    impl<F: Fn(Option<usize>, usize) -> usize + Send> Operation<Message> for Scan<F> {
+    type Pick = Box<dyn Fn(Option<usize>, usize) -> usize + Send>;
+    struct Focus(bool, Option<Pick>, usize, Option<usize>);
+    impl Operation<Message> for Focus {
         fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation<Message>)) {
             f(self);
         }
         fn focusable(&mut self, id: Option<&Id>, _: iced::Rectangle, s: &mut dyn Focusable) {
-            if !self.0 || id == Some(&Id::from("layer")) {
-                self.3 = if s.is_focused() { Some(self.2) } else { self.3 };
-                self.2 += 1;
+            let (mine, n) = (!self.0 || id == Some(&Id::from("layer")), self.2);
+            self.2 += mine as usize;
+            match &self.1 {
+                Some(_) if mine && s.is_focused() => self.3 = Some(n),
+                Some(_) => {}
+                None if mine && self.3 == Some(n) => s.focus(),
+                None => s.unfocus(),
             }
         }
         fn finish(&self) -> Outcome<Message> {
-            match self.2 {
-                0 => Outcome::None,
-                n => Outcome::Chain(Box::new(Nth(self.0, (self.1)(self.3, n), 0))),
+            match &self.1 {
+                Some(p) if self.2 > 0 => {
+                    Outcome::Chain(Box::new(Focus(self.0, None, 0, Some(p(self.3, self.2)))))
+                }
+                _ => Outcome::None,
             }
         }
     }
-    impl Operation<Message> for Nth {
-        fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation<Message>)) {
-            f(self);
-        }
-        fn focusable(&mut self, id: Option<&Id>, _: iced::Rectangle, s: &mut dyn Focusable) {
-            let hit = (!self.0 || id == Some(&Id::from("layer"))) && {
-                self.2 += 1;
-                self.2 - 1 == self.1
-            };
-            if hit { s.focus() } else { s.unfocus() }
-        }
-    }
-    iced::advanced::widget::operate(Scan(layer, pick, 0, None))
+    iced::advanced::widget::operate(Focus(layer, Some(Box::new(pick)), 0, None))
 }
 
 fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
