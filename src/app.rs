@@ -798,11 +798,7 @@ impl App {
         (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
         self.queue_next_refresh();
         let Some(song) = self.current_song().cloned() else { return Task::none() };
-        let lyr = if self.route == "lyrics" {
-            self.request(&format!("lyrics:{}", song.id))
-        } else {
-            Task::none()
-        };
+        let lyr = self.request(&format!("lyrics:{}", song.id));
         let now = if self.cfg.settings.scrobble {
             self.send(
                 move |s| async move { s.scrobble(&song.id, false).await },

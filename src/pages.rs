@@ -1144,6 +1144,9 @@ fn lyrics<'a>(app: &'a App) -> El<'a> {
             .into();
     };
     let ms = (app.position * 1000.0) as i64;
+    let end = (song.duration * 1000.0) as i64;
+    let synced = l.synced
+        && (end <= 0 || l.lines.iter().filter_map(|x| x.0).all(|t| t as i64 + l.offset <= end));
     let cur = l
         .lines
         .iter()
@@ -1151,14 +1154,14 @@ fn lyrics<'a>(app: &'a App) -> El<'a> {
         .unwrap_or(0);
     let lines = l.lines.iter().enumerate().map(|(n, (t, line))| -> El<'a> {
         let colr = match n {
-            _ if !l.synced => theme::TEXT,
+            _ if !synced => theme::TEXT,
             n if n == cur => theme::TEXT,
             n if n < cur => theme::tint(0.7),
             _ => Color { a: 0.8, ..theme::BG },
         };
         let txt = theme::bold(if line.is_empty() { "\u{266a}" } else { line }, 32.0);
         match t {
-            Some(t) if l.synced => button(txt)
+            Some(t) if synced => button(txt)
                 .padding(0)
                 .style(theme::link(colr))
                 .on_press(Message::Seek((*t as i64 + l.offset).max(0) as f32 / 1000.0))
