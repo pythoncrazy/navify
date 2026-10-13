@@ -68,6 +68,7 @@ default-features = false
 [dev-dependencies]
 dotenvy = "0.15.7"
 iced_test = "0.14.0"
+tiny-skia = { version = "0.11.4", default-features = false, features = ["std", "simd"] }
 
 [profile.dev]
 debug = "line-tables-only"

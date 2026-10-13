@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Navify
+GenericName=Music Player
+Comment=Play music from a Navidrome or Subsonic server
+Exec=navify
+Icon=navify
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;navidrome;subsonic;
+StartupWMClass=navify
+StartupNotify=true

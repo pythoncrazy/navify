@@ -24,8 +24,42 @@ impl iced::Executor for Rt {
     }
 }
 
+const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/navify.png");
+
+#[cfg(target_os = "linux")]
+fn install() -> std::io::Result<()> {
+    let data = dirs::data_dir().ok_or(std::io::ErrorKind::NotFound)?;
+    let exe = std::env::current_exe()?;
+    let icons = data.join("icons/hicolor");
+    let files = [
+        (icons.join("256x256/apps/navify.png"), ICON.to_vec()),
+        (icons.join("scalable/apps/navify.svg"), include_bytes!("../assets/navify.svg").to_vec()),
+        (
+            data.join("applications/navify.desktop"),
+            include_str!("../assets/navify.desktop")
+                .replace("Exec=navify", &format!("Exec=\"{}\"", exe.display()))
+                .into_bytes(),
+        ),
+    ];
+    for (path, bytes) in files {
+        std::fs::create_dir_all(path.parent().expect("the path has a parent"))?;
+        std::fs::write(&path, bytes)?;
+        println!("{}", path.display());
+    }
+    Ok(())
+}
+
 fn main() -> iced::Result {
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).as_deref() == Some("--install") {
+        if let Err(e) = install() {
+            eprintln!("Cannot install the desktop entry: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let cfg = Config::load();
+    let icon = image::load_from_memory(ICON).expect("the bundled icon is a PNG").into_rgba8();
     let ((w, h), s) = (cfg.settings.window, cfg.settings.zoom);
     application(App::boot, App::update, App::view)
         .subscription(App::subscription)
@@ -43,6 +77,15 @@ fn main() -> iced::Result {
         .window(window::Settings {
             size: Size::new(w.max(800.0), h.max(600.0)) * (1.0 / s),
             min_size: Some(Size::new(800.0, 600.0)),
+            icon: Some(
+                window::icon::from_rgba(icon.to_vec(), icon.width(), icon.height())
+                    .expect("the bundled icon has a valid size"),
+            ),
+            #[cfg(target_os = "linux")]
+            platform_specific: window::settings::PlatformSpecific {
+                application_id: "navify".into(),
+                ..Default::default()
+            },
             ..window::Settings::default()
         })
         .run()
