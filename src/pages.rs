@@ -117,7 +117,7 @@ fn shelf<'a>(title: &str, all: Option<String>, cards: impl Iterator<Item = El<'a
 fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, round: bool) -> El<'a> {
     let cw = app.grid().1;
     let img = cw - 24.0;
-    let art = cover(app, cid, 300, img, round);
+    let art = cover(app, cid, img, round);
     let play = play_btn(app, 48.0, &route, Message::PlayCtx(route.clone(), 0));
     let play = container(play).align_right(Fill).align_bottom(Fill);
     let over = |art| play_over(app, art, play.padding(8).into(), &route);
@@ -198,7 +198,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let more = hot.then(|| icon_btn(i::DOTS, 16.0, Message::RowMenu(key.into(), n)));
     let heart = (hot || starred).then(|| heart_btn(&s.id, starred, 16.0));
     let dur = sub(fmt_dur(s.duration), 14.0).width(56).align_x(Right);
-    let thumb = art.then(|| cover(app, &s.cover, 128, 40.0, false));
+    let thumb = art.then(|| cover(app, &s.cover, 40.0, false));
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
     let added = (c.2 > 0.0).then(|| sub(date(&s.created), 14.0).width(c.2));
     let tail = row![container(heart).width(32), dur, container(more).width(32)];
@@ -415,7 +415,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
     let name = ell(&al.name, app.main_w() - 3.0 * PAD - 136.0, 32.0, Bold);
     let on = app.is_starred(&al.id, al.starred);
     let open = Message::Nav(key.clone());
-    let art = link_btn(cover(app, &al.cover, 300, 136.0, false), TEXT, open.clone());
+    let art = link_btn(cover(app, &al.cover, 136.0, false), TEXT, open.clone());
     let play = play_btn(app, 40.0, &key, Message::PlayCtx(key.clone(), 0));
     let menu = dots(MenuKind::Album(Box::new(al.clone())));
     let acts = row![play, heart_btn(&al.id, on, 24.0), menu].spacing(16);
@@ -509,7 +509,7 @@ fn home(app: &App) -> Option<El<'_>> {
     let pins = pins.map(|p| (&p.cover, &p.name, format!("playlist:{}", p.id)));
     let recent = h.recent.iter();
     let recent = recent.map(|a| (&a.cover, &a.name, format!("album:{}", a.id)));
-    let small = |c| cover(app, c, 128, 56.0, false);
+    let small = |c| cover(app, c, 56.0, false);
     let rest = pins.chain(recent).map(|(c, n, r)| tile(small(c), n, r));
     let liked = tile(liked_art(56.0), "Liked Songs", "liked".into());
     let mut tiles = std::iter::once(liked).chain(rest).take(8);
@@ -640,14 +640,14 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             let name = format!("{}{name}", if n > 0 { ", " } else { "" });
             link_btn(bold(name, 14.0), TEXT, go("artist", id)).into()
         });
-        let face = cover(app, names[0].0, 128, 24.0, true);
+        let face = cover(app, names[0].0, 24.0, true);
         let lead = row![face, Row::with_children(links)].spacing(8);
         let year = (a.year > 0).then(|| format!("{DOT}{}", a.year));
         let (year, len) = (year.unwrap_or_default(), fmt_long(a.duration));
         let rest = format!("{year}{DOT}{} songs, {len}", a.song_count);
         let heart = heart_btn(&a.id, app.is_starred(&a.id, a.starred), 32.0);
         let p = Page {
-            art: cover(app, &a.cover, 300, px, false),
+            art: cover(app, &a.cover, px, false),
             kind: kind(a).0,
             title: &a.name,
             meta: meta(lead.align_y(Center), rest),
@@ -663,7 +663,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         let comment = (!p.comment.is_empty()).then(|| sub(&p.comment, 14.0));
         let meta = column![comment, meta(bold(&p.owner, 14.0), rest)];
         let page = Page {
-            art: cover(app, &p.cover, 300, px, false),
+            art: cover(app, &p.cover, px, false),
             kind: ["Playlist", "Public Playlist"][usize::from(p.public)],
             title: &p.name,
             meta: meta.spacing(8).into(),
@@ -828,7 +828,7 @@ fn artist(app: &App) -> Option<El<'_>> {
     let follow = if on { "Following" } else { "Follow" };
     let follow = theme::pill_btn(follow, Message::Star(vec![a.id.clone()], !on));
     let p = Page {
-        art: cover(app, &a.cover, 300, art_px(app), true),
+        art: cover(app, &a.cover, art_px(app), true),
         kind: "Artist",
         title: &a.name,
         meta: sub(counts, 14.0).color(TEXT).into(),
@@ -892,7 +892,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         Some((&s.cover, &s.title, sub, go("album", &s.album_id), false))
     });
     let top = best.map(|(cid, name, s, to, round)| {
-        let art = cover(app, cid, 300, 92.0, round);
+        let art = cover(app, cid, 92.0, round);
         let body = column![art, ell(name, lw - 40.0, 32.0, Bold), sub(s, 14.0)];
         let card = color!(0x181818);
         let style = theme::btn([card, theme::MENU, card], [TEXT; 3], 8.0);
@@ -1192,7 +1192,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
         });
         b.on_press(Message::Nav("lyrics".into()))
     });
-    let art = cover(app, &s.cover, 300, w, false);
+    let art = cover(app, &s.cover, w, false);
     let body = column![art, info].push(preview).push(about).push(next);
     let body = body.spacing(16).padding(Padding::new(16.0).top(0));
     let head = panel_head(app, &app.source, 1, None);
@@ -1208,7 +1208,7 @@ fn panel_head<'a>(app: &App, title: &str, n: u8, extra: Option<El<'a>>) -> El<'a
 
 fn queue_row<'a>(app: &'a App, s: &'a Song, n: usize, w: f32) -> El<'a> {
     let cur = n == app.index;
-    let art = cover(app, &s.cover, 128, 48.0, false);
+    let art = cover(app, &s.cover, 48.0, false);
     let x = (!cur).then(|| icon_btn(i::X, 14.0, Message::QDel(n)));
     let fg = if cur { ACCENT } else { TEXT };
     let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);

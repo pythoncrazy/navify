@@ -52,6 +52,11 @@ fn view(app: &App, _: iced::window::Id) -> iced::Element<'_, Message> {
 }
 
 fn main() -> iced::Result {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 1);
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 128 * 1024);
+    }
     #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some("--install") {
         let r = linux::install().map_err(|e| eprintln!("Cannot install the desktop entry: {e}"));

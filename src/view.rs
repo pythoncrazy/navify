@@ -140,9 +140,9 @@ pub fn art<'a>(px: f32, glyph: Txt<'a>, bg: impl Into<Background>) -> El<'a> {
     g.style(fill(bg.into(), r)).into()
 }
 
-pub fn cover(app: &App, id: &str, size: u32, px: f32, round: bool) -> El<'static> {
+pub fn cover(app: &App, id: &str, px: f32, round: bool) -> El<'static> {
     let r = [[6.0, 4.0][usize::from(px < 100.0)], px / 2.0][usize::from(round)];
-    let Some(h) = app.covers.get(id, size) else {
+    let Some(h) = app.covers.get(id, app.bucket(px)) else {
         let g = i([i::MUSIC, i::USER][usize::from(round)], px * 0.38).color(SUB);
         let g = container(g.center()).center(px);
         return g.style(fill(ELEVATED, r)).into();
@@ -265,6 +265,50 @@ fn top_bar(app: &App) -> El<'_> {
     bar.padding([0, 8]).height(64).into()
 }
 
+type LibRow<'a> = (&'a String, &'a String, String, String, &'a String);
+
+pub fn lib_rows(app: &App) -> (usize, Vec<LibRow<'_>>, std::ops::Range<usize>) {
+    let f = app.lib_filter;
+    let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
+    let hit = |name: &str| name.to_lowercase().contains(&q);
+    let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
+        let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
+            let s = format!("Playlist \u{2022} {}", p.owner);
+            (&p.cover, &p.name, s, format!("playlist:{}", p.id), &p.owner)
+        });
+        let als = l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
+            let s = format!("Album \u{2022} {}", a.artist);
+            (&a.cover, &a.name, s, format!("album:{}", a.id), &a.artist)
+        });
+        let ars = l.artists.iter().filter(|_| matches!(f, 0 | 3)).map(|a| {
+            let r = format!("artist:{}", a.id);
+            (&a.cover, &a.name, "Artist".into(), r, &a.name)
+        });
+        pls.chain(als).chain(ars)
+    });
+    let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();
+    match app.cfg.settings.lib_sort {
+        1 => rows.sort_by_cached_key(|r| r.1.to_lowercase()),
+        2 => rows.sort_by_cached_key(|r| (r.4.to_lowercase(), r.1.to_lowercase())),
+        _ => {}
+    }
+    let pins = [
+        (f < 2, "Liked Songs"),
+        (f == 0, "Songs"),
+        (f == 2, "All albums"),
+    ];
+    let pins = pins
+        .into_iter()
+        .chain([(f == 3, "All artists"), (f == 0, "Folders")]);
+    let k = pins.filter(|p| p.0 && hit(p.1)).count();
+    let (off, view) = app.lib_scroll;
+    let lo = ((off / 64.0) as usize)
+        .saturating_sub(k + 4)
+        .min(rows.len());
+    let hi = (lo + (view.max(600.0) / 64.0) as usize + 8).min(rows.len());
+    (k, rows, lo..hi)
+}
+
 fn lib_panel(app: &App) -> El<'_> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.cfg.settings.lib_collapsed);
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
@@ -314,34 +358,22 @@ fn lib_panel(app: &App) -> El<'_> {
         let art = art(48.0, i(c, 0.0).color(fg), bg);
         item(art, t, "Library", r.into())
     });
-    let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
-        let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
-            let s = format!("Playlist \u{2022} {}", p.owner);
-            (&p.cover, &p.name, s, format!("playlist:{}", p.id), &p.owner)
-        });
-        let als = l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
-            let s = format!("Album \u{2022} {}", a.artist);
-            (&a.cover, &a.name, s, format!("album:{}", a.id), &a.artist)
-        });
-        let ars = l.artists.iter().filter(|_| matches!(f, 0 | 3)).map(|a| {
-            let r = format!("artist:{}", a.id);
-            (&a.cover, &a.name, "Artist".into(), r, &a.name)
-        });
-        pls.chain(als).chain(ars)
-    });
-    let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();
-    match sort {
-        1 => rows.sort_by_cached_key(|r| r.1.to_lowercase()),
-        2 => rows.sort_by_cached_key(|r| (r.4.to_lowercase(), r.1.to_lowercase())),
-        _ => {}
-    }
-    let rows = rows.into_iter().map(|(c, n, s, r, _)| {
+    let (_, rows, span) = lib_rows(app);
+    let gap = |n: usize| Space::new().height(n as f32 * 64.0);
+    let (top, bottom) = (gap(span.start), gap(rows.len() - span.end));
+    let rows = rows.into_iter().take(span.end).skip(span.start);
+    let rows = rows.map(|(c, n, s, r, _)| {
         let round = r.starts_with("artist:");
-        item(cover(app, c, 128, 48.0, round), n, &s, r)
+        item(cover(app, c, 48.0, round), n, &s, r)
     });
     let liked = (f < 2 && hit("Liked Songs"))
         .then(|| item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into()));
-    let list = Column::new().push(liked).extend(pins).extend(rows);
+    let list = Column::new()
+        .push(liked)
+        .extend(pins)
+        .push(top)
+        .extend(rows)
+        .push(bottom);
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
     let find = task(|a| {
         a.lib_find = a.lib_find.is_none().then(String::new);
@@ -379,6 +411,7 @@ fn lib_panel(app: &App) -> El<'_> {
         .align_y(Center);
     let tools = (!mini).then(|| container(tools).padding([0, 4]));
     let list = scrollable(list).style(theme::scroll).height(Fill);
+    let list = list.on_scroll(|v| Message::LibScrolled(v.absolute_offset().y, v.bounds().height));
     let body = column![container(head).padding([4, 8]), chips, tools, list];
     let body = container(body.spacing(12).padding(8)).width(w).height(Fill);
     body.style(fill(PANEL, 8.0)).into()
@@ -399,7 +432,7 @@ fn player_bar(app: &App) -> El<'_> {
         let title = btn(title, Message::Nav(format!("album:{}", s.album_id)));
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
-        let art = btn(cover(app, &s.cover, 128, 56.0, false), Message::Panel(1));
+        let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));
         let lines = column![title, artists_line(&s.artists, 12.0, 200.0)].spacing(2);
         let heart = side(theme::saved(on, 16.0), false, label, like);
         row![art, lines, heart].spacing(12).align_y(Center)
@@ -521,7 +554,7 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
     let name = column![input("Add a name", &app.new_pl, 3)];
     let name = name.push(error).spacing(6);
     let desc = input("Add an optional description", &app.new_pl_desc, 4);
-    let art = cover(app, pl.map_or("", |p| p.cover.as_str()), 300, 180.0, false);
+    let art = cover(app, pl.map_or("", |p| p.cover.as_str()), 180.0, false);
     let white = [TEXT, color!(0xf0f0f0), color!(0xf0f0f0)];
     let save = container(act("Save", white, BG, 32, ok)).align_right(Fill);
     let head = row![bold("Edit details", 24.0).width(Fill), close].align_y(Center);

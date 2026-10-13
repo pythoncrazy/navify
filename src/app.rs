@@ -17,8 +17,8 @@ use crate::config::{self, Config};
 
 pub const PAGE: usize = 100;
 const STALE: Duration = Duration::from_secs(300);
-const COVER_CAP: usize = 64 * 1024 * 1024;
-const SIZES: [u32; 3] = [128, 300, 640];
+const COVER_CAP: usize = 24 * 1024 * 1024;
+const SIZES: [u32; 4] = [128, 192, 300, 640];
 pub const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/navify.png");
 
 #[derive(Clone, Debug, Default)]
@@ -126,6 +126,7 @@ pub enum Message {
     Fwd,
     Scrolled(f32, f32, f32),
     Follow,
+    LibScrolled(f32, f32),
     Search(String),
     SearchGo(u64),
     Play(Vec<Song>, usize, String),
@@ -192,7 +193,7 @@ pub enum Message {
 
 #[derive(Debug, Default)]
 pub struct Covers {
-    map: HashMap<String, [Slot; 3]>,
+    map: HashMap<String, [Slot; 4]>,
     pub bytes: usize,
     tick: u64,
     pub color: HashMap<String, Color>,
@@ -206,7 +207,7 @@ fn slot(size: u32) -> usize {
 
 impl Covers {
     pub fn get(&self, id: &str, size: u32) -> Option<image::Handle> {
-        let (e, mut near) = (self.map.get(id)?, [0, 1, 2]);
+        let (e, mut near) = (self.map.get(id)?, [0, 1, 2, 3]);
         near.sort_unstable_by_key(|&j| SIZES[j].abs_diff(size));
         near.iter().find_map(|&j| Some(e[j].as_ref()?.1.clone()))
     }
@@ -287,6 +288,7 @@ pub struct App {
     pub panel: u8,
     pub lib_filter: u8,
     pub lib_find: Option<String>,
+    pub lib_scroll: (f32, f32),
     pub drag: Option<u8>,
     pub volume: f32,
     pub muted: bool,
@@ -447,6 +449,11 @@ impl App {
 
     pub fn scale(&self) -> f32 {
         self.cfg.settings.zoom
+    }
+
+    pub fn bucket(&self, px: f32) -> u32 {
+        let need = px * self.scale();
+        SIZES.into_iter().find(|&s| s as f32 >= need).unwrap_or(640)
     }
 
     fn open(&self) -> Task<Message> {
@@ -818,6 +825,8 @@ impl App {
                 let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
                 let wide = k.starts_with("https://");
                 let px = if wide { 1280 } else { size };
+                static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+                let _one = ONE.acquire().await.expect("the decode semaphore is open");
                 let d = tokio::task::spawn_blocking(move || decode(&b, px, wide));
                 d.await.expect("decode task")
             };
@@ -998,7 +1007,9 @@ impl App {
         self.os = (id.to_string(), self.playing);
         let (song, pos) = (self.current_song().cloned(), self.pos());
         let (song, s) = (song.as_ref(), self.session.as_ref());
-        let art = song.zip(s).map(|(s, x)| x.cover_file(&s.cover, 300));
+        let art = song
+            .zip(s)
+            .map(|(s, x)| x.cover_file(&s.cover, self.bucket(56.0)));
         let art = art.filter(|f| f.exists());
         let art = art.map(|f| format!("file://{}", f.display()));
         if let Some(m) = &mut self.media {
@@ -1576,6 +1587,13 @@ impl App {
             }
             Message::Tick => self.position = self.pos(),
             Message::Follow => self.lyric = (usize::MAX, Some(0.0)),
+            Message::LibScrolled(off, view) => {
+                let old = crate::view::lib_rows(self).2;
+                self.lib_scroll = (off, view);
+                if crate::view::lib_rows(self).2 != old {
+                    return self.covers_now();
+                }
+            }
             Message::Modal(id, kind) => {
                 self.menu = None;
                 let p = self.playlist(&id).expect("the dialog has a playlist");
@@ -1584,7 +1602,7 @@ impl App {
                 self.modal = Some((id, kind));
                 let all = op::select_all(iced::widget::Id::new("layer"));
                 let focus = layer_focus(true, |_, n| n.min(2) - 1).chain(all);
-                return Task::batch([self.want_covers([(cover, 300)]), focus]);
+                return Task::batch([self.want_covers([(cover, self.bucket(180.0))]), focus]);
             }
             Message::Edit(id, name, comment) => {
                 self.modal = None;
@@ -1694,12 +1712,12 @@ impl App {
         let tiles = |n: usize| span(n, cw + 52.0, cols);
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
-        let mut huge: Vec<&String> = Vec::new();
+        let (mut huge, mut head): (Vec<&String>, Vec<&String>) = Default::default();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
-            big.push(&a.cover);
+            head.push(&a.cover);
             small.push(a.artists.first().map_or(&a.artist_id, |x| &x.id));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
-            big.push(&p.cover);
+            head.push(&p.cover);
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if let Some(s) = self.data::<Pager<Song>>(key).map(|p| &p.items) {
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
@@ -1713,7 +1731,7 @@ impl App {
             let info = self.data::<Info>(&format!("info:{id}"));
             let appears = self.data::<Vec<Album>>(&format!("appears:{id}"));
             let shelf = crate::pages::disc_shelf(self, albums);
-            big.push(&a.cover);
+            head.push(&a.cover);
             let banner = self
                 .data::<String>(&a.banner_key())
                 .filter(|u| !u.is_empty());
@@ -1743,25 +1761,30 @@ impl App {
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
             small.extend(pls.iter().take(3).map(|p| &p.cover));
             small.extend(h.recent.iter().take(7).map(|a| &a.cover));
-            for l in [&h.recent, &h.added, &h.frequent, &h.random] {
+            let hs = cw + 132.0;
+            let near = |n: usize| (off - hs..off + view + hs).contains(&(184.0 + n as f32 * hs));
+            let lists = [&h.recent, &h.added, &h.frequent, &h.random]
+                .into_iter()
+                .enumerate();
+            for (_, l) in lists.filter(|x| near(x.0)) {
                 big.extend(l.iter().take(cols).map(|a| &a.cover));
             }
-            big.extend(pls.iter().take(cols).map(|p| &p.cover));
+            big.extend(pls.iter().take(cols).filter(|_| near(4)).map(|p| &p.cover));
         }
-        big.extend(self.current_song().map(|s| &s.cover));
-        small.extend(self.current_song().map(|s| &s.cover));
+        let now = self.current_song().map(|s| &s.cover);
+        small.extend(now);
         let ahead = [0, 1, 100][self.panel as usize];
         let next = (self.index + 1..self.queue.len()).take(ahead);
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
-        if let Some(l) = lib {
-            small.extend(l.playlists.iter().take(40).map(|p| &p.cover));
-            small.extend(l.albums.iter().take(40).map(|a| &a.cover));
-            small.extend(l.artists.iter().take(40).map(|a| &a.cover));
-        }
-        let big = big.into_iter().map(|c| (c.clone(), 300));
-        let small = small.into_iter().map(|c| (c.clone(), 128));
-        let huge = huge.into_iter().map(|c| (c.clone(), 640));
-        big.chain(small).chain(huge).collect()
+        let (_, rows, span) = crate::view::lib_rows(self);
+        small.extend(rows[span].iter().map(|r| r.0));
+        let now = Vec::from_iter(now.filter(|_| self.panel == 1));
+        let (art, side) = (crate::pages::art_px(self), self.right_w() - 32.0);
+        let lists = [(big, cw - 24.0), (head, art), (now, side), (small, 56.0)];
+        let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
+        let all = lists.chain([(huge, 640)]);
+        all.flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b)))
+            .collect()
     }
 
     pub fn view(&self) -> iced::Element<'_, Message> {
@@ -1818,7 +1841,8 @@ impl App {
             }));
         }
         if self.playing && !self.hidden {
-            subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
+            let ms = if self.route == "lyrics" { 250 } else { 1000 };
+            subs.push(iced::time::every(Duration::from_millis(ms)).map(|_| Message::Tick));
         }
         iced::Subscription::batch(subs)
     }
@@ -1883,7 +1907,7 @@ fn decode(b: &[u8], size: u32, wide: bool) -> Result<Decoded, String> {
     };
     let big = img.width() > size || img.height() > size;
     let img = match big {
-        true => img.resize(size, size, FilterType::Lanczos3),
+        true => img.thumbnail(size, size),
         false => img,
     };
     let small = img.resize_exact(24, 24, FilterType::Triangle).to_rgb8();
@@ -1911,7 +1935,12 @@ fn decode(b: &[u8], size: u32, wide: bool) -> Result<Decoded, String> {
         true => Color::from_rgb(l, l, l),
         false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
     };
-    Ok((img.width(), img.height(), color, img.to_rgba8().into_raw()))
+    Ok((
+        img.width(),
+        img.height(),
+        color,
+        img.into_rgba8().into_raw(),
+    ))
 }
 
 fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {
