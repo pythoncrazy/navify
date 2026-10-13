@@ -6,7 +6,8 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Fill, color};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Song};
-use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, Set};
+use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, set};
+use crate::config::Settings;
 use crate::theme::{self, fill, icon, icon as i};
 use crate::view::{
     SONGS_BG, artists_line, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, icon_btn, liked_art,
@@ -394,8 +395,8 @@ fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
     .style(theme::link(theme::SUB))
     .on_press(Message::DiscOrder);
     row![Row::with_children(chips).spacing(8), Space::new().width(Fill), order]
-        .push(tool(icon::LIST, !grid_on, Message::Set(Set::DiscGrid(false))))
-        .push(tool(icon::GRID, grid_on, Message::Set(Set::DiscGrid(true))))
+        .push(tool(icon::LIST, !grid_on, set(|s, b| s.disc_grid = b, false)))
+        .push(tool(icon::GRID, grid_on, set(|s, b| s.disc_grid = b, true)))
         .spacing(16)
         .align_y(Alignment::Center)
         .into()
@@ -1438,16 +1439,16 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             .height(48)
             .into()
     };
-    fn pick<'a, T: Clone + 'a>(
+    fn pick<'a, T: Clone + Send + Sync + 'static>(
         opts: impl IntoIterator<Item = (T, impl ToString)>,
         cur: impl PartialEq<T>,
-        f: impl Fn(T) -> Message + 'a,
+        f: fn(&mut Settings, T),
     ) -> El<'a> {
         let opts: Vec<(T, String)> = opts.into_iter().map(|(v, l)| (v, l.to_string())).collect();
         let on = opts.iter().find(|o| cur == o.0).map(|o| o.1.clone());
         let labels = opts.iter().map(|o| o.1.clone()).collect::<Vec<_>>();
         pick_list(labels, on, move |l| {
-            f(opts.iter().find(|o| o.1 == l).expect("the label is an option").0.clone())
+            set(f, opts.iter().find(|o| o.1 == l).expect("the label is an option").0.clone())
         })
         .placeholder("The saved value is not available")
         .text_size(14)
@@ -1460,25 +1461,25 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     }
     let num = |v: f32,
                r: std::ops::RangeInclusive<f32>,
-               f: fn(f32) -> Message,
+               f: fn(&mut Settings, f32),
                label: String|
      -> El<'a> {
         row![
-            slider(r, v, f).step(0.05f32).width(200).style(theme::seek),
+            slider(r, v, move |x| set(f, x)).step(0.05f32).width(200).style(theme::seek),
             theme::sub(label, 14.0).width(56).align_x(Alignment::End)
         ]
         .spacing(12)
         .align_y(Alignment::Center)
         .into()
     };
-    let tog = |v: bool, f: fn(bool) -> Message| -> El<'a> {
-        toggler(v).on_toggle(f).style(theme::tog).size(20).into()
+    let tog = |v: bool, f: fn(&mut Settings, bool)| -> El<'a> {
+        toggler(v).on_toggle(move |b| set(f, b)).style(theme::tog).size(20).into()
     };
     let device = pick(
         std::iter::once((String::new(), "System default".to_string()))
             .chain(app.data::<Vec<(String, String)>>("devices").into_iter().flatten().cloned()),
         st.device.as_str(),
-        |v| Message::Set(Set::Device(v)),
+        |s, v| s.device = v,
     );
     let servers = app.cfg.servers.iter().map(|s| -> El<'a> {
         row![
@@ -1509,7 +1510,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 pick(
                     [("off", "Off"), ("track", "Track"), ("album", "Album")],
                     &st.replaygain,
-                    |v: &str| Message::Set(Set::Rg(v.into()))
+                    |s, v| s.replaygain = v.into()
                 )
             ),
             line(
@@ -1517,7 +1518,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 num(
                     st.preamp_db,
                     -15.0..=15.0,
-                    |v| Message::Set(Set::Preamp(v)),
+                    |s, v| s.preamp_db = v,
                     format!("{:+.1} dB", st.preamp_db)
                 )
             ),
@@ -1526,7 +1527,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 num(
                     st.fallback_db,
                     -15.0..=15.0,
-                    |v| Message::Set(Set::Fallback(v)),
+                    |s, v| s.fallback_db = v,
                     format!("{:+.1} dB", st.fallback_db)
                 )
             ),
@@ -1535,7 +1536,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 num(
                     st.crossfade_secs,
                     0.0..=12.0,
-                    |v| Message::Set(Set::Xfade(v)),
+                    |s, v| s.crossfade_secs = v,
                     format!("{:.0} s", st.crossfade_secs)
                 )
             ),
@@ -1545,7 +1546,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 pick(
                     [("", "Original"), ("mp3", "MP3"), ("opus", "Opus"), ("aac", "AAC")],
                     &st.transcode_format,
-                    |v: &str| Message::Set(Set::Trans(v.into()))
+                    |s, v| s.transcode_format = v.into()
                 )
             ),
             line(
@@ -1555,17 +1556,17 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                         (b, if b == 0 { "No limit".into() } else { format!("{b} kbps") })
                     }),
                     st.transcode_max_bitrate,
-                    |v| Message::Set(Set::Bitrate(v))
+                    |s, v| s.transcode_max_bitrate = v
                 )
             ),
             section("Library"),
             line(
                 "Sync the play queue with the server",
-                tog(st.queue_sync, |b| Message::Set(Set::Qsync(b)))
+                tog(st.queue_sync, |s, b| s.queue_sync = b)
             ),
             line(
                 "Send played tracks to the server (scrobble)",
-                tog(st.scrobble, |b| Message::Set(Set::Scrobble(b)))
+                tog(st.scrobble, |s, b| s.scrobble = b)
             ),
             section("Display"),
             line(
@@ -1573,13 +1574,13 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 pick(
                     [0.8, 0.9, 1.0, 1.1, 1.25, 1.5].map(|z| (z, format!("{:.0}%", z * 100.0))),
                     st.zoom,
-                    |v| Message::Set(Set::Zoom(v))
+                    |s, v| s.zoom = v
                 )
             ),
             if cfg!(target_os = "linux") {
                 line(
                     "Use the system title bar on Wayland desktops that do not draw one (restart to apply)",
-                    tog(st.system_frame, |b| Message::Set(Set::Frame(b))),
+                    tog(st.system_frame, |s, b| s.system_frame = b),
                 )
             } else {
                 Space::new().into()
@@ -1590,7 +1591,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 } else {
                     "Keep Navify in the system tray when you close the window (no system tray found)"
                 },
-                tog(st.tray, |b| Message::Set(Set::Tray(b))),
+                tog(st.tray, |s, b| s.tray = b),
             ),
             section("Servers"),
         ]
@@ -1851,7 +1852,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                     .push(on.then(|| i(icon::CHECK, 16.0).color(theme::ACCENT)))
                     .align_y(Alignment::Center)
                     .into(),
-                    Message::Set(Set::Speed(v)),
+                    set(|s, v| s.speed = v, v),
                 )
             }));
             return (

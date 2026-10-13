@@ -18,6 +18,8 @@ fn shuffle_keeps_the_current_song() {
         "salt": "s", "token": "t", "jwt": "", "native": false
     }))
     .expect("server");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _rt = rt.enter();
     let mut app = App::new();
     app.session = Some(Session::new(server));
     let ids = ["a", "b", "c", "d", "e", "f"];

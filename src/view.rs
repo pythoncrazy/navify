@@ -6,7 +6,7 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Fill, Length};
 
 use crate::api::Artist;
-use crate::app::{App, MenuKind, Message, Set};
+use crate::app::{App, MenuKind, Message, set};
 use crate::pages;
 use crate::theme::{self, icon, icon as i};
 
@@ -555,7 +555,7 @@ fn player_bar<'a>(app: &'a App) -> Element<'a, Message> {
             .width(48)
             .padding(0)
             .style(theme::link(theme::SUB))
-            .on_press(Message::Set(Set::Remaining(!app.cfg.settings.remaining))),
+            .on_press(set(|s, b| s.remaining = b, !app.cfg.settings.remaining)),
         ]
         .spacing(8)
         .align_y(Alignment::Center)

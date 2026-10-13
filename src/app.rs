@@ -6,6 +6,7 @@ use std::{
 };
 
 use iced::{Color, Task, widget::image};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::api::{Album, Artist, Info, Playlist, Session, Song};
 use crate::config::{self, Config};
@@ -66,23 +67,17 @@ pub struct Menu {
     pub sub: u8,
 }
 
-#[derive(Clone, Debug)]
-pub enum Set {
-    Rg(String),
-    Preamp(f32),
-    Xfade(f32),
-    Trans(String),
-    Bitrate(u32),
-    Qsync(bool),
-    Speed(f32),
-    Scrobble(bool),
-    Fallback(f32),
-    Device(String),
-    Zoom(f32),
-    Remaining(bool),
-    Frame(bool),
-    Tray(bool),
-    DiscGrid(bool),
+#[derive(Clone)]
+pub struct Edit(Arc<dyn Fn(&mut config::Settings) + Send + Sync>);
+
+impl std::fmt::Debug for Edit {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("Edit")
+    }
+}
+
+pub fn set<T: Clone + Send + Sync + 'static>(f: fn(&mut config::Settings, T), v: T) -> Message {
+    Message::Set(Edit(Arc::new(move |s| f(s, v.clone()))))
 }
 
 #[derive(Clone, Debug)]
@@ -130,7 +125,7 @@ pub enum Message {
     LogOut,
     UseServer(String),
     DropServer(String),
-    Set(Set),
+    Set(Edit),
     ClearCache,
     Focus(bool),
     Shown(bool),
@@ -244,6 +239,7 @@ pub struct Login {
     pub error: String,
 }
 
+#[derive(Default)]
 pub struct App {
     pub session: Option<Session>,
     pub cfg: Config,
@@ -260,7 +256,6 @@ pub struct App {
     pub tray: Option<Box<dyn Any>>,
     win: Option<iced::window::Id>,
     os: (String, bool),
-    tx: tokio::sync::mpsc::UnboundedSender<Message>,
     pub queue: Vec<Song>,
     pub index: usize,
     pub shuffle: Option<Vec<usize>>,
@@ -288,7 +283,7 @@ pub struct App {
     pub volume: f32,
     pub muted: bool,
     pub login: Login,
-    pub visible: bool,
+    pub hidden: bool,
     pub modal: Option<(String, u8)>,
     pub new_pl_desc: String,
     pub shot: Option<String>,
@@ -301,12 +296,6 @@ pub struct App {
     pub disc_chip: u8,
     pub disc_old: bool,
     pub seek_preview: Option<f32>,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 fn shot_key(shot: Option<&str>) -> Option<String> {
@@ -577,91 +566,33 @@ impl App {
     pub fn new() -> Self {
         let cfg = Config::load();
         let shot = std::env::var("NAVIFY_SHOT").ok().filter(|s| !s.is_empty());
-        let (session, mut route) = cfg
+        let (session, route) = cfg
             .active
             .as_ref()
             .and_then(|id| cfg.servers.iter().find(|s| &s.id == id))
             .map(|s| (Some(Session::new(s.clone())), "home".to_string()))
             .unwrap_or((None, "login".to_string()));
-        if let Some(k) = shot_key(shot.as_deref()) {
-            route = if k == "login" { "login".into() } else { k };
-        }
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        *RX.lock().expect("event channel") = Some(rx);
-        let mut app = Self {
+        let route = shot_key(shot.as_deref()).unwrap_or(route);
+        Self {
             session,
             volume: cfg.settings.volume,
-            repeat: 0,
-            cfg,
+            history: vec![if route == "login" { "login" } else { "home" }.into()],
             route,
-            history: vec!["home".into()],
-            hi: 0,
-            cache: HashMap::new(),
-            seeds: HashMap::new(),
-            pending: HashSet::new(),
-            scrolls: HashMap::new(),
-            covers: Covers::default(),
             player: tokio::runtime::Handle::try_current().ok().map(|h| {
                 let (p, mut rx) = navify_audio::Player::new(h.clone(), Session::client());
-                let tx = tx.clone();
+                p.set_device(&cfg.settings.device);
                 h.spawn(async move {
                     while let Some(e) = rx.recv().await {
-                        let _ = tx.send(Message::Audio(e));
+                        let _ = CH.0.send(Message::Audio(e));
                     }
                 });
                 p
             }),
-            media: None,
-            os: Default::default(),
-            tx,
-            queue: Vec::new(),
-            index: 0,
-            shuffle: None,
-            source: String::new(),
-            ctx: String::new(),
-            playing: false,
-            position: 0.0,
-            scrobbled: false,
-            heard: 0.0,
-            since: None,
-            listen_seq: 0,
-            loaded: false,
-            starred: HashMap::new(),
-            ratings: HashMap::new(),
-            search_q: String::new(),
-            search_seq: 0,
-            menu: None,
-            toast: None,
-            toast_seq: 0,
-            save_seq: 0,
-            panel: 0,
-            lib_filter: 0,
-            muted: false,
-            login: Login::default(),
-            visible: true,
-            modal: None,
-            new_pl_desc: String::new(),
             lib_collapsed: shot.as_deref().is_some_and(|s| s.contains("collapsed")),
             shot,
-            new_pl: String::new(),
-            sel: None,
-            picked: BTreeSet::new(),
-            anchor: 0,
-            hover: None,
-            popular_all: false,
-            disc_chip: 0,
-            disc_old: false,
-            seek_preview: None,
-            tray: None,
-            win: None,
-        };
-        if app.route == "login" {
-            app.history = vec!["login".into()];
+            cfg,
+            ..Default::default()
         }
-        if let Some(p) = &app.player {
-            p.set_device(&app.cfg.settings.device);
-        }
-        app
     }
 
     pub fn current_song(&self) -> Option<&Song> {
@@ -707,12 +638,9 @@ impl App {
         self.toast_seq += 1;
         let n = self.toast_seq;
         self.toast = Some((n, text.to_string()));
-        Task::perform(
-            async move {
-                tokio::time::sleep(Duration::from_secs(3)).await;
-            },
-            move |_| Message::Toast(n, String::new()),
-        )
+        Task::perform(tokio::time::sleep(Duration::from_secs(3)), move |_| {
+            Message::Toast(n, String::new())
+        })
     }
 
     fn debounce_save_queue(&mut self) -> Task<Message> {
@@ -721,12 +649,7 @@ impl App {
         }
         self.save_seq += 1;
         let n = self.save_seq;
-        Task::perform(
-            async move {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            },
-            move |_| Message::SaveQ(n),
-        )
+        Task::perform(tokio::time::sleep(Duration::from_secs(5)), move |_| Message::SaveQ(n))
     }
 
     fn persist(&self) -> Task<Message> {
@@ -968,6 +891,10 @@ fn dominant(img: &::image::DynamicImage) -> Color {
     Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0))
 }
 
+fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {
+    Arc::new(Pager { items, total, offset })
+}
+
 fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
     let key2 = key.clone();
     Task::perform(
@@ -994,31 +921,19 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 "info" => Arc::new(s.artist_info(arg).await?),
                 "appears" => Arc::new(s.appears(arg).await?),
                 "playlist" => Arc::new(s.playlist(arg).await?),
-                "liked" => {
-                    let (v, t) = s.songs("starred", &[], offset, PAGE).await?;
-                    Arc::new(Pager { items: v, total: t, offset })
-                }
+                "liked" => pager(s.songs("starred", &[], offset, PAGE).await?, offset),
                 "albums" => {
-                    let (v, t) = s
-                        .albums(if arg.is_empty() { "newest" } else { arg }, &[], offset, PAGE)
-                        .await?;
-                    Arc::new(Pager { items: v, total: t, offset })
+                    let sort = if arg.is_empty() { "newest" } else { arg };
+                    pager(s.albums(sort, &[], offset, PAGE).await?, offset)
                 }
-                "artists" => {
-                    let (v, t) = s.artists(offset, PAGE).await?;
-                    Arc::new(Pager { items: v, total: t, offset })
-                }
-                "songs" => {
-                    let (v, t) = s
-                        .songs(if arg.is_empty() { "name" } else { arg }, &[], offset, PAGE)
-                        .await?;
-                    Arc::new(Pager { items: v, total: t, offset })
-                }
+                "artists" => pager(s.artists(offset, PAGE).await?, offset),
+                "songs" => pager(
+                    s.songs(if arg.is_empty() { "name" } else { arg }, &[], offset, PAGE).await?,
+                    offset,
+                ),
                 "genres" => Arc::new(s.genres().await?),
                 "genre" => {
-                    let (v, t) =
-                        s.albums("newest", &[("genre", arg.to_string())], offset, PAGE).await?;
-                    Arc::new(Pager { items: v, total: t, offset })
+                    pager(s.albums("newest", &[("genre", arg.into())], offset, PAGE).await?, offset)
                 }
                 "folders" => Arc::new(s.indexes().await?),
                 "folder" => Arc::new(s.directory(arg).await?),
@@ -1217,12 +1132,9 @@ impl App {
                 self.search_q = q;
                 self.search_seq += 1;
                 let n = self.search_seq;
-                Task::perform(
-                    async move {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                    },
-                    move |_| Message::SearchGo(n),
-                )
+                Task::perform(tokio::time::sleep(Duration::from_millis(250)), move |_| {
+                    Message::SearchGo(n)
+                })
             }
             Message::SearchGo(n) => {
                 if n != self.search_seq {
@@ -1659,63 +1571,40 @@ impl App {
                     .map_or_else(|e| self.toast(&e.to_string()), |()| Task::none());
                 Task::batch([self.persist(), gone])
             }
-            Message::Set(set) => {
-                let mut extra = Task::none();
+            Message::Set(Edit(f)) => {
                 self.menu = None;
-                let audio = matches!(
-                    set,
-                    Set::Rg(_)
-                        | Set::Preamp(_)
-                        | Set::Trans(_)
-                        | Set::Bitrate(_)
-                        | Set::Fallback(_)
-                );
-                let heard = matches!(set, Set::Speed(_) | Set::Scrobble(_));
-                match set {
-                    Set::Rg(v) => self.cfg.settings.replaygain = v,
-                    Set::Preamp(v) => self.cfg.settings.preamp_db = v,
-                    Set::Trans(v) => self.cfg.settings.transcode_format = v,
-                    Set::Xfade(v) => {
-                        self.cfg.settings.crossfade_secs = v;
-                        if let Some(p) = &self.player {
-                            p.set_crossfade(v);
-                        }
-                    }
-                    Set::Bitrate(v) => self.cfg.settings.transcode_max_bitrate = v,
-                    Set::Qsync(b) => self.cfg.settings.queue_sync = b,
-                    Set::Speed(v) => {
-                        self.cfg.settings.speed = v;
-                        if let Some(p) = &self.player {
-                            p.set_speed(v);
-                        }
-                    }
-                    Set::Scrobble(b) => self.cfg.settings.scrobble = b,
-                    Set::Remaining(b) => self.cfg.settings.remaining = b,
-                    Set::Frame(b) => self.cfg.settings.system_frame = b,
-                    Set::Tray(b) => self.cfg.settings.tray = b,
-                    Set::DiscGrid(b) => {
-                        self.cfg.settings.disc_grid = b;
-                        extra = self.disc_load();
-                    }
-                    Set::Fallback(v) => self.cfg.settings.fallback_db = v,
-                    Set::Device(d) => {
-                        if let Some(p) = &self.player {
-                            p.set_device(&d);
-                        }
-                        self.cfg.settings.device = d;
-                    }
-                    Set::Zoom(z) => {
-                        self.cfg.settings.zoom = z;
-                        let (w, h) = self.view_size();
-                        extra = self.update(Message::Resize(w, h));
-                    }
+                let o = self.cfg.settings.clone();
+                f(&mut self.cfg.settings);
+                let n = &self.cfg.settings;
+                if let Some(p) = &self.player {
+                    (o.crossfade_secs != n.crossfade_secs)
+                        .then(|| p.set_crossfade(n.crossfade_secs));
+                    (o.speed != n.speed).then(|| p.set_speed(n.speed));
+                    (o.device != n.device).then(|| p.set_device(&n.device));
                 }
+                let gain = |s: &config::Settings| {
+                    (
+                        s.replaygain.clone(),
+                        s.preamp_db,
+                        s.fallback_db,
+                        s.transcode_format.clone(),
+                        s.transcode_max_bitrate,
+                    )
+                };
+                let audio = gain(&o) != gain(n);
+                let heard = self.loaded && (o.speed, o.scrobble) != (n.speed, n.scrobble);
+                let (grid, zoom) = (o.disc_grid != n.disc_grid, o.zoom != n.zoom);
                 if audio && let (Some(p), Some(s)) = (&self.player, self.current_song()) {
                     p.set_gain(self.gain(s));
                     self.queue_next_refresh();
                 }
-                let l = if heard && self.loaded { self.listen(self.playing) } else { Task::none() };
-                Task::batch([extra, l, self.persist()])
+                let (w, h) = self.view_size();
+                Task::batch([
+                    if grid { self.disc_load() } else { Task::none() },
+                    if zoom { self.update(Message::Resize(w, h)) } else { Task::none() },
+                    if heard { self.listen(self.playing) } else { Task::none() },
+                    self.persist(),
+                ])
             }
             Message::ClearCache => {
                 self.covers.map.clear();
@@ -1737,7 +1626,7 @@ impl App {
                     .map(|m| Message::Shown(m != Some(true)))
             }
             Message::Shown(v) => {
-                self.visible = v;
+                self.hidden = !v;
                 Task::none()
             }
             Message::Close => {
@@ -1761,7 +1650,7 @@ impl App {
                     return iced::window::set_mode(id, iced::window::Mode::Windowed)
                         .chain(iced::window::gain_focus(id));
                 }
-                self.visible = false;
+                self.hidden = true;
                 Task::batch([
                     self.persist(),
                     self.update(Message::SaveQ(self.save_seq)),
@@ -1776,7 +1665,7 @@ impl App {
             Message::Win(id) => {
                 self.win = Some(id);
                 if self.tray.is_none() {
-                    self.tray = crate::tray::spawn(self.tx.clone())
+                    self.tray = crate::tray::spawn(CH.0.clone())
                         .inspect_err(|e| eprintln!("The tray icon is not available. {e}"))
                         .ok();
                 }
@@ -1978,7 +1867,7 @@ impl App {
             Message::VolUp => self.update(Message::Vol((self.volume + 0.1).min(1.0))),
             Message::Faster(up) => {
                 let n = (self.cfg.settings.speed * 10.0).round() + if up { 1.0 } else { -1.0 };
-                self.update(Message::Set(Set::Speed(n.clamp(5.0, 35.0) / 10.0)))
+                self.update(set(|s, v| s.speed = v, n.clamp(5.0, 35.0) / 10.0))
             }
             Message::Like => match self.current_song() {
                 Some(s) => {
@@ -2056,7 +1945,7 @@ impl App {
                 )
             }
             Message::MediaInit(hwnd) => {
-                let tx = self.tx.clone();
+                let tx = CH.0.clone();
                 let m = souvlaki::MediaControls::new(souvlaki::PlatformConfig {
                     display_name: "navify",
                     dbus_name: "navify",
@@ -2326,8 +2215,11 @@ fn shuffle(order: &mut [usize], keep_first: usize) {
 pub static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static MODS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-static RX: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Message>>> =
-    std::sync::Mutex::new(None);
+type Chan = (UnboundedSender<Message>, std::sync::Mutex<Option<UnboundedReceiver<Message>>>);
+static CH: std::sync::LazyLock<Chan> = std::sync::LazyLock::new(|| {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    (tx, std::sync::Mutex::new(Some(rx)))
+});
 
 impl App {
     pub fn view(&self) -> iced::Element<'_, Message> {
@@ -2432,7 +2324,7 @@ impl App {
             }
             _ => None,
         })];
-        if self.playing && self.visible {
+        if self.playing && !self.hidden {
             subs.push(
                 iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tick),
             );
@@ -2443,7 +2335,7 @@ impl App {
                     8,
                     |mut tx: iced::futures::channel::mpsc::Sender<_>| async move {
                         let mut rx =
-                            RX.lock().expect("event channel").take().expect("one listener");
+                            CH.1.lock().expect("event channel").take().expect("one listener");
                         while let Some(m) = rx.recv().await {
                             let _ = iced::futures::SinkExt::send(&mut tx, m).await;
                         }
