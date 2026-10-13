@@ -102,7 +102,7 @@ fn main() {
     let name = std::env::var("NAVIFY_SHOT")
         .unwrap_or_else(|_| "shot".into())
         .replace([':', '/', '|'], "_");
-    let path = format!("/tmp/navify-shots/{name}.png");
+    let path = format!("target/shots/{name}.png");
     image::save_buffer(
         &path,
         shot.as_ref(),
