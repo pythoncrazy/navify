@@ -561,42 +561,33 @@ fn play_all(route: &str) -> Message {
 
 fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
     let px = art_px(app);
-    let tw = app.main_w() - 3.0 * PAD - px;
-    let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
-    let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
-    let shadow = iced::Shadow {
-        color: BG.scale_alpha(0.5),
-        blur_radius: 60.0,
-        offset: iced::Vector::new(0.0, 4.0),
+    let title = |tw: f32| {
+        let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
+        let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
+        ell(p.title, tw, size, Black).line_height(1.1)
     };
+    let mut shadow = theme::SHADOW;
+    (shadow.blur_radius, shadow.offset) = (60.0, iced::Vector::new(0.0, 4.0));
     let r = [4.0, px / 2.0][usize::from(app.route.starts_with("artist:"))];
     let st = container::Style::default().shadow(shadow);
     let art = container(p.art).style(move |_| st.border(iced::border::rounded(r)));
     let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
     let hero: El = if let Some(url) = p.banner {
         let bh = app.main_w() / 3.0;
-        let tw = app.main_w() - 2.0 * PAD;
-        let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
-        let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
-        let title = ell(p.title, tw, size, Black).line_height(1.1);
         let img = app.covers.get(url, 640);
         let img = img.map(|h| image(h).width(Fill).height(bh));
         let img = img.map(|i| i.content_fit(iced::ContentFit::Fill));
-        let dim_stops = [
-            (0.0, CLEAR),
-            (0.5, BG.scale_alpha(0.1)),
-            (1.0, BG.scale_alpha(0.6)),
-        ];
+        let a = |x| BG.scale_alpha(x);
         let dim = container(Space::new()).width(Fill).height(bh);
-        let dim = dim.style(theme::down(&dim_stops));
-        let text = container(column![title, p.meta].spacing(8)).padding(PAD);
+        let dim = dim.style(theme::down(&[(0.0, CLEAR), (0.5, a(0.1)), (1.0, a(0.6))]));
+        let text = column![title(app.main_w() - 2.0 * PAD), p.meta].spacing(8);
+        let text = container(text).padding(PAD);
         let text = text.width(Fill).height(bh).align_bottom(bh);
         let back = container(Space::new()).width(Fill).height(bh).style(bg);
         stack![back].push(img).push(dim).push(text).into()
     } else {
-        let title = ell(p.title, tw, size, Black).line_height(1.1);
         let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
-        let info = column![kind, title, p.meta].spacing(8);
+        let info = column![kind, title(app.main_w() - 3.0 * PAD - px), p.meta].spacing(8);
         let hero = row![art, info].spacing(PAD).align_y(iced::Bottom);
         let hero = container(hero).padding(PAD).width(Fill);
         hero.height(px + 2.0 * PAD).style(bg).into()
@@ -860,8 +851,13 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let lw = (w * 0.4).clamp(280.0, 420.0);
     let ql = q.to_lowercase();
     let art = |a: &'a Artist| {
-        let to = go("artist", &a.id);
-        (&a.cover, &a.name, "Artist".into(), to, true)
+        (
+            &a.cover,
+            &a.name,
+            "Artist".into(),
+            go("artist", &a.id),
+            true,
+        )
     };
     let album = |x: &'a Album| {
         let s = format!("Album{DOT}{}", x.artist);
@@ -1078,10 +1074,8 @@ fn settings(app: &App) -> El<'_> {
     let frame_label = format!("{frame_label} (restart to apply)");
     let frame = cfg!(target_os = "linux").then(|| line(&frame_label, frame));
     let tray_label = "Keep Navify in the system tray when you close the window";
-    let tray_label = match app.tray {
-        Some(_) => tray_label.to_string(),
-        None => format!("{tray_label} (no system tray found)"),
-    };
+    let none = [" (no system tray found)", ""][usize::from(app.tray.is_some())];
+    let tray_label = format!("{tray_label}{none}");
     let tray = line(&tray_label, tog(st.tray, |s, b| s.tray = b));
     let server = |s: &Server| -> El<'_> {
         let active = app.cfg.active.as_ref() == Some(&s.id);
@@ -1159,11 +1153,9 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
         let body = column![bold("Lyrics preview", 16.0)].extend(lines.map(Into::into));
         let body = container(body.spacing(8).padding(16).width(Fill));
         let bg = head_color(app, &s.cover);
-        let b = button(body).padding(0).style(move |_, _| button::Style {
-            background: Some(bg.into()),
-            border: iced::Border::default().rounded(8),
-            ..Default::default()
-        });
+        let b = button(body)
+            .padding(0)
+            .style(theme::btn([bg; 3], [TEXT; 3], 8.0));
         b.on_press(Message::Nav("lyrics".into()))
     });
     let art = cover(app, &s.cover, w, false);
@@ -1202,10 +1194,8 @@ pub fn queue_panel(app: &App) -> El<'_> {
         t.padding(Padding::new(8.0).top(16))
     };
     let note = |t: String| container(sub(t, 14.0)).padding(8);
-    let from = match app.source.as_str() {
-        "" => "Next up".into(),
-        s => format!("Next from: {s}"),
-    };
+    let from = format!("Next from: {}", app.source);
+    let from = [&from, "Next up"][usize::from(app.source.is_empty())].to_string();
     let now = app.current_song().map(|s| queue_row(app, s, app.index, w));
     let now = now.map(|r| column![title("Now playing".into()), r]);
     let list = column![now, (!next.is_empty()).then(|| title(from))].extend(next);
@@ -1241,12 +1231,11 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let user = app.session.as_ref().map(|s| &s.server);
     let mine = |p: &Playlist| user.is_some_and(|s| s.user == p.owner);
     let star = |id: &str, server: bool, yes: &str, no: &str| {
-        let on = app.is_starred(id, server);
-        let m = Message::Star(vec![id.into()], !on);
+        let k = usize::from(app.is_starred(id, server));
         it(
-            [i::SAVE, i::SAVED][usize::from(on)],
-            [no, yes][usize::from(on)],
-            m,
+            [i::SAVE, i::SAVED][k],
+            [no, yes][k],
+            Message::Star(vec![id.into()], k == 0),
         )
     };
     let ctx = |kind: &str, id: &str| {
@@ -1295,10 +1284,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             };
             let pls = lib.into_iter().flat_map(|l| l.playlists.iter());
             let pls = pls.filter(|p| mine(p));
-            let add = |p: &Playlist| {
-                let m = Message::PlAdd(p.id.clone(), ids(s));
-                it(i::MUSIC, &p.name, m)
-            };
+            let add = |p: &Playlist| it(i::MUSIC, &p.name, Message::PlAdd(p.id.clone(), ids(s)));
             let new = it(i::PLUS, "New playlist", Message::PlNew(name, ids(s)));
             [new, None].into_iter().chain(pls.map(add)).collect()
         }
