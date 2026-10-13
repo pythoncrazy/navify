@@ -2371,6 +2371,7 @@ dependencies = [
  "souvlaki",
  "tiny-skia",
  "tokio",
+ "wayland-client",
  "windows-native-keyring-store",
 ]
 

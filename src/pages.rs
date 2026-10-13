@@ -1613,7 +1613,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             ),
             if cfg!(target_os = "linux") {
                 line(
-                    "Use the system title bar on GNOME (restart to apply)",
+                    "Use the system title bar on Wayland desktops that do not draw one (restart to apply)",
                     tog(st.system_frame, |b| Message::Set(Set::Frame(b))),
                 )
             } else {

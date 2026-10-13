@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use iced::{Font, Size, Theme, application, window};
 
 use navify::app::App;
@@ -21,6 +23,27 @@ impl iced::Executor for Rt {
     fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
         let _g = self.0.enter();
         f()
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct Probe;
+
+#[cfg(target_os = "linux")]
+impl
+    wayland_client::Dispatch<
+        wayland_client::protocol::wl_registry::WlRegistry,
+        wayland_client::globals::GlobalListContents,
+    > for Probe
+{
+    fn event(
+        _: &mut Self,
+        _: &wayland_client::protocol::wl_registry::WlRegistry,
+        _: wayland_client::protocol::wl_registry::Event,
+        _: &wayland_client::globals::GlobalListContents,
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
     }
 }
 
@@ -60,11 +83,21 @@ fn main() -> iced::Result {
     }
     let cfg = Config::load();
     #[cfg(target_os = "linux")]
-    if cfg.settings.system_frame
-        && std::env::var_os("DISPLAY").is_some()
-        && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "GNOME"))
+    if ["DISPLAY", "WAYLAND_DISPLAY"].iter().all(|v| std::env::var_os(v).is_some())
+        && std::env::var_os("WAYLAND_SOCKET").is_none()
     {
-        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+        use wayland_client::{Connection, globals::registry_queue_init};
+        let ssd = Connection::connect_to_env().ok().and_then(|c| {
+            let (globals, _) = registry_queue_init::<Probe>(&c).ok()?;
+            Some(
+                globals
+                    .contents()
+                    .with_list(|l| l.iter().any(|g| g.interface == "zxdg_decoration_manager_v1")),
+            )
+        });
+        if ssd.is_none() || (ssd == Some(false) && cfg.settings.system_frame) {
+            unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+        }
     }
     let icon = image::load_from_memory(ICON).expect("the bundled icon is a PNG").into_rgba8();
     let ((w, h), s) = (cfg.settings.window, cfg.settings.zoom);
