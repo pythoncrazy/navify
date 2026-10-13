@@ -1041,11 +1041,11 @@ fn open(
     want: u32,
     sh: &Arc<Shared>,
     tx: &UnboundedSender<Event>,
-) -> Result<(cpal::Stream, Producer<f32>, u32), String> {
+) -> Res<(cpal::Stream, Producer<f32>, u32)> {
     let host = cpal::default_host();
     let dev = match id {
         "" => host.default_output_device(),
-        id => host.device_by_id(&id.parse().map_err(|e: cpal::Error| e.to_string())?),
+        id => host.device_by_id(&id.parse()?),
     }
     .ok_or("The audio output device is not available. Select a device in Settings.")?;
     let sup = dev
@@ -1054,8 +1054,7 @@ fn open(
         .flatten()
         .find(|c| c.channels() == 2 && (c.min_sample_rate()..=c.max_sample_rate()).contains(&want))
         .map(|c| c.with_sample_rate(want))
-        .map_or_else(|| dev.default_output_config(), Ok)
-        .map_err(|e| e.to_string())?;
+        .map_or_else(|| dev.default_output_config(), Ok)?;
     let rate = sup.sample_rate();
     let buffer_size = match *sup.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
@@ -1071,34 +1070,32 @@ fn open(
         sample_rate: rate,
         buffer_size,
     };
-    let stream = dev
-        .build_output_stream(
-            config,
-            move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let stale = sh.flush.load(Relaxed).saturating_sub(read) as usize;
-                if stale > 0
-                    && let Ok(c) = cons.read_chunk(stale.min(cons.slots()))
-                {
-                    read += c.len() as u64;
-                    c.commit_all();
-                }
-                let n = cons.pop_partial_slice(out).0.len();
-                out[n..].fill(0.0);
-                let target = get(&sh.volume).powi(3);
-                for f in out.as_chunks_mut::<2>().0 {
-                    vol += (target - vol) * ramp;
-                    *f = [f[0] * vol, f[1] * vol];
-                }
-                read += n as u64;
-                sh.read.store(read, Relaxed);
-                if cons.slots() < half {
-                    me.unpark();
-                }
-            },
-            move |e| drop(etx.send(Event::Error(e.to_string()))),
-            None,
-        )
-        .map_err(|e| e.to_string())?;
+    let stream = dev.build_output_stream(
+        config,
+        move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let stale = sh.flush.load(Relaxed).saturating_sub(read) as usize;
+            if stale > 0
+                && let Ok(c) = cons.read_chunk(stale.min(cons.slots()))
+            {
+                read += c.len() as u64;
+                c.commit_all();
+            }
+            let n = cons.pop_partial_slice(out).0.len();
+            out[n..].fill(0.0);
+            let target = get(&sh.volume).powi(3);
+            for f in out.as_chunks_mut::<2>().0 {
+                vol += (target - vol) * ramp;
+                *f = [f[0] * vol, f[1] * vol];
+            }
+            read += n as u64;
+            sh.read.store(read, Relaxed);
+            if cons.slots() < half {
+                me.unpark();
+            }
+        },
+        move |e| drop(etx.send(Event::Error(e.to_string()))),
+        None,
+    )?;
     Ok((stream, prod, rate))
 }
 
@@ -1109,6 +1106,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         (0u64, false, None::<Instant>, String::new());
     let mut buf = vec![0f32; CHUNK * 2];
     let mut marks = VecDeque::<(u64, Option<f32>, Option<Event>)>::new();
+    let fail = |e: String| drop(tx.send(Event::Error(e)));
     loop {
         let mut play = None;
         loop {
@@ -1135,11 +1133,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 Cmd::Next(t) => mix.queue(&io, t),
                 Cmd::Gain(g) => mix.cur.iter_mut().for_each(|c| c.track.gain = g),
                 Cmd::Device(d) => (dev, out) = (d, None),
-                Cmd::Seek(s) => {
-                    if let Err(e) = mix.seek(&io, s) {
-                        let _ = tx.send(Event::Error(e));
-                    }
-                }
+                Cmd::Seek(s) => mix.seek(&io, s).unwrap_or_else(fail),
                 Cmd::Stop => {
                     (mix.cur, mix.inc) = (None, None);
                     sh.pos.store(0, Relaxed);
@@ -1156,10 +1150,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 (None, Some(h)) => h.join().expect("open thread"),
                 (None, None) => Source::open(t, &io, mix.rate, at),
             };
-            match s {
-                Ok(s) => mix.cur = Some(s),
-                Err(e) => drop(tx.send(Event::Error(e))),
-            }
+            mix.cur = s.map_err(fail).ok();
             if mix.cur.as_ref().is_some_and(|c| c.rate != mix.rate as f64) {
                 out = None;
             }
@@ -1168,24 +1159,19 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             && !paused
             && let Some(c) = &mix.cur
         {
-            let pos = get(&sh.pos);
-            let r = open(&dev, c.rate as u32, &sh, &tx).and_then(|(s, p, rate)| {
-                mix.rate = rate;
-                if !fresh {
-                    mix.seek(&io, pos)?;
-                }
-                Ok((s, p))
-            });
-            match r {
-                Ok(o) => {
-                    (written, running, idle, out) = (0, false, None, Some(o));
+            match open(&dev, c.rate as u32, &sh, &tx) {
+                Ok((s, p, rate)) => {
+                    (written, running, idle, out, mix.rate) = (0, false, None, Some((s, p)), rate);
                     sh.read.store(0, Relaxed);
                     sh.flush.store(0, Relaxed);
                     marks.clear();
+                    if !fresh {
+                        mix.seek(&io, get(&sh.pos)).unwrap_or_else(fail);
+                    }
                 }
                 Err(e) => {
                     (mix.cur, mix.inc) = (None, None);
-                    let _ = tx.send(Event::Error(e));
+                    fail(e.to_string());
                 }
             }
         }
@@ -1219,7 +1205,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         {
             running = want;
             if let Err(e) = if want { s.play() } else { s.pause() } {
-                let _ = tx.send(Event::Error(e.to_string()));
+                fail(e.to_string());
             }
         }
         let left = idle.get_or_insert_with(Instant::now).elapsed();
