@@ -135,5 +135,69 @@ navify-audio.opt-level = 3
 
 [profile.release]
 lto = "thin"
+opt-level = "s"
 strip = true
 panic = "abort"
+
+[profile.release.package.navify-audio]
+opt-level = 3
+
+[profile.release.package.symphonia-core]
+opt-level = 3
+
+[profile.release.package.symphonia-bundle-flac]
+opt-level = 3
+
+[profile.release.package.symphonia-codec-aac]
+opt-level = 3
+
+[profile.release.package.symphonia-codec-alac]
+opt-level = 3
+
+[profile.release.package.symphonia-codec-pcm]
+opt-level = 3
+
+[profile.release.package.symphonia-codec-vorbis]
+opt-level = 3
+
+[profile.release.package.symphonia-format-mkv]
+opt-level = 3
+
+[profile.release.package.symphonia-format-ogg]
+opt-level = 3
+
+[profile.release.package.symphonia-format-riff]
+opt-level = 3
+
+[profile.release.package.rubato]
+opt-level = 3
+
+[profile.release.package.realfft]
+opt-level = 3
+
+[profile.release.package.rustfft]
+opt-level = 3
+
+[profile.release.package.rusty-opus]
+opt-level = 3
+
+[profile.release.package.tiny-skia]
+opt-level = 3
+
+[profile.release.package.tiny-skia-path]
+opt-level = 3
+
+[profile.release.package.iced_tiny_skia]
+opt-level = 3
+
+[profile.release.package.zune-jpeg]
+opt-level = 3
+
+[profile.release.package.png]
+opt-level = 3
+
+[profile.release.package.fdeflate]
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+opt-level = 3
