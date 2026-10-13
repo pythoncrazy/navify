@@ -203,10 +203,8 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
     let added = (c.2 > 0.0).then(|| sub(date(&s.created), 14.0).width(c.2));
     let tail = row![container(heart).width(32), dur, container(more).width(32)];
-    let r = row![idx, name]
-        .push((c.1 > 0.0).then_some(second))
-        .push(added);
-    let r = r.push(tail.align_y(Center));
+    let r = row![idx, name].push((c.1 > 0.0).then_some(second));
+    let r = r.push(added).push(tail.align_y(Center));
     let r = r.spacing(16).padding([0, 16]).height(ROW).align_y(Center);
     let a = [[0.0, 0.1], [0.3; 2]][usize::from(sel)][usize::from(hot)];
     let (k, enter) = (key.to_string(), hk.clone());
@@ -282,28 +280,20 @@ fn grid_head<'a>(title: &str, chips: Option<El<'a>>) -> El<'a> {
     container(col).padding(p).height(GRID_Y).into()
 }
 
-fn kind(a: &Album) -> &'static str {
+fn kind(a: &Album) -> (&'static str, &'static str) {
     let t = |k: &str| a.release_types.iter().any(|x| x.eq_ignore_ascii_case(k));
     match () {
-        _ if a.compilation || t("compilation") => "Compilation",
-        _ if t("single") => "Single",
-        _ if t("ep") => "EP",
-        _ => "Album",
-    }
-}
-
-fn group(a: &Album) -> &'static str {
-    match kind(a) {
-        "Album" => "album",
-        "Compilation" => "compilation",
-        _ => "single",
+        _ if a.compilation || t("compilation") => ("Compilation", "compilation"),
+        _ if t("single") => ("Single", "single"),
+        _ if t("ep") => ("EP", "single"),
+        _ => ("Album", "album"),
     }
 }
 
 fn year_kind(a: &Album) -> String {
     match a.year {
-        0 => kind(a).into(),
-        y => format!("{y}{DOT}{}", kind(a)),
+        0 => kind(a).0.into(),
+        y => format!("{y}{DOT}{}", kind(a).0),
     }
 }
 
@@ -319,7 +309,7 @@ pub fn disc_shelf<'a>(app: &App, albums: &'a [Album]) -> Vec<&'a Album> {
     match app.disc_chip {
         0 if v.len() > 1 => v[1..].sort_by_key(|a| std::cmp::Reverse(a.play_count)),
         0 => {}
-        n => v.retain(|a| group(a) == GROUPS[n as usize].0),
+        n => v.retain(|a| kind(a).1 == GROUPS[n as usize].0),
     }
     v.truncate(app.grid().0);
     v
@@ -333,7 +323,7 @@ fn disc_args(app: &App) -> Option<(&str, &str, &Artist, &[Album])> {
 }
 
 fn disc_rows<'a>(app: &'a App, albums: &'a [Album], f: &str) -> Vec<(f32, f32, &'a Album)> {
-    let mut v = by_date(albums.iter().filter(|a| f == "all" || group(a) == f));
+    let mut v = by_date(albums.iter().filter(|a| f == "all" || kind(a).1 == f));
     if app.disc_old {
         v.reverse();
     }
@@ -367,7 +357,7 @@ pub fn disc_view(app: &App) -> Vec<&Album> {
 
 fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
     let grid_on = app.cfg.settings.disc_grid;
-    let has = |g: &str| g == "all" || albums.iter().any(|x| group(x) == g);
+    let has = |g: &str| g == "all" || albums.iter().any(|x| kind(x).1 == g);
     let chips = GROUPS.iter().filter(|(g, _)| has(g)).map(|(g, l)| {
         let label = if *g == "all" { "All" } else { l };
         theme::chip_btn(label, f == *g, go("discography", &format!("{id}:{g}")))
@@ -421,7 +411,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
     let (lo, hi) = span(off - top, off + view - top, ROW, n, 6);
     let year = (al.year > 0).then(|| al.year.to_string());
     let count = Some(plural(al.song_count, "song"));
-    let meta = [Some(kind(al).to_string()), year, count]
+    let meta = [Some(kind(al).0.to_string()), year, count]
         .into_iter()
         .flatten();
     let meta = meta.collect::<Vec<_>>().join(DOT);
@@ -630,7 +620,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         let heart = heart_btn(&a.id, app.is_starred(&a.id, a.starred), 32.0);
         let p = Page {
             art: cover(app, &a.cover, 300, px, false),
-            kind: kind(a),
+            kind: kind(a).0,
             title: &a.name,
             meta: meta(lead.align_y(Center), rest),
             color: head_color(app, &a.cover),
@@ -757,7 +747,7 @@ fn artist(app: &App) -> Option<El<'_>> {
     let rows = rows.map(|t| container(t).padding([0.0, PAD]).into());
     let popular = column![heading("Popular", None)].extend(rows).push(more);
     let k = app.grid().0;
-    let has = |g: &str| albums.iter().any(|x| group(x) == g);
+    let has = |g: &str| albums.iter().any(|x| kind(x).1 == g);
     let chips = GROUPS.iter().enumerate();
     let chips = chips.filter(|(n, (g, _))| *n == 0 || has(g));
     let chips = chips.map(|(n, (_, l))| {
@@ -765,7 +755,7 @@ fn artist(app: &App) -> Option<El<'_>> {
         theme::chip_btn(l, app.disc_chip as usize == n, m)
     });
     let latest = |n: usize, x: &Album| match (n, app.disc_chip) {
-        (0, 0) => format!("Latest Release{DOT}{}", kind(x)),
+        (0, 0) => format!("Latest Release{DOT}{}", kind(x).0),
         _ => year_kind(x),
     };
     let shelf_cards = disc_shelf(app, albums).into_iter().enumerate();
@@ -800,12 +790,8 @@ fn artist(app: &App) -> Option<El<'_>> {
         color: head_color(app, &a.cover),
         extra: vec![follow.into(), dots(MenuKind::Artist(a.clone()))],
     };
-    Some(page(
-        app,
-        p,
-        body.into(),
-        BAR + 600.0 + 2.0 * (app.grid().1 + 100.0),
-    ))
+    let height = BAR + 600.0 + 2.0 * (app.grid().1 + 100.0);
+    Some(page(app, p, body.into(), height))
 }
 
 fn strip_html(s: &str) -> String {
@@ -876,17 +862,14 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let albums = r.albums.iter().take(k);
     let albums = albums.map(|a| album_card(app, a, format!("{}{DOT}{}", a.year, a.artist)));
     let artists = r.artists.iter().take(k).map(|a| artist_card(app, a));
-    Some(
-        column![
-            container(row![top, songs].spacing(PAD)).padding([0.0, PAD]),
-            shelf("Artists", None, artists),
-            shelf("Albums", None, albums),
-            shelf("Playlists", None, pls.map(|p| playlist_card(app, p))),
-        ]
-        .spacing(40)
-        .padding([PAD, 0.0])
-        .into(),
-    )
+    let best = container(row![top, songs].spacing(PAD)).padding([0.0, PAD]);
+    let col = column![
+        best,
+        shelf("Artists", None, artists),
+        shelf("Albums", None, albums),
+        shelf("Playlists", None, pls.map(|p| playlist_card(app, p))),
+    ];
+    Some(col.spacing(40).padding([PAD, 0.0]).into())
 }
 
 fn library<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
@@ -960,11 +943,8 @@ fn lyrics(app: &App) -> El<'_> {
     let at = |t: u64| t as i64 + l.offset;
     let fits = l.lines.iter().filter_map(|x| x.0).all(|t| at(t) <= end);
     let synced = l.synced && (end <= 0 || fits);
-    let cur = l
-        .lines
-        .iter()
-        .rposition(|x| x.0.is_some_and(|t| at(t) <= ms));
-    let cur = cur.unwrap_or(0);
+    let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
+    let cur = l.lines.iter().rposition(past).unwrap_or(0);
     let lines = l.lines.iter().enumerate().map(|(n, (t, line))| -> El<'_> {
         let fg = match n {
             _ if !synced || n == cur => TEXT,

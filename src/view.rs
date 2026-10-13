@@ -36,11 +36,13 @@ pub fn focusable<'a>(
     radius: f32,
     id: Option<&'static str>,
 ) -> El<'a> {
+    use iced::advanced::renderer::{Quad, Style};
     use iced::advanced::widget::{Id, Operation, Tree, Widget, operation::Focusable, tree};
-    use iced::advanced::{Clipboard, Layout, Renderer, Shell, layout, renderer};
+    use iced::advanced::{Clipboard, Layout, Renderer, Shell, layout};
     use iced::keyboard::{Event::KeyPressed, Key, key::Named};
     use iced::{Event, Length, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction};
     type R = iced::Renderer;
+    type T = iced::Theme;
     struct Focus<'a>(El<'a>, Option<Message>, f32, Option<Id>);
     #[derive(Default)]
     struct Ring(bool);
@@ -55,33 +57,19 @@ pub fn focusable<'a>(
             self.0 = false;
         }
     }
-    impl Widget<Message, iced::Theme, R> for Focus<'_> {
+    impl Widget<Message, T, R> for Focus<'_> {
         fn size(&self) -> Size<Length> {
             self.0.as_widget().size()
         }
         fn layout(&mut self, t: &mut Tree, r: &R, l: &layout::Limits) -> layout::Node {
             self.0.as_widget_mut().layout(&mut t.children[0], r, l)
         }
-        fn draw(
-            &self,
-            t: &Tree,
-            r: &mut R,
-            th: &iced::Theme,
-            s: &renderer::Style,
-            l: Layout,
-            c: Cursor,
-            v: &Rect,
-        ) {
+        fn draw(&self, t: &Tree, r: &mut R, th: &T, s: &Style, l: Layout, c: Cursor, v: &Rect) {
             self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
-            let e = self.2.min(4.0);
-            let border = iced::border::rounded(self.2 + e).color(TEXT).width(2);
-            let bounds = l.bounds().expand(e);
+            let (e, mut q) = (self.2.min(4.0), Quad::default());
+            q.border = iced::border::rounded(self.2 + e).color(TEXT).width(2);
+            q.bounds = l.bounds().expand(e);
             if t.state.downcast_ref::<Ring>().0 {
-                let q = renderer::Quad {
-                    bounds,
-                    border,
-                    ..Default::default()
-                };
                 r.fill_quad(q, Color::TRANSPARENT);
             }
         }
@@ -112,9 +100,8 @@ pub fn focusable<'a>(
             sh: &mut Shell<Message>,
             v: &Rect,
         ) {
-            self.0
-                .as_widget_mut()
-                .update(&mut t.children[0], e, l, c, r, cb, sh, v);
+            let w = self.0.as_widget_mut();
+            w.update(&mut t.children[0], e, l, c, r, cb, sh, v);
             let ring = t.state.downcast_mut::<Ring>();
             let key = |k| matches!(e, Event::Keyboard(KeyPressed { key, .. }) if *key == k);
             let go = key(Key::Named(Named::Enter)) || key(Key::Named(Named::Space));
@@ -140,9 +127,8 @@ pub fn focusable<'a>(
             v: &Rect,
             r: &R,
         ) -> Interaction {
-            self.0
-                .as_widget()
-                .mouse_interaction(&t.children[0], l, c, v, r)
+            let w = self.0.as_widget();
+            w.mouse_interaction(&t.children[0], l, c, v, r)
         }
     }
     Element::new(Focus(c.into(), msg, radius, id.map(Id::from)))
@@ -321,7 +307,8 @@ fn lib_panel(app: &App) -> El<'_> {
         .into_iter()
         .filter(|p| p.0)
         .map(|(_, c, (bg, fg), t, r)| {
-            item(art(48.0, i(c, 0.0).color(fg), bg), t, "Library", r.into())
+            let art = art(48.0, i(c, 0.0).color(fg), bg);
+            item(art, t, "Library", r.into())
         });
     let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
         let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
@@ -428,13 +415,9 @@ fn player_bar(app: &App) -> El<'_> {
     let words = [Message::Nav("lyrics".into()), Message::Back];
     let words = words[usize::from(lyrics)].clone();
     let mute = if app.muted { "Unmute" } else { "Mute" };
+    let np = Message::Panel(1);
     let right = row![
-        side(
-            ic(i::PR),
-            app.panel == 1,
-            "Now playing view",
-            Message::Panel(1)
-        ),
+        side(ic(i::PR), app.panel == 1, "Now playing view", np),
         side(ic(i::LYRICS), lyrics, "Lyrics", words),
         side(ic(i::QUEUE), app.panel == 2, "Queue", Message::Panel(2)),
         tip(speed, "Change speed", Top),
