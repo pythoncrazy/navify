@@ -38,7 +38,7 @@ serde_json = "1.0.151"
 tokio = { version = "1.53.2", features = ["fs", "macros", "rt-multi-thread", "sync"] }
 iced = { version = "0.14.0", default-features = false, features = [
     "advanced",
-    "wgpu",
+    "wgpu-bare",
     "tiny-skia",
     "tokio",
     "image-without-codecs",
@@ -59,6 +59,17 @@ features = ["crypto-rust"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client = "0.31.15"
+wgpu = { version = "27.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "vulkan"] }
+
+[target.'cfg(target_os = "macos")'.dependencies.wgpu]
+version = "27.0.1"
+default-features = false
+features = ["std", "parking_lot", "wgsl", "metal"]
+
+[target.'cfg(target_os = "windows")'.dependencies.wgpu]
+version = "27.0.1"
+default-features = false
+features = ["std", "parking_lot", "wgsl", "dx12"]
 
 [target.'cfg(target_os = "macos")'.dependencies.apple-native-keyring-store]
 version = "1.0.2"
@@ -86,12 +97,12 @@ proc-macro2.opt-level = 0
 navify-audio.opt-level = 3
 
 [profile.release]
-lto = "thin"
-codegen-units = 16
+incremental = true
 strip = true
 panic = "abort"
 
 [profile.dist]
 inherits = "release"
+incremental = false
 lto = "fat"
 codegen-units = 1
