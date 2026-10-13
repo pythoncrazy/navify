@@ -1,21 +1,19 @@
-use std::{
-    collections::hash_map::RandomState,
-    hash::{BuildHasher, BuildHasherDefault, DefaultHasher},
-    io::{Error as IoError, ErrorKind},
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, ensure};
 use bytes::Bytes;
-use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
+use md5::Digest;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tokio::fs;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Server {
     pub id: String,
     pub name: String,
@@ -25,7 +23,6 @@ pub struct Server {
     pub token: String,
     pub jwt: String,
     pub native: bool,
-    #[serde(default)]
     pub ext: Vec<String>,
 }
 
@@ -50,7 +47,7 @@ pub struct Rg {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default)]
 pub struct Genre {
     #[serde(alias = "value")]
     pub name: String,
@@ -61,11 +58,9 @@ pub struct Genre {
 pub struct Artist {
     pub id: String,
     pub name: String,
-    #[serde(rename = "coverArt")]
     pub cover: String,
     pub album_count: u32,
     pub song_count: u32,
-    #[serde(deserialize_with = "de_starred")]
     pub starred: bool,
 }
 
@@ -83,14 +78,11 @@ pub struct Album {
     pub song_count: u32,
     pub duration: f32,
     pub play_count: u32,
-    #[serde(deserialize_with = "de_starred")]
     pub starred: bool,
-    #[serde(rename = "coverArt")]
     pub cover: String,
     #[serde(alias = "isCompilation")]
     pub compilation: bool,
     pub release_types: Vec<String>,
-    #[serde(deserialize_with = "de_date")]
     pub release_date: String,
     pub artists: Vec<Artist>,
     pub album_artists: Vec<Artist>,
@@ -113,11 +105,9 @@ pub struct Song {
     pub play_count: u32,
     #[serde(alias = "rating")]
     pub user_rating: u8,
-    #[serde(deserialize_with = "de_starred")]
     pub starred: bool,
     #[serde(alias = "createdAt")]
     pub created: String,
-    #[serde(rename = "coverArt")]
     pub cover: String,
     pub is_dir: bool,
     pub artists: Vec<Artist>,
@@ -136,7 +126,6 @@ pub struct Playlist {
     pub public: bool,
     pub song_count: u32,
     pub duration: f32,
-    #[serde(rename = "coverArt")]
     pub cover: String,
 }
 
@@ -153,123 +142,92 @@ pub struct Info {
 pub struct Lyrics {
     pub synced: bool,
     pub offset: i64,
-    #[serde(rename = "line", deserialize_with = "de_lines")]
+    #[serde(rename = "line")]
     pub lines: Vec<(Option<u64>, String)>,
 }
 
-fn de_starred<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
-    Ok(match Value::deserialize(d)? {
-        Value::Bool(b) => b,
-        Value::String(s) => !s.is_empty(),
-        _ => false,
-    })
-}
+type Trio = (Vec<Artist>, Vec<Album>, Vec<Song>);
+type Paged<T> = Result<(Vec<T>, usize)>;
+type Q<'a> = [(&'a str, &'a str)];
 
-fn de_date<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
-    Ok(match Value::deserialize(d)? {
-        Value::String(s) => s,
-        Value::Object(m) => format!(
-            "{:04}-{:02}-{:02}",
-            m.get("year").and_then(Value::as_u64).unwrap_or_default(),
-            m.get("month").and_then(Value::as_u64).unwrap_or_default(),
-            m.get("day").and_then(Value::as_u64).unwrap_or_default()
-        ),
-        _ => String::new(),
-    })
-}
+pub trait Data: DeserializeOwned + Default {}
+impl<T: DeserializeOwned + Default> Data for T {}
 
-fn de_lines<'de, D: Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<Vec<(Option<u64>, String)>, D::Error> {
-    Ok(Vec::<Value>::deserialize(d)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|l| {
-            (
-                l["start"].as_u64(),
-                l["value"].as_str().unwrap_or_default().to_string(),
-            )
-        })
-        .collect())
-}
+const SORTS: [[&str; 4]; 11] = [
+    ["recent", "recent", "play_date", "play_date"],
+    ["newest", "newest", "recently_added", "created_at"],
+    ["frequent", "frequent", "play_count", "play_count"],
+    ["random", "random", "random", "random"],
+    ["name", "alphabeticalByName", "name", "title"],
+    ["artist", "alphabeticalByArtist", "album_artist", "artist"],
+    ["album", "alphabeticalByName", "name", "album"],
+    ["starred", "starred", "starred_at", "starred_at"],
+    ["year", "byYear", "max_year", "year"],
+    ["genre", "byGenre", "genre", "genre"],
+    ["rating", "highest", "rating", "rating"],
+];
 
-fn vlist<T: DeserializeOwned>(v: &Value, key: &str) -> Result<Vec<T>> {
-    parse(v[key].clone())
-}
-
-fn index(v: &Value) -> Result<Vec<Artist>> {
-    let lists: Vec<Vec<Artist>> = v
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|i| vlist(i, "artist"))
-        .collect::<Result<_>>()?;
-    Ok(lists.concat())
-}
-
-pub fn normalize(v: &mut Value) {
+fn normalize(v: &mut Value) {
     match v {
         Value::Array(a) => a.iter_mut().for_each(normalize),
         Value::Object(m) => {
+            m.retain(|_, v| !v.is_null());
             if let Some(Value::Object(p)) = m.remove("participants") {
-                for (src, dst) in [("artist", "artists"), ("albumartist", "albumArtists")] {
-                    if let Some(list) = p.get(src)
-                        && m.get(dst)
-                            .and_then(Value::as_array)
-                            .is_none_or(|a| a.is_empty())
-                    {
-                        m.insert(dst.to_string(), list.clone());
+                for (role, key) in [("artist", "artists"), ("albumartist", "albumArtists")] {
+                    if let Some(list) = p.get(role) {
+                        m.insert(key.into(), list.clone());
                     }
                 }
             }
             if let Some(Value::Object(rg)) = m.remove("replayGain") {
                 m.extend(rg);
             }
-            if !m.contains_key("releaseTypes")
-                && let Some(t) = m
-                    .get("tags")
-                    .and_then(|t| t.get("releasetype"))
-                    .cloned()
-                    .or_else(|| {
-                        m.get("mbzAlbumType").and_then(Value::as_str).map(|s| {
-                            s.split(['/', ';', ','])
-                                .map(|x| Value::from(x.trim()))
-                                .collect()
-                        })
-                    })
-            {
-                m.insert("releaseTypes".to_string(), t);
+            let tags = m.get("tags").and_then(|t| t.get("releasetype")).cloned();
+            let mbz = m.get("mbzAlbumType").and_then(Value::as_str).map(|t| {
+                let types = t.split(['/', ';', ',']);
+                types.map(|x| Value::from(x.trim())).collect()
+            });
+            if let Some(t) = tags.or(mbz).filter(|_| !m.contains_key("releaseTypes")) {
+                m.insert("releaseTypes".into(), t);
+            }
+            if let Some(Value::Object(d)) = m.get("releaseDate") {
+                let n = |k| d.get(k).and_then(Value::as_u64).unwrap_or_default();
+                let date = format!("{:04}-{:02}-{:02}", n("year"), n("month"), n("day"));
+                m.insert("releaseDate".into(), date.into());
+            }
+            if let Some(s) = m.get_mut("starred").filter(|s| !s.is_boolean()) {
+                *s = s.as_str().is_some_and(|s| !s.is_empty()).into();
+            }
+            if let Some(Value::Array(lines)) = m.get_mut("line") {
+                for l in lines.iter_mut().filter(|l| l.is_object()) {
+                    *l = json!([l["start"], l["value"].as_str().unwrap_or_default()]);
+                }
             }
             if let Some(id) = m.remove("mediaFileId") {
                 m.insert("id".into(), id);
             }
-            if m.get("coverArt")
-                .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
-                && m.get("hasCoverArt").and_then(Value::as_bool) != Some(false)
-                && let Some(id) = m.get("id").and_then(Value::as_str).map(str::to_string)
-            {
-                m.insert("coverArt".to_string(), Value::String(id));
+            let has = m.get("hasCoverArt") != Some(&false.into());
+            let id = m.get("id").filter(|id| has && id.is_string()).cloned();
+            if let Some(c) = m.remove("coverArt").filter(|c| c != "").or(id) {
+                m.insert("cover".into(), c);
             }
-            for v in m.values_mut() {
-                normalize(v);
-            }
+            m.values_mut().for_each(normalize);
         }
         _ => {}
     }
 }
 
-pub fn parse<T: DeserializeOwned + Default>(mut v: Value) -> Result<T> {
+pub fn parse<T: Data>(mut v: Value) -> Result<T> {
     normalize(&mut v);
     if v.is_null() {
-        Ok(T::default())
-    } else {
-        serde_json::from_value(v)
-            .map_err(|e| anyhow::anyhow!("The server returned an unexpected response: {e}"))
+        return Ok(T::default());
     }
+    let e = |e| anyhow!("The server returned an unexpected response: {e}");
+    serde_json::from_value(v).map_err(e)
 }
 
 fn net_err(e: reqwest::Error) -> anyhow::Error {
-    anyhow::anyhow!(match () {
+    anyhow!(match () {
         _ if e.is_timeout() => "The request timed out.",
         _ if e.is_connect() => "Could not connect to the server.",
         _ if e.is_redirect() => "The server redirected the request.",
@@ -277,11 +235,24 @@ fn net_err(e: reqwest::Error) -> anyhow::Error {
     })
 }
 
+fn sort_row(sort: &str) -> &'static [&'static str; 4] {
+    SORTS.iter().find(|r| r[0] == sort).expect("a known sort")
+}
+
+fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
+    let asc = matches!(sort, "name" | "artist" | "album" | "genre" | "year");
+    let order = if asc { "ASC" } else { "DESC" };
+    let field = sort_row(sort)[col];
+    let mut q = json!({"_sort": field, "_order": order, "_start": off, "_end": off + n});
+    if sort == "starred" {
+        q["starred"] = true.into();
+    }
+    q
+}
+
 impl std::fmt::Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Session")
-            .field("server", &self.server.id)
-            .finish()
+        write!(f, "Session({})", self.server.id)
     }
 }
 
@@ -290,548 +261,361 @@ impl Session {
         static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
         HTTP.get_or_init(|| {
             let _ = rustls::crypto::ring::default_provider().install_default();
-            reqwest::Client::builder()
-                .user_agent(concat!("navify/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .expect("HTTP client")
+            let builder = reqwest::Client::builder();
+            let agent = concat!("navify/", env!("CARGO_PKG_VERSION"));
+            builder.user_agent(agent).build().expect("HTTP client")
         })
         .clone()
     }
 
     pub fn new(server: Server) -> Self {
-        Self {
-            jwt: Arc::new(Mutex::new(server.jwt.clone())),
-            server,
-            http: Self::client(),
-        }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, String> {
-        self.jwt.lock().expect("JWT lock")
+        let (jwt, http) = (Arc::new(Mutex::new(server.jwt.clone())), Self::client());
+        Self { server, jwt, http }
     }
 
     pub fn jwt(&self) -> String {
-        self.lock().clone()
+        self.jwt.lock().expect("JWT lock").clone()
     }
 
     pub async fn login(url: &str, user: &str, pass: &str) -> Result<Session> {
         let url = url.trim().trim_end_matches('/');
-        let url = if url.contains("://") {
-            url.to_string()
-        } else {
-            format!("https://{url}")
+        let url = match url.contains("://") {
+            true => url.to_string(),
+            false => format!("https://{url}"),
         };
-        let salt = format!(
-            "{:016x}{:016x}",
-            RandomState::new().hash_one(1),
-            RandomState::new().hash_one(2)
-        );
+        let parsed = reqwest::Url::parse(&url).ok();
+        let host = parsed.as_ref().and_then(reqwest::Url::host_str);
+        let name = host.ok_or_else(|| anyhow!("The server address is not valid."))?;
+        let [a, b] = [1, 2].map(|n| RandomState::new().hash_one(n));
+        let salt = format!("{a:016x}{b:016x}");
+        let digest = md5::Md5::digest(format!("{pass}{salt}"));
+        let id = BuildHasherDefault::<DefaultHasher>::default().hash_one((&url, user));
         let mut s = Session::new(Server {
-            id: format!(
-                "{:016x}",
-                BuildHasherDefault::<DefaultHasher>::default().hash_one((&url, user))
-            ),
-            name: reqwest::Url::parse(&url)
-                .ok()
-                .and_then(|u| u.host_str().map(str::to_string))
-                .unwrap_or_else(|| url.clone()),
-            url,
+            id: format!("{id:016x}"),
+            name: name.to_string(),
             user: user.to_string(),
-            salt: salt.clone(),
-            token: md5_hex(&format!("{pass}{salt}")),
-            jwt: String::new(),
-            native: false,
-            ext: Vec::new(),
+            token: digest.iter().map(|b| format!("{b:02x}")).collect(),
+            url,
+            salt,
+            ..Server::default()
         });
-        let ping: Value = s.rest("ping", &[], "").await?;
-        let ext = ping["openSubsonicExtensions"]
-            .as_array()
-            .into_iter()
-            .flatten();
-        s.server.ext = ext
-            .filter_map(|e| Some(e["name"].as_str()?.to_string()))
-            .collect();
-        if ping["type"].as_str() == Some("navidrome") {
-            let res = s
-                .http
-                .post(format!("{}/auth/login", s.server.url))
-                .json(&json!({"username": user, "password": pass}))
-                .send()
-                .await
-                .map_err(net_err)?;
-            let status = res.status();
-            let body: Value = res.json().await.unwrap_or_default();
-            if !status.is_success() {
-                bail!(
-                    "{}",
-                    body["message"].as_str().unwrap_or(
-                        "The server refused the login. Check the username and password."
-                    )
-                );
-            }
-            let get = |k: &str| {
-                body[k]
-                    .as_str()
-                    .filter(|t| !t.is_empty())
-                    .map(str::to_string)
-                    .ok_or_else(|| anyhow::anyhow!("The server login response has no {k}."))
-            };
-            s.server.salt = get("subsonicSalt")?;
-            s.server.token = get("subsonicToken")?;
-            s.server.jwt = get("token")?;
-            *s.lock() = s.server.jwt.clone();
-            s.server.native = true;
+        let ping: Value = s.get("ping", (), "").await?;
+        if ping["openSubsonic"] == true {
+            let ptr = "/openSubsonicExtensions";
+            let ext: Vec<Value> = s.get("getOpenSubsonicExtensions", (), ptr).await?;
+            let names = ext.iter().filter_map(|e| e["name"].as_str());
+            s.server.ext = names.map(str::to_string).collect();
         }
-        Ok(s)
+        if ping["type"] != "navidrome" {
+            return Ok(s);
+        }
+        let body = json!({"username": user, "password": pass});
+        let req = s.http.post(format!("{}/auth/login", s.server.url));
+        let res = req.json(&body).send().await.map_err(net_err)?;
+        let ok = res.status().is_success();
+        let body: Value = res.json().await.unwrap_or_default();
+        let refused = "The server refused the login. Check the username and password.";
+        ensure!(ok, "{}", body["message"].as_str().unwrap_or(refused));
+        let get = |k: &str| match body[k].as_str() {
+            Some(t) if !t.is_empty() => Ok(t.to_string()),
+            _ => Err(anyhow!("The server login response has no {k}.")),
+        };
+        (s.server.salt, s.server.token) = (get("subsonicSalt")?, get("subsonicToken")?);
+        (s.server.jwt, s.server.native) = (get("token")?, true);
+        Ok(Session::new(s.server))
     }
 
-    fn auth(&self) -> [(&'static str, &str); 6] {
-        [
-            ("u", &self.server.user),
-            ("t", &self.server.token),
-            ("s", &self.server.salt),
-            ("v", "1.16.1"),
-            ("c", "navify"),
-            ("f", "json"),
-        ]
+    pub fn url(&self, method: &str, q: impl Serialize) -> String {
+        let s = &self.server;
+        let req = self.http.get(format!("{}/rest/{method}", s.url));
+        let auth = [("u", &*s.user), ("t", &s.token), ("s", &s.salt)];
+        let fixed = [("v", "1.16.1"), ("c", "navify"), ("f", "json")];
+        let req = req.query(&auth).query(&fixed).query(&q).build();
+        req.expect("the server URL is valid").url().to_string()
     }
 
-    fn query<'a>(&'a self, params: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
-        self.auth()
-            .into_iter()
-            .chain(params.iter().copied())
-            .collect()
+    pub async fn rest<T: Data>(&self, method: &str, q: &Q<'_>, ptr: &str) -> Result<T> {
+        self.get(method, q, ptr).await
     }
 
-    pub async fn rest<T: DeserializeOwned + Default>(
-        &self,
-        method: &str,
-        params: &[(&str, &str)],
-        pointer: &str,
-    ) -> Result<T> {
-        let res = self
-            .http
-            .get(format!("{}/rest/{method}", self.server.url))
-            .query(&self.query(params))
-            .send()
-            .await
-            .map_err(net_err)?;
-        let status = res.status();
-        let v: Value = res
-            .json()
-            .await
-            .map_err(|_| anyhow::anyhow!("The server returned an invalid response."))?;
-        let sub = &v["subsonic-response"];
-        if sub.is_null() {
-            bail!("The server returned HTTP {}.", status.as_u16());
-        }
-        if sub["status"].as_str() == Some("failed") {
-            let e = &sub["error"];
-            bail!(
-                "{}",
-                match e["code"].as_u64().unwrap_or_default() {
-                    40 => "Wrong username or password.".to_string(),
-                    41 => "The server does not allow token authentication.".to_string(),
-                    50 => "You do not have permission for this action.".to_string(),
-                    code => format!(
-                        "The server reported error {code}: {}",
-                        e["message"].as_str().unwrap_or("unknown error")
-                    ),
-                }
-            );
-        }
-        parse(
-            pointer
-                .split('/')
-                .filter(|k| !k.is_empty())
-                .fold(sub, |v, k| &v[k])
-                .clone(),
-        )
+    async fn get<T: Data>(&self, method: &str, q: impl Serialize, ptr: &str) -> Result<T> {
+        let mut v = self.fetch(false, method, q).await?.0;
+        parse(v.pointer_mut(ptr).map(Value::take).unwrap_or_default())
     }
 
-    async fn nd<T: DeserializeOwned + Default>(
-        &self,
-        path: &str,
-        query: &[(&str, &str)],
-    ) -> Result<(T, usize)> {
-        let res = self
-            .http
-            .get(format!("{}/api/{path}", self.server.url))
-            .header("x-nd-authorization", format!("Bearer {}", self.jwt()))
-            .query(query)
-            .query(
-                &[("missing", "false")][..usize::from(matches!(path, "album" | "song" | "artist"))],
-            )
-            .send()
-            .await
-            .map_err(net_err)?;
-        if let Some(t) = res
-            .headers()
-            .get("x-nd-authorization")
-            .and_then(|v| v.to_str().ok())
-            .filter(|t| !t.is_empty())
-        {
-            *self.lock() = t.to_string();
-        }
-        let status = res.status();
-        if status.as_u16() == 401 {
-            return Err(IoError::new(
-                ErrorKind::PermissionDenied,
-                "The server session expired. Log in again.",
-            )
-            .into());
-        }
-        if !status.is_success() {
-            bail!("The server returned HTTP {}.", status.as_u16());
-        }
-        let total = res
-            .headers()
-            .get("x-total-count")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default();
-        let v: Value = res
-            .json()
-            .await
-            .map_err(|_| anyhow::anyhow!("The server returned an invalid response."))?;
+    async fn nd<T: Data>(&self, path: &str, q: impl Serialize) -> Result<(T, usize)> {
+        let (v, total) = self.fetch(true, path, q).await?;
         Ok((parse(v)?, total))
     }
 
-    async fn nd_page<T: DeserializeOwned + Default>(
-        &self,
-        path: &str,
-        offset: usize,
-        size: usize,
-        q: &[(&str, &str)],
-    ) -> Result<(T, usize)> {
-        let (s, e) = (offset.to_string(), (offset + size).to_string());
-        self.nd(path, &[q, &[("_start", &s), ("_end", &e)]].concat())
-            .await
+    async fn fetch(&self, native: bool, path: &str, q: impl Serialize) -> Result<(Value, usize)> {
+        let req = match native {
+            false => self.http.get(self.url(path, q)),
+            true => {
+                let listed = usize::from(matches!(path, "album" | "song" | "artist"));
+                let req = self.http.get(format!("{}/api/{path}", self.server.url));
+                let req = req.query(&q).query(&[("missing", false)][..listed]);
+                req.header("x-nd-authorization", format!("Bearer {}", self.jwt()))
+            }
+        };
+        let res = req.send().await.map_err(net_err)?;
+        let header = |k| res.headers().get(k).and_then(|v| v.to_str().ok());
+        if let Some(t) = header("x-nd-authorization").filter(|t| !t.is_empty()) {
+            *self.jwt.lock().expect("JWT lock") = t.to_string();
+        }
+        let total = header("x-total-count").and_then(|v| v.parse().ok());
+        let status = res.status().as_u16();
+        if native && status == 401 {
+            let msg = "The server session expired. Log in again.";
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg).into());
+        }
+        let http = format!("The server returned HTTP {status}.");
+        ensure!(!native || res.status().is_success(), "{http}");
+        let invalid = |_| anyhow!("The server returned an invalid response.");
+        let mut v: Value = res.json().await.map_err(invalid)?;
+        if native {
+            return Ok((v, total.unwrap_or_default()));
+        }
+        let mut v = v["subsonic-response"].take();
+        ensure!(!v.is_null(), "{http}");
+        let e = v["error"].take();
+        let msg = match e["code"].as_u64().unwrap_or_default() {
+            40 => "Wrong username or password.",
+            41 => "The server does not allow token authentication.",
+            50 => "You do not have permission for this action.",
+            _ => e["message"].as_str().unwrap_or("Unknown error."),
+        };
+        ensure!(
+            v["status"] != "failed",
+            "The server reported error {}: {msg}",
+            e["code"]
+        );
+        Ok((v, 0))
     }
 
-    pub fn url(&self, method: &str, params: &[(&str, &str)]) -> String {
-        self.http
-            .get(format!("{}/rest/{method}", self.server.url))
-            .query(&self.query(params))
-            .build()
-            .expect("the server URL is valid")
-            .url()
-            .to_string()
+    async fn act(&self, method: &str, q: impl Serialize) -> Result<()> {
+        self.get::<Value>(method, q, "").await.map(drop)
     }
 
-    pub fn stream_url(
+    async fn detail<T: Data, U: Data>(
         &self,
-        song: &Song,
-        format: Option<&str>,
-        max_bitrate: u32,
-    ) -> (String, bool) {
-        let br = max_bitrate.to_string();
-        let p: Vec<_> = [("id", song.id.as_str())]
-            .into_iter()
-            .chain(format.map(|f| ("format", f)))
-            .chain((max_bitrate > 0).then_some(("maxBitRate", br.as_str())))
-            .collect();
-        (
-            self.url("stream", &p),
-            max_bitrate > 0 || format.is_some_and(|f| f != "raw"),
-        )
+        kind: &str,
+        id: &str,
+        key: &str,
+        list: &str,
+        q: Value,
+    ) -> Result<(T, Vec<U>)> {
+        if self.server.native {
+            let item = format!("{kind}/{id}");
+            let (a, b) = tokio::try_join!(self.nd(&item, ()), self.nd(list, q))?;
+            return Ok((a.0, b.0));
+        }
+        let method = format!("get{}{}", kind[..1].to_uppercase(), &kind[1..]);
+        let mut v: Value = self.get(&method, [("id", id)], &format!("/{kind}")).await?;
+        let list = parse(v[key].take())?;
+        Ok((parse(v)?, list))
+    }
+
+    async fn index(&self, method: &str, ptr: &str) -> Result<Vec<Artist>> {
+        let v: Vec<Value> = self.get(method, (), ptr).await?;
+        let lists = v.into_iter().map(|mut i| parse(i["artist"].take()));
+        Ok(lists.collect::<Result<Vec<Vec<_>>>>()?.concat())
+    }
+
+    async fn trio(&self, method: &str, q: Value, ptr: &str) -> Result<Trio> {
+        let mut v: Value = self.get(method, q, ptr).await?;
+        let (ar, al, so) = (v["artist"].take(), v["album"].take(), v["song"].take());
+        Ok((parse(ar)?, parse(al)?, parse(so)?))
+    }
+
+    pub fn stream_url(&self, song: &Song, format: Option<&str>, br: u32) -> (String, bool) {
+        let max = (br > 0).then(|| br.to_string());
+        let id = Some(song.id.as_str());
+        let q = [
+            ("id", id),
+            ("format", format),
+            ("maxBitRate", max.as_deref()),
+        ];
+        let transcoded = br > 0 || format.is_some_and(|f| f != "raw");
+        (self.url("stream", q), transcoded)
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
-        cache_dir("covers")
-            .join(&self.server.id)
-            .join(format!("{}-{size}", id.replace(['/', '\\'], "_")))
+        let name = format!("{}-{size}", id.replace(['/', '\\'], "_"));
+        cache_dir("covers").join(&self.server.id).join(name)
     }
 
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
         let file = self.cover_file(id, size);
         if let Ok(b) = fs::read(&file).await {
-            return Ok(Bytes::from(b));
+            return Ok(b.into());
         }
-        let res = self
-            .http
-            .get(self.url("getCoverArt", &[("id", id), ("size", &size.to_string())]))
-            .send()
-            .await
-            .map_err(net_err)?;
-        if !res.status().is_success() {
-            bail!(
-                "The server returned HTTP {} for cover art.",
-                res.status().as_u16()
-            );
-        }
+        let url = self.url("getCoverArt", json!({"id": id, "size": size}));
+        let res = self.http.get(url).send().await.map_err(net_err)?;
+        let status = res.status().as_u16();
+        ensure!(
+            status < 300,
+            "The server returned HTTP {status} for cover art."
+        );
         let b = res.bytes().await.map_err(net_err)?;
-        if let Some(dir) = file.parent() {
-            let _ = fs::create_dir_all(dir).await;
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let tmp = dir.join(format!(
-                "{id}-{size}.{}.{}.tmp",
-                std::process::id(),
-                N.fetch_add(1, Ordering::Relaxed)
-            ));
-            if fs::write(&tmp, &b).await.is_ok() {
-                let _ = fs::rename(&tmp, &file).await;
-            }
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let tmp = file.with_extension(format!("{}.{n}.tmp", std::process::id()));
+        let dir = file.parent().expect("the cover file has a directory");
+        if fs::create_dir_all(dir).await.is_ok() && fs::write(&tmp, &b).await.is_ok() {
+            let _ = fs::rename(&tmp, &file).await;
         }
         Ok(b)
     }
 
-    pub async fn albums(
-        &self,
-        sort: &str,
-        filter: &[(&str, &str)],
-        offset: usize,
-        size: usize,
-    ) -> Result<(Vec<Album>, usize)> {
+    pub async fn albums(&self, sort: &str, filter: &Q<'_>, off: usize, n: usize) -> Paged<Album> {
         if self.server.native {
-            return self
-                .nd_page(
-                    "album",
-                    offset,
-                    size,
-                    &[sort_q(sort, ALBUM_SORTS), filter.to_vec()].concat(),
-                )
-                .await;
+            let mut q = sorted(sort, 2, off, n);
+            filter.iter().for_each(|&(k, v)| q[k] = v.into());
+            return self.nd("album", q).await;
         }
-        let t = ALBUM_SORTS
-            .iter()
-            .find(|(k, ..)| *k == sort)
-            .expect("a known sort")
-            .1;
-        let (sz, off) = (size.to_string(), offset.to_string());
-        let mut q = vec![("type", t), ("size", sz.as_str()), ("offset", off.as_str())];
+        let genre = filter.iter().any(|f| f.0 == "genre");
+        let t = if genre { "byGenre" } else { sort_row(sort)[1] };
+        let mut q = json!({"type": t, "size": n, "offset": off});
         if t == "byYear" {
-            q.extend([("fromYear", "0"), ("toYear", "9999")]);
+            (q["fromYear"], q["toYear"]) = (0.into(), 9999.into());
         }
-        q.extend(filter);
-        let list: Vec<Album> = self.rest("getAlbumList2", &q, "/albumList2/album").await?;
-        let total = offset + list.len() + usize::from(list.len() == size);
+        filter.iter().for_each(|&(k, v)| q[k] = v.into());
+        let list: Vec<Album> = self.get("getAlbumList2", q, "/albumList2/album").await?;
+        let total = off + list.len() + usize::from(list.len() == n);
         Ok((list, total))
     }
 
     pub async fn album(&self, id: &str) -> Result<(Album, Vec<Song>)> {
-        let (album, mut songs) = if self.server.native {
-            let path = format!("album/{id}");
-            let q = [("album_id", id), ("_sort", "album"), ("_order", "ASC")];
-            let (a, s) = tokio::try_join!(self.nd(&path, &[]), self.nd("song", &q))?;
-            (a.0, s.0)
-        } else {
-            let v: Value = self.rest("getAlbum", &[("id", id)], "/album").await?;
-            (parse(v.clone())?, vlist(&v, "song")?)
-        };
+        let q = json!({"album_id": id});
+        let (album, mut songs) = self.detail("album", id, "song", "song", q).await?;
         songs.sort_by_key(|s: &Song| (s.disc, s.track));
         Ok((album, songs))
     }
 
-    pub async fn artists(&self, offset: usize, size: usize) -> Result<(Vec<Artist>, usize)> {
+    pub async fn artists(&self, off: usize, n: usize) -> Paged<Artist> {
         if self.server.native {
-            return self
-                .nd_page(
-                    "artist",
-                    offset,
-                    size,
-                    &[("_sort", "name"), ("_order", "ASC")],
-                )
-                .await;
+            return self.nd("artist", sorted("name", 2, off, n)).await;
         }
-        let all = index(&self.rest("getArtists", &[], "/artists/index").await?)?;
-        let total = all.len();
-        Ok((all.into_iter().skip(offset).take(size).collect(), total))
+        let all = self.index("getArtists", "/artists/index").await?;
+        Ok((all.iter().skip(off).take(n).cloned().collect(), all.len()))
     }
 
     pub async fn artist(&self, id: &str) -> Result<(Artist, Vec<Album>)> {
-        if self.server.native {
-            let p = format!("artist/{id}");
-            let q = [("role_albumartist_id", id)];
-            let (a, al) = tokio::try_join!(self.nd(&p, &[]), self.nd("album", &q))?;
-            return Ok((a.0, al.0));
-        }
-        let v: Value = self.rest("getArtist", &[("id", id)], "/artist").await?;
-        Ok((parse(v.clone())?, vlist(&v, "album")?))
+        let q = json!({"role_albumartist_id": id});
+        self.detail("artist", id, "album", "album", q).await
     }
 
     pub async fn appears(&self, id: &str) -> Result<Vec<Album>> {
         if !self.server.native {
             return Ok(Vec::new());
         }
-        let q = [
-            ("role_artist_id", id),
-            ("_sort", "max_year"),
-            ("_order", "DESC"),
-        ];
-        let (v, _) = self.nd::<Vec<Album>>("album", &q).await?;
-        Ok(v.into_iter()
-            .filter(|a| a.artist_id != id && a.album_artists.iter().all(|x| x.id != id))
-            .collect())
+        let q = json!({"role_artist_id": id, "_sort": "max_year", "_order": "DESC"});
+        let (v, _): (Vec<Album>, _) = self.nd("album", q).await?;
+        let own = |a: &Album| a.artist_id == id || a.album_artists.iter().any(|x| x.id == id);
+        Ok(v.into_iter().filter(|a| !own(a)).collect())
     }
 
     pub async fn top_songs(&self, id: &str) -> Result<Vec<Song>> {
         if self.server.native {
-            let q = [
-                ("artists_id", id),
-                ("_sort", "play_count"),
-                ("_order", "DESC"),
-            ];
-            return Ok(self.nd_page("song", 0, 10, &q).await?.0);
+            let mut q = sorted("frequent", 3, 0, 10);
+            q["artists_id"] = id.into();
+            return Ok(self.nd("song", q).await?.0);
         }
-        let by = if self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
-            ("id", id.to_string())
-        } else {
-            ("artist", self.artist(id).await?.0.name)
+        let q = match self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
+            true => json!({"id": id, "count": 20}),
+            false => json!({"artist": self.artist(id).await?.0.name, "count": 20}),
         };
-        self.rest(
-            "getTopSongs",
-            &[(by.0, &by.1), ("count", "20")],
-            "/topSongs/song",
-        )
-        .await
+        self.get("getTopSongs", q, "/topSongs/song").await
     }
 
     pub async fn artist_info(&self, id: &str) -> Result<Info> {
-        let mut i: Info = self
-            .rest(
-                "getArtistInfo2",
-                &[("id", id), ("count", "20")],
-                "/artistInfo2",
-            )
-            .await?;
+        let q = json!({"id": id, "count": 20});
+        let mut i: Info = self.get("getArtistInfo2", q, "/artistInfo2").await?;
         i.similar.retain(|a| a.album_count > 0);
         Ok(i)
     }
 
     pub async fn playlists(&self) -> Result<Vec<Playlist>> {
         if self.server.native {
-            return Ok(self
-                .nd("playlist", &[("_sort", "name"), ("_order", "ASC")])
-                .await?
-                .0);
+            let q = json!({"_sort": "name", "_order": "ASC"});
+            return Ok(self.nd("playlist", q).await?.0);
         }
-        self.rest("getPlaylists", &[], "/playlists/playlist").await
+        self.get("getPlaylists", (), "/playlists/playlist").await
     }
 
     pub async fn playlist(&self, id: &str) -> Result<(Playlist, Vec<Song>)> {
-        if self.server.native {
-            let p = format!("playlist/{id}");
-            let tp = format!("{p}/tracks");
-            let (pl, tracks) = tokio::try_join!(self.nd(&p, &[]), self.nd(&tp, &[]))?;
-            return Ok((pl.0, tracks.0));
-        }
-        let v: Value = self.rest("getPlaylist", &[("id", id)], "/playlist").await?;
-        Ok((parse(v.clone())?, vlist(&v, "entry")?))
+        let tracks = format!("playlist/{id}/tracks");
+        self.detail("playlist", id, "entry", &tracks, json!({}))
+            .await
     }
 
-    pub async fn songs(
-        &self,
-        sort: &str,
-        offset: usize,
-        size: usize,
-    ) -> Result<(Vec<Song>, usize)> {
+    pub async fn songs(&self, sort: &str, off: usize, n: usize) -> Paged<Song> {
         if self.server.native {
-            return self
-                .nd_page("song", offset, size, &sort_q(sort, SONG_SORTS))
-                .await;
+            return self.nd("song", sorted(sort, 3, off, n)).await;
         }
         if sort == "starred" {
-            let (.., songs) = self.starred().await?;
-            let total = songs.len();
-            return Ok((songs, total));
+            let all = self.starred().await?.2;
+            return Ok((all.iter().skip(off).take(n).cloned().collect(), all.len()));
         }
-        let (sz, off) = (size.to_string(), offset.to_string());
-        let q = [
-            ("query", ""),
-            ("songCount", &sz),
-            ("songOffset", &off),
-            ("artistCount", "0"),
-            ("albumCount", "0"),
-        ];
-        let list: Vec<Song> = self.rest("search3", &q, "/searchResult3/song").await?;
-        let total = offset + list.len() + usize::from(list.len() == size);
+        let mut q = json!({"query": "", "songCount": n, "songOffset": off});
+        (q["artistCount"], q["albumCount"]) = (0.into(), 0.into());
+        let list: Vec<Song> = self.get("search3", q, "/searchResult3/song").await?;
+        let total = off + list.len() + usize::from(list.len() == n);
         Ok((list, total))
     }
 
-    pub async fn search(
-        &self,
-        query: &str,
-        count: usize,
-    ) -> Result<(Vec<Artist>, Vec<Album>, Vec<Song>)> {
-        let c = count.to_string();
-        let q = [
-            ("query", query),
-            ("artistCount", &c),
-            ("albumCount", &c),
-            ("songCount", &c),
-        ];
-        let v: Value = self.rest("search3", &q, "/searchResult3").await?;
-        Ok((
-            vlist(&v, "artist")?,
-            vlist(&v, "album")?,
-            vlist(&v, "song")?,
-        ))
+    pub async fn search(&self, query: &str, n: usize) -> Result<Trio> {
+        let q = json!({"query": query, "artistCount": n, "albumCount": n, "songCount": n});
+        self.trio("search3", q, "/searchResult3").await
     }
 
-    pub async fn starred(&self) -> Result<(Vec<Artist>, Vec<Album>, Vec<Song>)> {
-        let v: Value = self.rest("getStarred2", &[], "/starred2").await?;
-        Ok((
-            vlist(&v, "artist")?,
-            vlist(&v, "album")?,
-            vlist(&v, "song")?,
-        ))
+    pub async fn starred(&self) -> Result<Trio> {
+        self.trio("getStarred2", json!({}), "/starred2").await
     }
 
     pub async fn genres(&self) -> Result<Vec<Genre>> {
-        self.rest("getGenres", &[], "/genres/genre").await
+        self.get("getGenres", (), "/genres/genre").await
     }
 
-    pub async fn lyrics(&self, song_id: &str) -> Result<Vec<Lyrics>> {
-        self.rest(
-            "getLyricsBySongId",
-            &[("id", song_id)],
-            "/lyricsList/structuredLyrics",
-        )
-        .await
+    pub async fn lyrics(&self, id: &str) -> Result<Vec<Lyrics>> {
+        let ptr = "/lyricsList/structuredLyrics";
+        self.get("getLyricsBySongId", [("id", id)], ptr).await
     }
 
     pub async fn indexes(&self) -> Result<Vec<Artist>> {
-        index(&self.rest("getIndexes", &[], "/indexes/index").await?)
+        self.index("getIndexes", "/indexes/index").await
     }
 
     pub async fn directory(&self, id: &str) -> Result<Vec<Song>> {
-        self.rest("getMusicDirectory", &[("id", id)], "/directory/child")
-            .await
+        let ptr = "/directory/child";
+        self.get("getMusicDirectory", [("id", id)], ptr).await
     }
 
-    pub async fn similar_songs(&self, song_id: &str, count: usize) -> Result<Vec<Song>> {
-        let q = [("id", song_id), ("count", &count.to_string())];
-        self.rest("getSimilarSongs2", &q, "/similarSongs2/song")
-            .await
+    pub async fn similar_songs(&self, id: &str, n: usize) -> Result<Vec<Song>> {
+        let q = json!({"id": id, "count": n});
+        self.get("getSimilarSongs2", q, "/similarSongs2/song").await
     }
 
-    pub async fn scrobble(&self, song_id: &str, submission: bool) -> Result<()> {
-        let q = [
-            ("id", song_id),
-            ("submission", if submission { "true" } else { "false" }),
-        ];
-        self.rest::<Value>("scrobble", &q, "").await.map(drop)
+    pub async fn scrobble(&self, id: &str, submission: bool) -> Result<()> {
+        let q = json!({"id": id, "submission": submission});
+        self.act("scrobble", q).await
     }
 
     pub async fn star(&self, ids: &[String], on: bool) -> Result<()> {
-        let p: Vec<_> = ids.iter().map(|i| ("id", i.as_str())).collect();
-        self.rest::<Value>(if on { "star" } else { "unstar" }, &p, "")
-            .await
-            .map(drop)
+        let q: Vec<_> = ids.iter().map(|i| ("id", i)).collect();
+        self.act(if on { "star" } else { "unstar" }, q).await
     }
 
     pub async fn rate(&self, id: &str, rating: u8) -> Result<()> {
-        let q = [("id", id), ("rating", &rating.to_string())];
-        self.rest::<Value>("setRating", &q, "").await.map(drop)
+        self.act("setRating", json!({"id": id, "rating": rating}))
+            .await
     }
 
-    pub async fn playlist_create(&self, name: &str, song_ids: &[String]) -> Result<Playlist> {
-        let p: Vec<_> = [("name", name)]
-            .into_iter()
-            .chain(song_ids.iter().map(|i| ("songId", i.as_str())))
-            .collect();
-        self.rest("createPlaylist", &p, "/playlist").await
+    pub async fn playlist_create(&self, name: &str, ids: &[String]) -> Result<Playlist> {
+        let ids = ids.iter().map(|i| ("songId", i.as_str()));
+        let q: Vec<_> = ids.chain([("name", name)]).collect();
+        self.get("createPlaylist", q, "/playlist").await
     }
 
     pub async fn playlist_update(
@@ -842,142 +626,62 @@ impl Session {
         add: &[String],
         remove: &[usize],
     ) -> Result<()> {
-        let remove: Vec<String> = remove.iter().map(usize::to_string).collect();
-        let p: Vec<_> = [("playlistId", id)]
-            .into_iter()
-            .chain(name.map(|n| ("name", n)))
-            .chain(comment.map(|c| ("comment", c)))
-            .chain(add.iter().map(|i| ("songIdToAdd", i.as_str())))
-            .chain(remove.iter().map(|i| ("songIndexToRemove", i.as_str())))
-            .collect();
-        self.rest::<Value>("updatePlaylist", &p, "").await.map(drop)
+        let rm: Vec<String> = remove.iter().map(usize::to_string).collect();
+        let id = Some(id);
+        let q = [("playlistId", id), ("name", name), ("comment", comment)];
+        let add = add.iter().map(|i| ("songIdToAdd", Some(i.as_str())));
+        let rm = rm.iter().map(|i| ("songIndexToRemove", Some(i.as_str())));
+        let q: Vec<_> = q.into_iter().chain(add).chain(rm).collect();
+        self.act("updatePlaylist", q).await
     }
 
     pub async fn playlist_delete(&self, id: &str) -> Result<()> {
-        self.rest::<Value>("deletePlaylist", &[("id", id)], "")
-            .await
-            .map(drop)
+        self.act("deletePlaylist", [("id", id)]).await
     }
 
     pub async fn play_queue(&self) -> Result<(Vec<Song>, String, u64)> {
-        let v: Value = self.rest("getPlayQueue", &[], "/playQueue").await?;
-        Ok((
-            vlist(&v, "entry")?,
-            v["current"].as_str().unwrap_or_default().to_string(),
-            v["position"].as_u64().unwrap_or_default(),
-        ))
+        let mut v: Value = self.get("getPlayQueue", (), "/playQueue").await?;
+        let current = v["current"].as_str().unwrap_or_default().to_string();
+        let pos = v["position"].as_u64().unwrap_or_default();
+        Ok((parse(v["entry"].take())?, current, pos))
     }
 
-    pub async fn save_play_queue(
-        &self,
-        ids: &[String],
-        current: &str,
-        position_ms: u64,
-    ) -> Result<()> {
-        let pos = position_ms.to_string();
-        let p: Vec<_> = ids
-            .iter()
-            .map(|i| ("id", i.as_str()))
-            .chain([("current", current), ("position", pos.as_str())])
-            .collect();
-        self.rest::<Value>("savePlayQueue", &p, "").await.map(drop)
+    pub async fn save_play_queue(&self, ids: &[String], current: &str, pos: u64) -> Result<()> {
+        let (cur, pos) = (current.to_string(), pos.to_string());
+        let ids = ids.iter().map(|i| ("id", i.clone()));
+        let q: Vec<_> = ids.chain([("current", cur), ("position", pos)]).collect();
+        self.act("savePlayQueue", q).await
     }
 }
-
-fn md5_hex(s: &str) -> String {
-    use md5::Digest;
-    md5::Md5::digest(s.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
-fn sort_q(sort: &str, map: &[(&str, &str, &'static str)]) -> Vec<(&'static str, &'static str)> {
-    let field = map
-        .iter()
-        .find(|(k, ..)| *k == sort)
-        .expect("a known sort")
-        .2;
-    let order = if matches!(sort, "name" | "artist" | "album" | "genre" | "year") {
-        "ASC"
-    } else {
-        "DESC"
-    };
-    let mut q = vec![("_sort", field), ("_order", order)];
-    if sort == "starred" {
-        q.push(("starred", "true"));
-    }
-    q
-}
-
-const ALBUM_SORTS: &[(&str, &str, &str)] = &[
-    ("recent", "recent", "play_date"),
-    ("newest", "newest", "recently_added"),
-    ("frequent", "frequent", "play_count"),
-    ("random", "random", "random"),
-    ("name", "alphabeticalByName", "name"),
-    ("artist", "alphabeticalByArtist", "album_artist"),
-    ("starred", "starred", "starred_at"),
-    ("year", "byYear", "max_year"),
-    ("genre", "byGenre", "genre"),
-    ("rating", "highest", "rating"),
-];
-
-const SONG_SORTS: &[(&str, &str, &str)] = &[
-    ("recent", "recent", "play_date"),
-    ("newest", "newest", "created_at"),
-    ("frequent", "frequent", "play_count"),
-    ("random", "random", "random"),
-    ("name", "alphabeticalByName", "title"),
-    ("artist", "alphabeticalByArtist", "artist"),
-    ("album", "alphabeticalByName", "album"),
-    ("starred", "starred", "starred_at"),
-    ("year", "byYear", "year"),
-    ("genre", "byGenre", "genre"),
-    ("rating", "highest", "rating"),
-];
 
 pub fn cache_dir(kind: &str) -> PathBuf {
-    dirs::cache_dir()
-        .expect("The system has no cache directory.")
-        .join("navify")
-        .join(kind)
+    let dir = dirs::cache_dir().expect("The system has no cache directory.");
+    dir.join("navify").join(kind)
 }
 
-pub fn cache_files(dir: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
+pub fn cache_files(dir: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
     let (mut out, mut dirs) = (Vec::new(), vec![dir.to_path_buf()]);
     while let Some(d) = dirs.pop() {
-        for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
-            match e.metadata() {
-                Ok(m) if m.is_dir() => dirs.push(e.path()),
-                Ok(m) => out.push((
-                    e.path(),
-                    m.modified().unwrap_or(std::time::UNIX_EPOCH),
-                    m.len(),
-                )),
-                Err(_) => {}
+        let entries = std::fs::read_dir(d).into_iter().flatten().flatten();
+        for (p, m) in entries.filter_map(|e| Some((e.path(), e.metadata().ok()?))) {
+            match m.is_dir() {
+                true => dirs.push(p),
+                false => out.push((p, m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len())),
             }
         }
     }
     out
 }
 
-pub fn prune(dir: &std::path::Path, cap: u64) {
-    let (tmp, mut files): (Vec<_>, Vec<_>) = cache_files(dir)
-        .into_iter()
-        .partition(|f| f.0.extension() == Some("tmp".as_ref()));
-    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-    tmp.iter()
-        .filter(|f| f.1 < old)
-        .for_each(|f| drop(std::fs::remove_file(&f.0)));
+pub fn prune(dir: &Path, cap: u64) {
+    let mut files = cache_files(dir);
     files.sort_by_key(|f| f.1);
+    let old = SystemTime::now() - Duration::from_secs(3600);
     let mut total: u64 = files.iter().map(|f| f.2).sum();
-    for (p, _, s) in files {
-        if total <= cap {
-            break;
-        }
-        if std::fs::remove_file(&p).is_ok() {
-            total -= s;
+    for (p, time, size) in files {
+        let tmp = p.extension() == Some("tmp".as_ref());
+        if (if tmp { time < old } else { total > cap }) && std::fs::remove_file(&p).is_ok() {
+            total -= size;
         }
     }
 }
