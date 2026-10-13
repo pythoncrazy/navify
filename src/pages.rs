@@ -1619,6 +1619,14 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             } else {
                 Space::new().into()
             },
+            line(
+                if app.tray.is_some() {
+                    "Keep Navify in the system tray when you close the window"
+                } else {
+                    "Keep Navify in the system tray when you close the window (no system tray found)"
+                },
+                tog(st.tray, |b| Message::Set(Set::Tray(b))),
+            ),
             section("Servers"),
         ]
         .extend(servers)
@@ -1819,7 +1827,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     const W: f32 = 260.0;
     let entry = |r: El<'a>, msg: Message| -> El<'a> {
         focusable(
-            button(r)
+            button(container(r).center_y(Fill))
                 .padding([0, 12])
                 .height(40)
                 .width(Fill)

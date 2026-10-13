@@ -14,6 +14,7 @@ pub const PAGE: usize = 100;
 pub const RIGHT_W: f32 = 320.0;
 const STALE: Duration = Duration::from_secs(300);
 const COVER_CAP: usize = 64 * 1024 * 1024;
+pub const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/navify.png");
 
 #[derive(Clone, Debug, Default)]
 pub struct Pager<T> {
@@ -80,6 +81,7 @@ pub enum Set {
     Zoom(f32),
     Remaining(bool),
     Frame(bool),
+    Tray(bool),
     DiscGrid(bool),
 }
 
@@ -172,6 +174,8 @@ pub enum Message {
     Audio(navify_audio::Event),
     Media(souvlaki::MediaControlEvent),
     MediaInit(isize),
+    Window(bool),
+    Win(iced::window::Id),
 }
 
 #[derive(Debug, Default)]
@@ -236,6 +240,8 @@ pub struct App {
     pub cover_tasks: usize,
     pub player: Option<navify_audio::Player>,
     media: Option<souvlaki::MediaControls>,
+    pub tray: Option<Box<dyn Any>>,
+    win: Option<iced::window::Id>,
     os: (String, bool),
     tx: tokio::sync::mpsc::UnboundedSender<Message>,
     pub queue: Vec<Song>,
@@ -302,26 +308,14 @@ impl App {
             ))
         })();
         let prune = app.disk(Some(300 << 20));
-        let media = if app.shot.is_some() {
+        let open = if app.shot.is_some() {
             Task::none()
-        } else if !cfg!(windows) {
-            app.update(Message::MediaInit(0))
         } else {
-            iced::window::latest()
-                .and_then(|id| {
-                    iced::window::run(id, |w| {
-                        use iced::window::raw_window_handle::RawWindowHandle;
-                        match w.window_handle().map(|h| h.as_raw()) {
-                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
-                            _ => 0,
-                        }
-                    })
-                })
-                .map(Message::MediaInit)
+            iced::window::open(app.window()).1.map(Message::Win)
         };
         let t = Task::batch([
             prune,
-            media,
+            open,
             if app.session.is_none()
                 && !app.shot.as_deref().is_some_and(|s| s.starts_with("login"))
                 && let Some((u, n, p)) = creds
@@ -412,6 +406,26 @@ impl App {
 
     pub fn scale(&self) -> f32 {
         self.cfg.settings.zoom
+    }
+
+    pub fn window(&self) -> iced::window::Settings {
+        let icon = ::image::load_from_memory(ICON).expect("the bundled icon is a PNG").into_rgba8();
+        let ((w, h), s) = (self.cfg.settings.window, self.scale());
+        iced::window::Settings {
+            size: iced::Size::new(w.max(800.0), h.max(600.0)) * (1.0 / s),
+            min_size: Some(iced::Size::new(800.0, 600.0)),
+            exit_on_close_request: false,
+            icon: Some(
+                iced::window::icon::from_rgba(icon.to_vec(), icon.width(), icon.height())
+                    .expect("the bundled icon has a valid size"),
+            ),
+            #[cfg(target_os = "linux")]
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: "navify".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 
     pub fn view_size(&self) -> (f32, f32) {
@@ -620,6 +634,8 @@ impl App {
             disc_chip: 0,
             disc_old: false,
             seek_preview: None,
+            tray: None,
+            win: None,
         };
         if app.route == "login" {
             app.history = vec!["login".into()];
@@ -1688,6 +1704,7 @@ impl App {
                     Set::Scrobble(b) => self.cfg.settings.scrobble = b,
                     Set::Remaining(b) => self.cfg.settings.remaining = b,
                     Set::Frame(b) => self.cfg.settings.system_frame = b,
+                    Set::Tray(b) => self.cfg.settings.tray = b,
                     Set::DiscGrid(b) => {
                         self.cfg.settings.disc_grid = b;
                         extra = self.disc_load();
@@ -1736,27 +1753,57 @@ impl App {
                 Task::none()
             }
             Message::Close => {
-                let c = self.cfg.clone();
-                let s = self.session.clone();
-                let q = self.cfg.settings.queue_sync.then(|| {
-                    (
-                        self.queue.iter().map(|x| x.id.clone()).collect::<Vec<_>>(),
-                        self.current_song().map(|x| x.id.clone()).unwrap_or_default(),
-                        (self.pos() * 1000.0) as u64,
-                    )
-                });
-                Task::perform(
-                    async move {
-                        if let Err(e) = c.save() {
-                            eprintln!("Could not save the settings. {e}");
-                        }
-                        if let (Some(s), Some((ids, cur, pos))) = (s, q)
-                            && let Err(e) = s.save_play_queue(&ids, &cur, pos).await
-                        {
-                            eprintln!("Could not save the play queue. {e}");
-                        }
+                Task::batch([self.persist(), self.update(Message::SaveQ(self.save_seq))])
+                    .collect()
+                    .map(|_| Message::Quit)
+            }
+            Message::Window(false) if self.tray.is_none() || !self.cfg.settings.tray => {
+                self.update(Message::Close)
+            }
+            Message::Window(show) => {
+                let Some(id) = self.win else {
+                    return iced::window::open(self.window()).1.map(Message::Win);
+                };
+                if show {
+                    return iced::window::set_mode(id, iced::window::Mode::Windowed)
+                        .chain(iced::window::gain_focus(id));
+                }
+                self.visible = false;
+                Task::batch([
+                    self.persist(),
+                    self.update(Message::SaveQ(self.save_seq)),
+                    if cfg!(windows) {
+                        iced::window::set_mode(id, iced::window::Mode::Hidden)
+                    } else {
+                        self.win = None;
+                        iced::window::close(id)
                     },
-                    |_| Message::Quit,
+                ])
+            }
+            Message::Win(id) => {
+                self.win = Some(id);
+                if self.tray.is_none() {
+                    self.tray = crate::tray::spawn(self.tx.clone())
+                        .inspect_err(|e| eprintln!("The tray icon is not available. {e}"))
+                        .ok();
+                }
+                let y = self.scrolls.get(&self.route).map(|(o, _)| *o);
+                let scroll = iced::widget::operation::scroll_to(
+                    crate::view::SCROLL,
+                    iced::widget::operation::AbsoluteOffset::<Option<f32>> { x: None, y },
+                );
+                if self.media.is_some() {
+                    return scroll;
+                }
+                scroll.chain(
+                    iced::window::run(id, |w| {
+                        use iced::window::raw_window_handle::RawWindowHandle;
+                        match w.window_handle().map(|h| h.as_raw()) {
+                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+                            _ => 0,
+                        }
+                    })
+                    .map(Message::MediaInit),
                 )
             }
             Message::Quit => iced::exit(),
@@ -2060,9 +2107,7 @@ impl App {
                     E::SetPosition(p) => Message::Seek(p.0.as_secs_f32()),
                     E::SetVolume(v) => Message::Vol(v.clamp(0.0, 1.0) as f32),
                     E::Quit => Message::Close,
-                    E::Raise => {
-                        return iced::window::latest().and_then(iced::window::gain_focus);
-                    }
+                    E::Raise => Message::Window(true),
                     _ => return Task::none(),
                 };
                 self.update(m)
@@ -2352,7 +2397,9 @@ impl App {
             }
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::Focus(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::Focus(false)),
-            iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::Close),
+            iced::Event::Window(iced::window::Event::CloseRequested) => {
+                Some(Message::Window(false))
+            }
             iced::Event::Window(iced::window::Event::Resized(s)) => {
                 Some(Message::Resize(s.width, s.height))
             }
@@ -2372,6 +2419,8 @@ impl App {
                             "r" => Some(Message::Repeat),
                             "a" => Some(Message::SelectAll),
                             "," => Some(Message::Nav("settings".into())),
+                            "q" => Some(Message::Close),
+                            "w" => Some(Message::Window(false)),
                             _ => None,
                         },
                         Key::Named(Named::ArrowLeft) => Some(Message::Prev),

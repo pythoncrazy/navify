@@ -1,6 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use iced::{Font, Size, Theme, application, window};
+use iced::{Font, Theme};
 
 use navify::app::App;
 use navify::config::Config;
@@ -47,15 +47,13 @@ impl
     }
 }
 
-const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/navify.png");
-
 #[cfg(target_os = "linux")]
 fn install() -> std::io::Result<()> {
     let data = dirs::data_dir().ok_or(std::io::ErrorKind::NotFound)?;
     let exe = std::env::current_exe()?;
     let icons = data.join("icons/hicolor");
     let files = [
-        (icons.join("256x256/apps/navify.png"), ICON.to_vec()),
+        (icons.join("256x256/apps/navify.png"), navify::app::ICON.to_vec()),
         (icons.join("scalable/apps/navify.svg"), include_bytes!("../assets/navify.svg").to_vec()),
         (
             data.join("applications/navify.desktop"),
@@ -70,6 +68,10 @@ fn install() -> std::io::Result<()> {
         println!("{}", path.display());
     }
     Ok(())
+}
+
+fn view(app: &App, _: iced::window::Id) -> iced::Element<'_, navify::app::Message> {
+    app.view()
 }
 
 fn main() -> iced::Result {
@@ -99,13 +101,11 @@ fn main() -> iced::Result {
             unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
         }
     }
-    let icon = image::load_from_memory(ICON).expect("the bundled icon is a PNG").into_rgba8();
-    let ((w, h), s) = (cfg.settings.window, cfg.settings.zoom);
-    application(App::boot, App::update, App::view)
+    iced::daemon(App::boot, App::update, view)
         .subscription(App::subscription)
-        .scale_factor(App::scale)
+        .scale_factor(|a: &App, _| a.scale())
         .executor::<Rt>()
-        .theme(|_: &App| Theme::Dark)
+        .theme(|_: &App, _| Theme::Dark)
         .default_font(Font::with_name("Figtree"))
         .font(include_bytes!("../assets/fonts/Figtree-Regular.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/Figtree-Medium.ttf").as_slice())
@@ -113,20 +113,6 @@ fn main() -> iced::Result {
         .font(include_bytes!("../assets/fonts/Figtree-Black.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/lucide.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/phosphor-fill.ttf").as_slice())
-        .title(App::title)
-        .window(window::Settings {
-            size: Size::new(w.max(800.0), h.max(600.0)) * (1.0 / s),
-            min_size: Some(Size::new(800.0, 600.0)),
-            icon: Some(
-                window::icon::from_rgba(icon.to_vec(), icon.width(), icon.height())
-                    .expect("the bundled icon has a valid size"),
-            ),
-            #[cfg(target_os = "linux")]
-            platform_specific: window::settings::PlatformSpecific {
-                application_id: "navify".into(),
-                ..Default::default()
-            },
-            ..window::Settings::default()
-        })
+        .title(|a: &App, _| a.title())
         .run()
 }

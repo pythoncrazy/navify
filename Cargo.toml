@@ -87,8 +87,13 @@ version = "1.0.1"
 features = ["crypto-rust"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9.12"
+dbus-crossroads = "0.5.3"
 wayland-client = "0.31.15"
 wgpu = { version = "27.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "vulkan"] }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = { version = "0.26.0", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies.wgpu]
 version = "27.0.1"
