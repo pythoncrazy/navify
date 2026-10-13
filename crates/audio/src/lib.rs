@@ -802,19 +802,6 @@ impl Source {
         .map_err(|e| e.to_string().replace(&url, "<stream>"))
     }
 
-    fn tune(&mut self, rate: u32, rel: f64) -> Res<()> {
-        if rate != self.orate {
-            (self.orate, self.rs) = (rate, None);
-        }
-        if rel != self.rel {
-            self.rel = rel;
-            self.rs
-                .iter_mut()
-                .try_for_each(|r| r.set_resample_ratio_relative(rel, true))?;
-        }
-        Ok(())
-    }
-
     fn seek(&mut self, secs: f32) -> Res<()> {
         let target = secs as f64 + self.delay;
         let preroll = if self.delay > 0.0 { 0.08 } else { 0.0 };
@@ -845,7 +832,17 @@ impl Source {
         (self.base + self.done as f64 / self.rate) as f32
     }
 
-    fn fill(&mut self, out: &mut [f32]) -> Res<usize> {
+    fn fill(&mut self, out: &mut [f32], rate: u32, rel: f64) -> Res<usize> {
+        if rate != self.orate {
+            (self.orate, self.rs) = (rate, None);
+        }
+        if let Some(r) = &mut self.rs
+            && rel != self.rel
+        {
+            r.set_resample_ratio_relative(rel, true)
+                .expect("speed is in range");
+        }
+        self.rel = rel;
         if self.rel == 1.0 && self.orate as f64 == self.rate {
             self.rs = None;
         } else if self.rs.is_none() {
@@ -853,7 +850,8 @@ impl Source {
                 .interpolation(SincInterpolationType::Linear);
             let ratio = self.orate as f64 / self.rate;
             let mut rs = Async::new_sinc(ratio, 3.5, &p, CHUNK, 2, FixedAsync::Output)?;
-            rs.set_resample_ratio_relative(self.rel, false)?;
+            rs.set_resample_ratio_relative(rel, false)
+                .expect("speed is in range");
             (self.lead, self.owed) = (rs.output_delay(), 0.0);
             self.rs = Some(rs);
         }
@@ -966,10 +964,7 @@ impl Mixer {
     }
 
     fn step(&mut self, out: &mut [f32], speed: f32, cf: f32) -> Res<(usize, Option<Event>)> {
-        let rel = 1.0 / speed as f64;
-        for s in self.cur.iter_mut().chain(self.inc.iter_mut()) {
-            s.tune(self.rate, rel)?;
-        }
+        let (rel, rate) = (1.0 / speed as f64, self.rate);
         let Some(cur) = &mut self.cur else {
             return Ok((0, None));
         };
@@ -978,30 +973,24 @@ impl Mixer {
         let mut ev = None;
         if cf > 0.0 && self.inc.is_none() && rem <= (cf as f64).min(cur.dur / 2.0) && ready {
             match self.pre.take().map(|p| p.1.join().expect("open thread")) {
-                Some(Ok(mut s)) => {
-                    s.tune(self.rate, rel)?;
+                Some(Ok(s)) => {
                     ev = Some(Event::Started(s.track.id.clone()));
-                    self.fade = (0, (rem.max(0.05) * rel * self.rate as f64) as usize);
+                    self.fade = (0, (rem.max(0.05) * rel * rate as f64) as usize);
                     self.inc = Some(s);
                 }
                 e => ev = e.and_then(Result::err).map(Event::Error),
             }
         }
-        let n = cur.fill(out)?;
+        let n = cur.fill(out, rate, rel)?;
         out[n * 2..].fill(0.0);
         if let Some(inc) = &mut self.inc {
             self.b.resize(out.len(), 0.0);
-            let m = inc.fill(&mut self.b)?;
+            let m = inc.fill(&mut self.b, rate, rel)?;
             self.b[m * 2..].fill(0.0);
             let (pos, len) = self.fade;
-            let frames = out
-                .as_chunks_mut::<2>()
-                .0
-                .iter_mut()
-                .zip(self.b.as_chunks::<2>().0);
-            for (i, (o, b)) in frames.enumerate() {
+            for (i, (o, b)) in out.chunks_mut(2).zip(self.b.chunks(2)).enumerate() {
                 let (s, c) = (((pos + i) as f32 / len as f32).min(1.0) * FRAC_PI_2).sin_cos();
-                *o = [o[0] * c + b[0] * s, o[1] * c + b[1] * s];
+                o.iter_mut().zip(b).for_each(|(o, b)| *o = *o * c + b * s);
             }
             self.fade.0 += out.len() / 2;
             if self.fade.0 >= len || n < out.len() / 2 {
@@ -1015,8 +1004,7 @@ impl Mixer {
         self.cur = None;
         match self.pre.take().map(|p| p.1.join().expect("open thread")) {
             Some(Ok(mut s)) => {
-                s.tune(self.rate, rel)?;
-                let m = s.fill(&mut out[n * 2..])?;
+                let m = s.fill(&mut out[n * 2..], rate, rel)?;
                 let id = s.track.id.clone();
                 self.cur = Some(s);
                 Ok((n + m, Some(Event::Started(id))))
@@ -1224,11 +1212,8 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 prod.push_entire_slice(&buf[..n * 2])
                     .expect("ring buffer has room");
                 written += n as u64 * 2;
-                marks.push_back((
-                    written,
-                    mix.inc.as_ref().or(mix.cur.as_ref()).map(Source::pos),
-                    ev,
-                ));
+                let pos = mix.inc.as_ref().or(mix.cur.as_ref()).map(Source::pos);
+                marks.push_back((written, pos, ev));
             }
         }
         let read = sh.read.load(Relaxed);
