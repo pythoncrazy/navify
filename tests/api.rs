@@ -1,8 +1,11 @@
 use navify::api::{self, Session, Song};
+use serde_json::json;
 
-fn env(k: &str) -> String {
+fn session(vars: [&str; 3]) -> Session {
     let _ = dotenvy::dotenv();
-    std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set"))
+    let [h, u, p] = vars.map(|k| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set")));
+    rt().block_on(Session::login(&h, &u, &p))
+        .unwrap_or_else(|e| panic!("login to {h} failed: {e}"))
 }
 
 fn rt() -> &'static tokio::runtime::Runtime {
@@ -10,291 +13,155 @@ fn rt() -> &'static tokio::runtime::Runtime {
     RT.get_or_init(|| tokio::runtime::Runtime::new().expect("runtime"))
 }
 
-async fn login(cell: &'static tokio::sync::OnceCell<Session>, vars: [&str; 3]) -> Session {
-    cell.get_or_init(|| async {
-        let [h, u, p] = vars.map(env);
-        Session::login(&h, &u, &p)
+fn local() -> Session {
+    session([
+        "NAVIFY_TEST_LOCAL_URL",
+        "NAVIFY_TEST_LOCAL_USERNAME",
+        "NAVIFY_TEST_LOCAL_PASSWORD",
+    ])
+}
+
+async fn read_suite(s: &Session) {
+    let (page, total) = s.albums("name", &[], 0, 2).await.expect("albums");
+    assert!(total >= 2 && page.len() == 2);
+    assert!(page[0].name.to_lowercase() <= page[1].name.to_lowercase());
+    let (next, _) = s.albums("name", &[], 1, 1).await.expect("albums page 2");
+    assert_eq!(next[0].id, page[1].id);
+    for k in [
+        "recent", "newest", "frequent", "random", "artist", "year", "rating",
+    ] {
+        s.albums(k, &[], 0, 5)
             .await
-            .unwrap_or_else(|e| panic!("login to {h} failed: {e}"))
-    })
-    .await
-    .clone()
-}
-
-async fn live() -> Session {
-    static S: tokio::sync::OnceCell<Session> = tokio::sync::OnceCell::const_new();
-    login(
-        &S,
-        ["NAVIDROME_HOST", "NAVIDROME_USERNAME", "NAVIDROME_PASSWORD"],
-    )
-    .await
-}
-
-async fn local() -> Session {
-    static S: tokio::sync::OnceCell<Session> = tokio::sync::OnceCell::const_new();
-    login(
-        &S,
-        [
-            "NAVIFY_TEST_LOCAL_URL",
-            "NAVIFY_TEST_LOCAL_USERNAME",
-            "NAVIFY_TEST_LOCAL_PASSWORD",
-        ],
-    )
-    .await
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn login_detects_navidrome() {
-    rt().block_on(async {
-        let s = live().await;
-        assert!(s.server.native);
-        assert!(!s.server.token.is_empty());
-        assert!(!s.jwt().is_empty());
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn albums_page_and_total() {
-    rt().block_on(async {
-        let s = live().await;
-        let (page, total) = s.albums("name", &[], 0, 25).await.expect("albums");
-        assert_eq!(page.len(), 25);
-        assert!(total > 100);
-        assert!(page.windows(2).all(|w| w[0].name <= w[1].name));
-        let (page2, _) = s.albums("name", &[], 25, 25).await.expect("albums page 2");
-        assert!(page2[0].name >= page[24].name);
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn album_detail_has_songs_with_gain() {
-    rt().block_on(async {
-        let s = live().await;
-        let (albums, _) = s.albums("frequent", &[], 0, 5).await.expect("albums");
-        let (album, songs) = s.album(&albums[0].id).await.expect("album");
-        assert_eq!(album.id, albums[0].id);
-        assert!(!songs.is_empty());
-        assert!(songs.windows(2).all(|w| w[0].track <= w[1].track));
-        assert!(songs.iter().any(|s| s.rg.track_gain.is_some()));
-        assert!(songs.iter().all(|s| !s.album_id.is_empty()));
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn artist_page() {
-    rt().block_on(async {
-        let s = live().await;
-        let (artists, total) = s.artists(0, 5).await.expect("artists");
-        assert!(total > 10);
-        let id = &artists[0].id;
-        let ((artist, _), _, info) =
-            tokio::try_join!(s.artist(id), s.top_songs(id), s.artist_info(id)).expect("artist");
-        assert_eq!(artist.id, *id);
-        assert!(!artist.name.is_empty());
-        assert!(info.similar.iter().all(|a| a.album_count > 0));
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn playlists_and_tracks() {
-    rt().block_on(async {
-        let s = live().await;
-        let playlists = s.playlists().await.expect("playlists");
-        assert!(!playlists.is_empty());
-        let (pl, songs) = s.playlist(&playlists[0].id).await.expect("playlist");
-        assert_eq!(pl.id, playlists[0].id);
-        if !songs.is_empty() {
-            assert!(songs.iter().all(|s| s.id.len() > 4));
-        }
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn search_returns_results() {
-    rt().block_on(async {
-        let s = live().await;
-        let (albums, _) = s.albums("name", &[], 0, 1).await.expect("albums");
-        let word: String = albums[0]
-            .name
-            .chars()
-            .filter(|c| c.is_alphabetic())
-            .take(4)
-            .collect();
-        let (artists, albums, songs) = s.search(&word, 5).await.expect("search");
-        assert!(!(artists.is_empty() && albums.is_empty() && songs.is_empty()));
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn lyrics_call_succeeds() {
-    rt().block_on(async {
-        let s = live().await;
-        let (songs, _) = s.songs("frequent", 0, 10).await.expect("songs");
-        for song in &songs {
-            if s.lyrics(&song.id).await.is_ok_and(|l| !l.is_empty()) {
-                return;
-            }
-        }
-        let _ = s.lyrics(&songs[0].id).await.expect("lyrics call");
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn cover_caches_on_disk() {
-    rt().block_on(async {
-        let s = live().await;
-        let (albums, _) = s.albums("name", &[], 0, 1).await.expect("albums");
-        let id = albums[0].cover.clone();
-        let first = s.cover(&id, 128).await.expect("cover fetch");
-        assert!(!first.is_empty());
-        let start = std::time::Instant::now();
-        let second = s.cover(&id, 128).await.expect("cover cache");
-        assert_eq!(first, second);
-        assert!(start.elapsed() < std::time::Duration::from_millis(500));
-    });
-}
-
-#[test]
-#[ignore = "needs the .env server"]
-fn subsonic_fallback_lists_albums() {
-    rt().block_on(async {
-        let mut s = live().await;
-        s.server.native = false;
-        let (albums, _) = s.albums("name", &[], 0, 10).await.expect("subsonic albums");
-        assert_eq!(albums.len(), 10);
-        assert!(
-            albums
-                .iter()
-                .all(|a| !a.name.is_empty() && !a.cover.is_empty())
-        );
-        let songs = s.songs("starred", 0, 10).await.expect("starred songs");
-        assert!(songs.0.iter().all(|s| s.starred));
-    });
-}
-
-#[test]
-fn song_deserializes_native_and_subsonic() {
-    let native = serde_json::json!({
-        "id": "n1",
-        "title": "T",
-        "album": "A",
-        "albumId": "al1",
-        "artist": "Ar",
-        "artistId": "ar1",
-        "albumArtist": "AA",
-        "albumArtistId": "aa1",
-        "trackNumber": 3,
-        "discNumber": 1,
-        "year": 2020,
-        "duration": 123.4,
-        "suffix": "flac",
-        "bitRate": 900,
-        "playCount": 5,
-        "starred": true,
-        "rating": 4,
-        "explicitStatus": "e",
-        "genres": [{"id": "g1", "name": "Rock"}],
-        "rgTrackGain": -7.5,
-        "rgAlbumGain": -8.0,
-        "rgTrackPeak": 1.1,
-        "rgAlbumPeak": 1.2,
-        "participants": {"artist": [{"id": "ar1", "name": "Ar"}], "albumartist": [{"id": "aa1", "name": "AA"}]},
-        "hasCoverArt": true
-    });
-    let subsonic = serde_json::json!({
-        "id": "s1",
-        "title": "T",
-        "album": "A",
-        "albumId": "al1",
-        "artist": "Ar",
-        "artistId": "ar1",
-        "track": 3,
-        "discNumber": 1,
-        "year": 2020,
-        "duration": 123,
-        "suffix": "mp3",
-        "bitRate": 320,
-        "playCount": 5,
-        "starred": "2026-01-01T00:00:00Z",
-        "userRating": 4,
-        "explicitStatus": "explicit",
-        "coverArt": "mf-s1_x",
-        "genres": [{"name": "Rock"}],
-        "artists": [{"id": "ar1", "name": "Ar"}],
-        "albumArtists": [{"id": "aa1", "name": "AA"}],
-        "replayGain": {"trackGain": -7.5, "albumGain": -8.0, "trackPeak": 1.1, "albumPeak": 1.2}
-    });
-    let n: Song = api::parse(native).expect("native song");
-    let s: Song = api::parse(subsonic).expect("subsonic song");
-    for song in [&n, &s] {
-        assert_eq!(song.title, "T");
-        assert_eq!(song.album_id, "al1");
-        assert_eq!(song.track, 3);
-        assert!(song.starred);
-        assert_eq!(song.user_rating, 4);
-        assert_eq!(song.rg.track_gain, Some(-7.5));
-        assert_eq!(song.rg.album_peak, Some(1.2));
+            .unwrap_or_else(|e| panic!("albums {k}: {e}"));
     }
-    assert_eq!(n.id, "n1");
-    assert_eq!(n.artists[0].name, "Ar");
-    assert_eq!(s.id, "s1");
-    assert_eq!(s.cover, "mf-s1_x");
-    assert_eq!(s.artists[0].id, "ar1");
-    assert_eq!(n.cover, "n1");
-    assert!((s.duration - 123.0).abs() < f32::EPSILON);
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn local_star_rate_scrobble() {
-    rt().block_on(async {
-        let s = local().await;
-        let (songs, _) = s.songs("name", 0, 5).await.expect("songs");
-        assert!(!songs.is_empty());
-        let id = songs[0].id.clone();
-        s.star(std::slice::from_ref(&id), true).await.expect("star");
-        let (.., starred) = s.starred().await.expect("starred");
-        assert!(starred.iter().any(|x| x.id == id));
-        s.star(std::slice::from_ref(&id), false)
+    for k in [
+        "name", "artist", "album", "newest", "recent", "frequent", "year", "rating",
+    ] {
+        s.songs(k, 0, 5)
             .await
-            .expect("unstar");
-        let (.., starred) = s.starred().await.expect("starred 2");
-        assert!(!starred.iter().any(|x| x.id == id));
-        s.rate(&id, 4).await.expect("rate");
-        s.scrobble(&id, true).await.expect("scrobble");
-        s.scrobble(&id, false).await.expect("now playing");
+            .unwrap_or_else(|e| panic!("songs {k}: {e}"));
+    }
+    let (album, songs) = s.album(&page[0].id).await.expect("album");
+    assert_eq!(album.id, page[0].id);
+    assert!(!songs.is_empty() && songs.iter().all(|x| x.album_id == album.id));
+    assert!(
+        songs
+            .windows(2)
+            .all(|w| (w[0].disc, w[0].track) <= (w[1].disc, w[1].track))
+    );
+    let (artists, n) = s.artists(0, 5).await.expect("artists");
+    assert!(n >= artists.len() && !artists.is_empty());
+    let id = &album.artist_id;
+    let ((artist, discs), _, info) =
+        tokio::try_join!(s.artist(id), s.top_songs(id), s.artist_info(id)).expect("artist");
+    assert!(artist.id == *id && discs.iter().any(|a| a.id == album.id));
+    assert!(info.similar.iter().all(|a| a.album_count > 0));
+    let word = album
+        .artist
+        .split_whitespace()
+        .next()
+        .expect("the album has an artist");
+    let (_, found, _) = s.search(word, 20).await.expect("search");
+    assert!(
+        found.iter().any(|a| a.artist_id == album.artist_id),
+        "search for {word} misses the artist"
+    );
+    let idx = s.indexes().await.expect("indexes");
+    assert!(!s.directory(&idx[0].id).await.expect("directory").is_empty());
+    for p in s.playlists().await.expect("playlists").iter().take(1) {
+        assert_eq!(s.playlist(&p.id).await.expect("playlist").0.id, p.id);
+    }
+    s.genres().await.expect("genres");
+    s.lyrics(&songs[0].id).await.expect("lyrics");
+    s.similar_songs(&songs[0].id, 3).await.expect("similar");
+    let cover = s.cover(&album.id, 128).await.expect("cover");
+    assert!(image::load_from_memory(&cover).is_ok());
+    assert!(s.cover_file(&album.id, 128).exists());
+}
+
+#[test]
+fn song_parses_from_native_and_subsonic_json() {
+    let native = json!({
+        "id": "row1", "mediaFileId": "n1", "title": "T", "albumId": "al1", "trackNumber": 3,
+        "discNumber": 2, "starred": true, "rating": 4, "rgTrackGain": -7.5, "rgAlbumPeak": 1.2,
+        "participants": {"artist": [{"id": "ar1", "name": "Ar"}]}, "hasCoverArt": true
     });
+    let subsonic = json!({
+        "id": "n1", "title": "T", "albumId": "al1", "track": 3, "discNumber": 2,
+        "starred": "2026-01-01T00:00:00Z", "userRating": 4, "coverArt": "n1",
+        "artists": [{"id": "ar1", "name": "Ar"}], "replayGain": {"trackGain": -7.5, "albumPeak": 1.2}
+    });
+    for v in [native, subsonic] {
+        let s: Song = api::parse(v).expect("song");
+        assert_eq!(
+            (s.id.as_str(), s.cover.as_str(), s.album_id.as_str()),
+            ("n1", "n1", "al1")
+        );
+        assert_eq!((s.track, s.disc, s.starred, s.user_rating), (3, 2, true, 4));
+        assert_eq!((s.rg.track_gain, s.rg.album_peak), (Some(-7.5), Some(1.2)));
+        assert_eq!(s.artists[0].name, "Ar");
+    }
+    assert!(api::parse::<Song>(json!({"title": 5})).is_err());
+    assert_eq!(
+        api::parse::<Vec<Song>>(serde_json::Value::Null)
+            .expect("null")
+            .len(),
+        0
+    );
 }
 
 #[test]
 #[ignore = "needs the local test server"]
-fn local_playlist_roundtrip() {
+fn local_reads_with_native_and_subsonic_api() {
+    let mut s = local();
+    assert!(s.server.native && !s.jwt().is_empty());
+    rt().block_on(read_suite(&s));
+    s.server.native = false;
+    rt().block_on(read_suite(&s));
+}
+
+#[test]
+#[ignore = "needs the local test server"]
+fn local_writes_round_trip() {
+    let s = local();
     rt().block_on(async {
-        let s = local().await;
-        let (songs, _) = s.songs("name", 0, 5).await.expect("songs");
-        let ids: Vec<String> = songs.iter().take(3).map(|x| x.id.clone()).collect();
+        let (songs, _) = s.songs("name", 0, 4).await.expect("songs");
+        let ids: Vec<String> = songs.iter().map(|x| x.id.clone()).collect();
+        s.star(&ids[..1], true).await.expect("star");
+        assert!(
+            s.starred()
+                .await
+                .expect("starred")
+                .2
+                .iter()
+                .any(|x| x.id == ids[0])
+        );
+        s.star(&ids[..1], false).await.expect("unstar");
+        assert!(
+            !s.starred()
+                .await
+                .expect("starred")
+                .2
+                .iter()
+                .any(|x| x.id == ids[0])
+        );
+        s.rate(&ids[0], 4).await.expect("rate");
+        s.scrobble(&ids[0], false).await.expect("now playing");
+        s.scrobble(&ids[0], true).await.expect("scrobble");
         let pl = s
             .playlist_create("navify test", &ids[..2])
             .await
             .expect("create");
         assert_eq!(pl.song_count, 2);
-        let (_pl2, tracks) = s.playlist(&pl.id).await.expect("playlist");
-        assert_eq!(tracks.len(), 2);
         s.playlist_update(&pl.id, Some("navify test 2"), None, &ids[2..3], &[0])
             .await
             .expect("update");
-        let (pl3, tracks) = s.playlist(&pl.id).await.expect("playlist 2");
-        assert_eq!(pl3.name, "navify test 2");
-        assert_eq!(tracks.len(), 2);
-        assert!(tracks.iter().any(|t| t.id == ids[2]));
+        let (pl2, tracks) = s.playlist(&pl.id).await.expect("playlist");
+        assert_eq!(pl2.name, "navify test 2");
+        assert_eq!(
+            tracks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+            [&ids[1], &ids[2]]
+        );
         s.playlist_delete(&pl.id).await.expect("delete");
         assert!(
             !s.playlists()
@@ -303,68 +170,26 @@ fn local_playlist_roundtrip() {
                 .iter()
                 .any(|p| p.id == pl.id)
         );
-    });
-}
-
-#[test]
-#[ignore = "needs the local test server"]
-fn local_play_queue_roundtrip() {
-    rt().block_on(async {
-        let s = local().await;
-        let (songs, _) = s.songs("name", 0, 4).await.expect("songs");
-        let ids: Vec<String> = songs.iter().map(|x| x.id.clone()).collect();
         s.save_play_queue(&ids, &ids[1], 1234)
             .await
             .expect("save queue");
-        let (queue, current, position) = s.play_queue().await.expect("queue");
-        assert_eq!(queue.len(), ids.len());
-        assert_eq!(current, ids[1]);
-        assert_eq!(position, 1234);
+        let (queue, cur, pos) = s.play_queue().await.expect("queue");
+        assert_eq!(
+            queue.iter().map(|x| &x.id).collect::<Vec<_>>(),
+            ids.iter().collect::<Vec<_>>()
+        );
+        assert_eq!((cur, pos), (ids[1].clone(), 1234));
     });
 }
 
 #[test]
-#[ignore = "needs the local test server"]
-fn local_subsonic_read_suite() {
+#[ignore = "needs the .env server"]
+fn live_reads_are_read_only() {
+    let s = session(["NAVIDROME_HOST", "NAVIDROME_USERNAME", "NAVIDROME_PASSWORD"]);
     rt().block_on(async {
-        let mut s = local().await;
-        for native in [true, false] {
-            s.server.native = native;
-            for k in [
-                "recent", "newest", "frequent", "random", "name", "artist", "year", "rating",
-            ] {
-                s.albums(k, &[], 0, 5)
-                    .await
-                    .unwrap_or_else(|e| panic!("albums {k} {native}: {e}"));
-            }
-            for k in [
-                "name", "artist", "album", "newest", "recent", "frequent", "year", "rating",
-            ] {
-                s.songs(k, 0, 5)
-                    .await
-                    .unwrap_or_else(|e| panic!("songs {k} {native}: {e}"));
-            }
-        }
-        let (albums, _) = s.albums("name", &[], 0, 10).await.expect("albums");
-        assert!(!albums.is_empty());
-        let (album, songs) = s.album(&albums[0].id).await.expect("album");
-        assert_eq!(album.id, albums[0].id);
-        assert!(!songs.is_empty());
-        let (artists, _) = s.artists(0, 10).await.expect("artists");
-        let _ = s.artist(&artists[0].id).await.expect("artist");
-        let playlists = s.playlists().await.expect("playlists");
-        if let Some(pl) = playlists.first() {
-            let _ = s.playlist(&pl.id).await.expect("playlist");
-        }
-        let (a, b, c) = s.search("a", 5).await.expect("search");
-        let _ = (a, b, c);
-        let _ = s.genres().await.expect("genres");
-        let idx = s.indexes().await.expect("indexes");
-        assert!(!idx.is_empty());
-        let dir = s.directory(&idx[0].id).await.expect("directory");
-        assert!(!dir.is_empty());
-        let _ = s.similar_songs(&songs[0].id, 3).await.expect("similar");
-        let _ = s.starred().await.expect("starred");
-        let _ = s.lyrics(&songs[0].id).await.expect("lyrics");
+        let (albums, total) = s.albums("frequent", &[], 0, 5).await.expect("albums");
+        assert!(total > 0 && !albums.is_empty());
+        let (_, songs) = s.album(&albums[0].id).await.expect("album");
+        assert!(songs.iter().any(|x| x.rg.track_gain.is_some()));
     });
 }

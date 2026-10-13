@@ -1,5 +1,6 @@
 use std::{
-    hash::{BuildHasher, DefaultHasher, Hash, Hasher},
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, BuildHasherDefault, DefaultHasher},
     io::{Error as IoError, ErrorKind},
     path::PathBuf,
     sync::{
@@ -36,15 +37,15 @@ pub struct Session {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Rg {
-    #[serde(rename = "rgTrackGain")]
+    #[serde(alias = "rgTrackGain")]
     pub track_gain: Option<f32>,
-    #[serde(rename = "rgAlbumGain")]
+    #[serde(alias = "rgAlbumGain")]
     pub album_gain: Option<f32>,
-    #[serde(rename = "rgTrackPeak")]
+    #[serde(alias = "rgTrackPeak")]
     pub track_peak: Option<f32>,
-    #[serde(rename = "rgAlbumPeak")]
+    #[serde(alias = "rgAlbumPeak")]
     pub album_peak: Option<f32>,
 }
 
@@ -222,16 +223,7 @@ pub fn normalize(v: &mut Value) {
                 }
             }
             if let Some(Value::Object(rg)) = m.remove("replayGain") {
-                for (src, dst) in [
-                    ("trackGain", "rgTrackGain"),
-                    ("albumGain", "rgAlbumGain"),
-                    ("trackPeak", "rgTrackPeak"),
-                    ("albumPeak", "rgAlbumPeak"),
-                ] {
-                    if let Some(g) = rg.get(src) {
-                        m.insert(dst.to_string(), g.clone());
-                    }
-                }
+                m.extend(rg);
             }
             if !m.contains_key("releaseTypes")
                 && let Some(t) = m
@@ -248,12 +240,8 @@ pub fn normalize(v: &mut Value) {
             {
                 m.insert("releaseTypes".to_string(), t);
             }
-            if let Some(id) = m
-                .get("mediaFileId")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-            {
-                m.insert("id".to_string(), Value::String(id));
+            if let Some(id) = m.remove("mediaFileId") {
+                m.insert("id".into(), id);
             }
             if m.get("coverArt")
                 .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
@@ -333,22 +321,16 @@ impl Session {
         } else {
             format!("https://{url}")
         };
-        let salt = (0..2)
-            .map(|_| {
-                format!(
-                    "{:016x}",
-                    std::collections::hash_map::RandomState::new()
-                        .build_hasher()
-                        .finish()
-                )
-            })
-            .collect::<String>();
+        let salt = format!(
+            "{:016x}{:016x}",
+            RandomState::new().hash_one(1),
+            RandomState::new().hash_one(2)
+        );
         let mut s = Session::new(Server {
-            id: format!("{:016x}", {
-                let mut h = DefaultHasher::new();
-                (url.clone(), user).hash(&mut h);
-                h.finish()
-            }),
+            id: format!(
+                "{:016x}",
+                BuildHasherDefault::<DefaultHasher>::default().hash_one((&url, user))
+            ),
             name: reqwest::Url::parse(&url)
                 .ok()
                 .and_then(|u| u.host_str().map(str::to_string))
@@ -362,14 +344,13 @@ impl Session {
             ext: Vec::new(),
         });
         let ping: Value = s.rest("ping", &[], "").await?;
-        s.server.ext = ping["openSubsonicExtensions"]
+        let ext = ping["openSubsonicExtensions"]
             .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|e| e["name"].as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .into_iter()
+            .flatten();
+        s.server.ext = ext
+            .filter_map(|e| Some(e["name"].as_str()?.to_string()))
+            .collect();
         if ping["type"].as_str() == Some("navidrome") {
             let res = s
                 .http
@@ -478,6 +459,9 @@ impl Session {
             .get(format!("{}/api/{path}", self.server.url))
             .header("x-nd-authorization", format!("Bearer {}", self.jwt()))
             .query(query)
+            .query(
+                &[("missing", "false")][..usize::from(matches!(path, "album" | "song" | "artist"))],
+            )
             .send()
             .await
             .map_err(net_err)?;
