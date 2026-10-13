@@ -17,7 +17,7 @@ use crate::config::{self, Config};
 
 pub const PAGE: usize = 100;
 const STALE: Duration = Duration::from_secs(300);
-const COVER_CAP: usize = 24 * 1024 * 1024;
+const COVER_CAP: usize = 8 * 1024 * 1024;
 const SIZES: [u32; 4] = [128, 192, 300, 640];
 pub const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/navify.png");
 
@@ -45,7 +45,7 @@ pub struct SearchRes {
 }
 
 pub type AnyData = Arc<dyn Any + Send + Sync>;
-type Decoded = (u32, u32, Color, Vec<u8>);
+type Decoded = (Color, image::Handle, usize);
 type Slot = Option<(u64, image::Handle, usize)>;
 type Run = dyn Fn(&mut App) -> Task<Message> + Send + Sync;
 
@@ -206,12 +206,11 @@ impl Covers {
         near.iter().find_map(|&j| Some(e[j].as_ref()?.1.clone()))
     }
 
-    fn insert(&mut self, id: String, size: u32, (w, h, c, px): Decoded) {
+    fn insert(&mut self, id: String, size: u32, (c, h, n): Decoded) {
         self.tick += 1;
         self.color.insert(id.clone(), c);
-        let n = (w * h * 4) as usize;
         let e = &mut self.map.entry(id).or_default()[slot(size)];
-        let old = e.replace((self.tick, image::Handle::from_rgba(w, h, px), n));
+        let old = e.replace((self.tick, h, n));
         self.bytes = self.bytes + n - old.map_or(0, |o| o.2);
         while self.bytes > COVER_CAP {
             let all = self
@@ -820,7 +819,7 @@ impl App {
                 let px = if wide { 1280 } else { size };
                 static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
                 let _one = ONE.acquire().await.expect("the decode semaphore is open");
-                let d = tokio::task::spawn_blocking(move || decode(&b, px, wide));
+                let d = tokio::task::spawn_blocking(move || decode(b, px, wide));
                 d.await.expect("decode task")
             };
             let done = move |r| Message::Cover(id.clone(), size, r);
@@ -1876,9 +1875,9 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
     })
 }
 
-fn decode(b: &[u8], size: u32, wide: bool) -> Result<Decoded, String> {
+fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
     use ::image::imageops::FilterType;
-    let mut img = ::image::load_from_memory(b).map_err(|e| e.to_string())?;
+    let mut img = ::image::load_from_memory(&raw).map_err(|e| e.to_string())?;
     let h = (img.width() / 3).min(img.height());
     if wide {
         img = img.crop_imm(0, (img.height() - h) * 3 / 10, img.width(), h);
@@ -1911,8 +1910,11 @@ fn decode(b: &[u8], size: u32, wide: bool) -> Result<Decoded, String> {
         true => Color::from_rgb(l, l, l),
         false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
     };
-    let (w, h) = (img.width(), img.height());
-    Ok((w, h, color, img.into_rgba8().into_raw()))
+    if !wide {
+        return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
+    }
+    let (w, h, px) = (img.width(), img.height(), img.into_rgba8().into_raw());
+    Ok((color, image::Handle::from_rgba(w, h, px), (w * h * 4) as usize))
 }
 
 fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {
