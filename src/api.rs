@@ -222,7 +222,14 @@ fn normalize(v: &mut Value) {
                 .get(if has { "id" } else { "albumId" })
                 .filter(|id| id.is_string())
                 .cloned();
+            let hash = m
+                .remove("imageHash")
+                .and_then(|h| h.as_str().map(str::to_string));
             if let Some(c) = m.remove("coverArt").filter(|c| c != "").or(id) {
+                let c = match (c.as_str(), hash) {
+                    (Some(c), Some(h)) => format!("{c}#{h}").into(),
+                    _ => c,
+                };
                 m.insert("cover".into(), c);
             }
             m.values_mut().for_each(normalize);
@@ -441,7 +448,7 @@ impl Session {
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
-        let name = format!("{}-{size}", id.replace([':', '/', '\\'], "_"));
+        let name = format!("{}-{size}", id.replace([':', '/', '\\', '#'], "_"));
         cache_dir("covers").join(&self.server.id).join(name)
     }
 
@@ -452,7 +459,10 @@ impl Session {
         }
         let url = match id.starts_with("https://") {
             true => id.to_string(),
-            false => self.url("getCoverArt", &json!({"id": id, "size": size})),
+            false => {
+                let id = id.split('#').next();
+                self.url("getCoverArt", &json!({"id": id, "size": size}))
+            }
         };
         let res = self.http.get(url).send().await.map_err(net_err)?;
         let status = res.status().as_u16();

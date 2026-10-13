@@ -65,8 +65,8 @@ fn song_parses_from_native_and_subsonic_json() -> Result<()> {
         assert_eq!((s.track, s.disc, s.starred, s.user_rating), (3, 2, true, 4));
         assert_eq!((s.rg.track_gain, s.rg.album_peak), (Some(-7.5), Some(1.2)));
     }
-    let bare: Song = api::parse(json!({"id": "s", "albumId": "al1", "hasCoverArt": false}))?;
-    assert_eq!(bare.cover, "al1");
+    let bare = json!({"id": "s", "albumId": "al1", "hasCoverArt": false, "imageHash": "h"});
+    assert_eq!(api::parse::<Song>(bare)?.cover, "al1#h");
     assert!(api::parse::<Song>(json!({"title": 5})).is_err());
     assert!(api::parse::<Vec<Song>>(serde_json::Value::Null)?.is_empty());
     Ok(())
