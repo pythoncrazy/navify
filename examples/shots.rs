@@ -16,6 +16,10 @@ fn main() {
     }
     let app = application(App::boot, App::update, App::view)
         .subscription(App::subscription)
+        .style(|_, _| iced::theme::Style {
+            background_color: iced::Color::BLACK,
+            text_color: iced::Color::WHITE,
+        })
         .default_font(Font::with_name("Figtree"));
     let var = |k| std::env::var(k).unwrap_or_default();
     let size = var("NAVIFY_SHOT_SIZE");
@@ -24,6 +28,9 @@ fn main() {
     });
     let mut cfg = navify::config::Config::load();
     cfg.settings.window = (w, h);
+    cfg.settings.zoom = var("NAVIFY_SHOT_SCALE")
+        .parse()
+        .unwrap_or(cfg.settings.zoom);
     cfg.save().expect("save the configuration");
     let s = cfg.settings.zoom;
     let (tx, mut rx) = iced_test::futures::futures::channel::mpsc::channel(100);
