@@ -1,6 +1,6 @@
-use std::{path::PathBuf, sync::OnceLock};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::api::Server;
@@ -92,27 +92,14 @@ impl Config {
 }
 
 fn entry(server_id: &str) -> Result<keyring_core::Entry> {
-    static STORE: OnceLock<Result<(), String>> = OnceLock::new();
-    let store = STORE.get_or_init(|| {
-        #[cfg(target_os = "macos")]
-        let s = apple_native_keyring_store::keychain::Store::new();
-        #[cfg(target_os = "windows")]
-        let s = windows_native_keyring_store::Store::new();
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let s = dbus_secret_service_keyring_store::Store::new();
-        s.map(|s| keyring_core::set_default_store(s))
-            .map_err(|e| e.to_string())
-    });
-    store
-        .clone()
-        .map_err(|e| anyhow!("The credential store is not available: {e}"))?;
+    #[cfg(target_os = "macos")]
+    let s = apple_native_keyring_store::keychain::Store::new();
+    #[cfg(target_os = "windows")]
+    let s = windows_native_keyring_store::Store::new();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let s = dbus_secret_service_keyring_store::Store::new();
+    keyring_core::set_default_store(s.context("The credential store is not available.")?);
     keyring_core::Entry::new("navify", server_id).context("Could not access the credential store.")
-}
-
-pub fn password(server_id: &str) -> Result<String> {
-    entry(server_id)?
-        .get_password()
-        .context("No password is stored for this server.")
 }
 
 pub fn remember(server_id: &str, password: &str) -> Result<()> {
