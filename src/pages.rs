@@ -536,9 +536,19 @@ fn hero<'a>(app: &App, art: El<'a>, kind: &str, title: &str, meta: El<'a>, c: Co
     .into()
 }
 
+fn bar_btn<'a>(c: char, msg: Message) -> El<'a> {
+    button(theme::icon(c, 28.0).center())
+        .on_press(msg)
+        .padding(0)
+        .width(32)
+        .height(32)
+        .style(theme::link(theme::SUB))
+        .into()
+}
+
 fn actions<'a>(app: &App, play: Message, shuffle: Message, extra: Vec<El<'a>>) -> El<'a> {
     container(
-        row![play_btn(app, 56.0, &app.route, play), icon_btn(icon::SHUFFLE, 16.0, shuffle)]
+        row![play_btn(app, 56.0, &app.route, play), bar_btn(icon::SHUFFLE, shuffle)]
             .extend(extra)
             .spacing(PAD)
             .align_y(Alignment::Center),
@@ -574,8 +584,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             .on_press(Message::Star(vec![id.into()], !on))
             .into()
     };
-    let dots =
-        |k: MenuKind| -> El<'a> { icon_btn(icon::DOTS, 16.0, Message::Menu(Box::new(k))).into() };
+    let dots = |k: MenuKind| bar_btn(icon::DOTS, Message::Menu(Box::new(k)));
     if let Some((a, songs)) = app.data::<(Album, Vec<Song>)>(key) {
         let artists: Vec<Artist> = if a.artists.is_empty() {
             vec![Artist { id: a.artist_id.clone(), name: a.artist.clone(), ..Artist::default() }]
