@@ -79,6 +79,7 @@ pub enum Set {
     Device(String),
     Zoom(f32),
     Remaining(bool),
+    CacheGb(f32),
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +130,7 @@ pub enum Message {
     UseServer(String),
     DropServer(String),
     Set(Set),
+    CacheText(String),
     ClearCache,
     Focus(bool),
     Shown(bool),
@@ -259,6 +261,7 @@ pub struct App {
     pub lib_filter: u8,
     pub lib_collapsed: bool,
     pub volume: f32,
+    pub cache_gb: String,
     pub muted: bool,
     pub login: Login,
     pub visible: bool,
@@ -295,12 +298,7 @@ impl App {
                 std::env::var("NAVIFY_PASS").ok()?,
             ))
         })();
-        let prune = Task::perform(
-            async {
-                let _ = tokio::task::spawn_blocking(crate::api::prune_covers).await;
-            },
-            |_| Message::Noop,
-        );
+        let prune = app.disk(Some(300 << 20));
         let media = if app.shot.is_some() {
             Task::none()
         } else if !cfg!(windows) {
@@ -556,6 +554,7 @@ impl App {
         let mut app = Self {
             session,
             volume: cfg.settings.volume,
+            cache_gb: cfg.settings.audio_cache_gb.to_string(),
             repeat: 0,
             cfg,
             route,
@@ -758,8 +757,22 @@ impl App {
             gain: self.gain(song),
             transcoded,
             duration: song.duration,
-            cache: None,
+            cache: (!transcoded && st.audio_cache_gb > 0.0)
+                .then(|| self.session.as_ref().expect("playback needs a session").audio_file(song)),
         }
+    }
+
+    fn disk(&self, covers: Option<u64>) -> Task<Message> {
+        let audio = (self.cfg.settings.audio_cache_gb as f64 * 1_073_741_824.0) as u64;
+        let dir = crate::api::cache_dir("");
+        Task::perform(
+            tokio::task::spawn_blocking(move || {
+                crate::api::prune(&dir.join("audio"), audio);
+                covers.inspect(|&c| crate::api::prune(&dir.join("covers"), c));
+                crate::api::cache_files(&dir).iter().map(|f| f.2).sum::<u64>()
+            }),
+            |n| Message::Loaded("disk".into(), Ok(Arc::new(n.expect("cache scan")) as AnyData)),
+        )
     }
 
     fn next_index(&self) -> Option<usize> {
@@ -1060,6 +1073,7 @@ impl App {
                     d.expect("device scan").map(|v| Arc::new(v) as AnyData),
                 )
             }));
+            tasks.push(self.disk(None));
         }
         Task::batch(tasks)
     }
@@ -1664,6 +1678,10 @@ impl App {
                         let (w, h) = self.view_size();
                         extra = self.update(Message::Resize(w, h));
                     }
+                    Set::CacheGb(v) => {
+                        self.cfg.settings.audio_cache_gb = v;
+                        extra = self.disk(None);
+                    }
                 }
                 if audio && let (Some(p), Some(s)) = (&self.player, self.current_song()) {
                     p.set_gain(self.gain(s));
@@ -1672,16 +1690,31 @@ impl App {
                 let l = if heard && self.loaded { self.listen(self.playing) } else { Task::none() };
                 Task::batch([extra, l, self.persist()])
             }
+            Message::CacheText(t) => {
+                let v = t.trim().parse::<f32>().ok().filter(|v| (0.0..=10_000.0).contains(v));
+                self.cache_gb = t;
+                match v {
+                    Some(v) => {
+                        self.cfg.settings.audio_cache_gb = v;
+                        self.persist()
+                    }
+                    None => Task::none(),
+                }
+            }
             Message::ClearCache => {
                 self.covers.map.clear();
                 self.covers.bytes = 0;
                 self.covers.color.clear();
-                Task::perform(tokio::fs::remove_dir_all(crate::api::covers_dir()), |r| match r {
-                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                        Message::Toast(0, format!("Could not clear the cover cache. {e}"))
+                let rm = |k| tokio::fs::remove_dir_all(crate::api::cache_dir(k));
+                Task::perform(async move { tokio::join!(rm("covers"), rm("audio")) }, |r| {
+                    match [r.0, r.1].into_iter().find_map(Result::err) {
+                        Some(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                            Message::Toast(0, format!("Could not clear the cache. {e}"))
+                        }
+                        _ => Message::Noop,
                     }
-                    _ => Message::Noop,
                 })
+                .chain(self.disk(None))
             }
             Message::Focus(true) => self.update(Message::Shown(true)),
             Message::Focus(false) => {

@@ -576,7 +576,11 @@ impl Session {
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
-        covers_dir().join(&self.server.id).join(format!("{id}-{size}"))
+        cache_dir("covers").join(&self.server.id).join(format!("{id}-{size}"))
+    }
+
+    pub fn audio_file(&self, song: &Song) -> PathBuf {
+        cache_dir("audio").join(&self.server.id).join(format!("{}.{}", song.id, song.suffix))
     }
 
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
@@ -981,42 +985,39 @@ const SONG_SORTS: &[(&str, &str, &str)] = &[
     ("rating", "highest", "rating"),
 ];
 
-fn cache_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-    if let Ok(d) = std::fs::read_dir(dir) {
-        for p in d.flatten().map(|e| e.path()) {
-            if p.is_dir() {
-                cache_files(&p, out)
-            } else if p.extension() != Some("tmp".as_ref()) {
-                out.push(p);
+pub fn cache_dir(kind: &str) -> PathBuf {
+    dirs::cache_dir().expect("The system has no cache directory.").join("navify").join(kind)
+}
+
+pub fn cache_files(dir: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
+    let (mut out, mut dirs) = (Vec::new(), vec![dir.to_path_buf()]);
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+            match e.metadata() {
+                Ok(m) if m.is_dir() => dirs.push(e.path()),
+                Ok(m) => {
+                    out.push((e.path(), m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()))
+                }
+                Err(_) => {}
             }
         }
     }
+    out
 }
 
-pub fn covers_dir() -> PathBuf {
-    dirs::cache_dir().expect("The system has no cache directory.").join("navify/covers")
-}
-
-pub fn prune_covers() {
-    let mut files = Vec::new();
-    cache_files(&covers_dir(), &mut files);
-    let mut metas: Vec<(PathBuf, std::time::SystemTime, u64)> = files
-        .into_iter()
-        .filter_map(|p| {
-            std::fs::metadata(&p)
-                .ok()
-                .map(|m| (p, m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()))
-        })
-        .collect();
-    metas.sort_by_key(|(.., t, _)| *t);
-    let mut total: u64 = metas.iter().map(|(.., s)| s).sum();
-    const CAP: u64 = 300 * 1024 * 1024;
-    for (p, .., s) in metas {
-        if total <= CAP {
+pub fn prune(dir: &std::path::Path, cap: u64) {
+    let (tmp, mut files): (Vec<_>, Vec<_>) =
+        cache_files(dir).into_iter().partition(|f| f.0.extension() == Some("tmp".as_ref()));
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    tmp.iter().filter(|f| f.1 < old).for_each(|f| drop(std::fs::remove_file(&f.0)));
+    files.sort_by_key(|f| f.1);
+    let mut total: u64 = files.iter().map(|f| f.2).sum();
+    for (p, _, s) in files {
+        if total <= cap {
             break;
         }
         if std::fs::remove_file(&p).is_ok() {
-            total = total.saturating_sub(s);
+            total -= s;
         }
     }
 }
