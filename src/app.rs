@@ -392,6 +392,10 @@ impl App {
                     self.panel = if s == "queue" { 2 } else { 1 };
                     let first = songs.first().map(|s| format!("lyrics:{}", s.id));
                     task = Task::batch(first.map(|k| self.request(&k, 0)));
+                    let recent = self.data::<Home>("home").and_then(|h| h.recent.first());
+                    if let Some(a) = recent.filter(|_| songs.is_empty()) {
+                        task = self.update(Message::PlayCtx(format!("album:{}", a.id), 0));
+                    }
                 }
                 "menu" if !songs.is_empty() => {
                     CURSOR.store(
@@ -808,7 +812,12 @@ impl App {
             let (s, k) = (s.clone(), id.clone());
             let load = async move {
                 let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
-                let d = tokio::task::spawn_blocking(move || decode(&b, size));
+                let px = if k.starts_with("https://") {
+                    1280
+                } else {
+                    size
+                };
+                let d = tokio::task::spawn_blocking(move || decode(&b, px));
                 d.await.expect("decode task")
             };
             let done = move |r| Message::Cover(id.clone(), size, r);
@@ -1018,10 +1027,16 @@ impl App {
                 self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
                 self.seeds.remove(&key);
                 let v = self.merge(&key, v);
+                let banner = key.starts_with("artist:") && self.cfg.settings.banners;
+                let banner = banner
+                    .then(|| v.downcast_ref::<(Artist, Vec<Album>)>())
+                    .flatten();
+                let banner = banner.map(|(a, _)| a.banner_key());
                 self.cache.insert(key.clone(), (Instant::now(), v));
+                let banner = Task::batch(banner.map(|k| self.request(&k, 0)));
                 let setup = shot_key(self.shot.as_deref()).is_some_and(|k| k == key);
                 let setup = Task::batch(setup.then(|| self.apply_shot_setup()));
-                return Task::batch([self.disc_load(), setup]);
+                return Task::batch([self.disc_load(), setup, banner]);
             }
             Message::Cover(id, size, r) => {
                 self.covers.want.remove(&(id.clone(), size));
@@ -1664,6 +1679,7 @@ impl App {
         let tiles = |n: usize| span(n, cw + 52.0, cols);
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
+        let mut huge: Vec<&String> = Vec::new();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             big.push(&a.cover);
             small.push(a.artists.first().map_or(&a.artist_id, |x| &x.id));
@@ -1683,6 +1699,10 @@ impl App {
             let appears = self.data::<Vec<Album>>(&format!("appears:{id}"));
             let shelf = crate::pages::disc_shelf(self, albums);
             big.push(&a.cover);
+            let banner = self
+                .data::<String>(&a.banner_key())
+                .filter(|u| !u.is_empty());
+            huge.extend(banner.filter(|_| self.cfg.settings.banners));
             small.extend(top.iter().flat_map(|v| v.iter().take(10)).map(|s| &s.cover));
             big.extend(shelf.iter().map(|x| &x.cover));
             big.extend(
@@ -1724,8 +1744,9 @@ impl App {
             small.extend(l.artists.iter().take(40).map(|a| &a.cover));
         }
         let big = big.into_iter().map(|c| (c.clone(), 300));
-        big.chain(small.into_iter().map(|c| (c.clone(), 128)))
-            .collect()
+        let small = small.into_iter().map(|c| (c.clone(), 128));
+        let huge = huge.into_iter().map(|c| (c.clone(), 640));
+        big.chain(small).chain(huge).collect()
     }
 
     pub fn view(&self) -> iced::Element<'_, Message> {
@@ -1912,6 +1933,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             "top" => Arc::new(s.top_songs(arg).await?),
             "info" => Arc::new(s.artist_info(arg).await?),
             "appears" => Arc::new(s.appears(arg).await?),
+            "banner" => Arc::new(s.banner(arg).await?),
             "playlist" => Arc::new(s.playlist(arg).await?),
             "liked" => pager(s.songs("starred", offset, PAGE).await?, offset),
             "albums" => pager(s.albums(or("newest"), &[], offset, PAGE).await?, offset),

@@ -34,6 +34,7 @@ pub struct Settings {
     pub tray: bool,
     pub panels: (f32, f32),
     pub lib_collapsed: bool,
+    pub banners: bool,
 }
 
 impl Default for Settings {
@@ -57,6 +58,7 @@ impl Default for Settings {
             tray: false,
             panels: (300.0, 320.0),
             lib_collapsed: false,
+            banners: false,
         }
     }
 }

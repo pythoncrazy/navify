@@ -1,7 +1,7 @@
 use iced::font::Weight::{Black, Bold, Medium, Normal};
 use iced::widget::{
-    Column, Row, Space, button, column, container, hover, mouse_area, pick_list, row, scrollable,
-    slider, stack, text, text_input, toggler,
+    Column, Row, Space, button, column, container, hover, image, mouse_area, pick_list, row,
+    scrollable, slider, stack, text, text_input, toggler,
 };
 use iced::{Center, Color, Fill, Padding, Right, color, padding};
 
@@ -9,7 +9,7 @@ use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Server, Song};
 use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, act, set};
 use crate::config::Settings;
 use crate::theme::{
-    self, ACCENT, BG, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
+    self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
 };
 use crate::view::{
     El, SONGS_BG, art, artists_line, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, go, icon_btn,
@@ -549,6 +549,7 @@ struct Page<'a> {
     meta: El<'a>,
     color: Color,
     extra: Vec<El<'a>>,
+    banner: Option<&'a str>,
 }
 
 fn play_all(route: &str) -> Message {
@@ -578,13 +579,40 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>, height: f32) -> El<'a> {
             .shadow(shadow)
             .border(iced::Border::default().rounded(r))
     });
-    let title = ell(p.title, tw, size, Black).line_height(1.1);
-    let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
-    let info = column![kind, title, p.meta].spacing(8);
-    let hero = row![art, info].spacing(PAD).align_y(iced::Bottom);
     let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
-    let hero = container(hero).padding(PAD).width(Fill);
-    let hero = hero.height(px + 2.0 * PAD).style(bg);
+    let hero: El = if let Some(url) = p.banner {
+        let bh = (app.view_size().1 * 0.4).clamp(280.0, 480.0);
+        let tw = app.main_w() - 2.0 * PAD;
+        let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
+        let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
+        let title = ell(p.title, tw, size, Black).line_height(1.1);
+        let img = app.covers.get(url, 640).map(|h| {
+            image(h)
+                .width(Fill)
+                .height(bh)
+                .content_fit(iced::ContentFit::Cover)
+        });
+        let dim = [
+            (0.0, CLEAR),
+            (0.5, BG.scale_alpha(0.1)),
+            (1.0, BG.scale_alpha(0.6)),
+        ];
+        let dim = container(Space::new())
+            .width(Fill)
+            .height(bh)
+            .style(theme::down(&dim));
+        let text = container(column![title, p.meta].spacing(8)).padding(PAD);
+        let text = text.width(Fill).height(bh).align_bottom(bh);
+        let back = container(Space::new()).width(Fill).height(bh).style(bg);
+        stack![back].push(img).push(dim).push(text).into()
+    } else {
+        let title = ell(p.title, tw, size, Black).line_height(1.1);
+        let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
+        let info = column![kind, title, p.meta].spacing(8);
+        let hero = row![art, info].spacing(PAD).align_y(iced::Bottom);
+        let hero = container(hero).padding(PAD).width(Fill);
+        hero.height(px + 2.0 * PAD).style(bg).into()
+    };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
     let play = play_btn(app, 56.0, &app.route, play_all(&app.route));
     let bar = row![play, shuffle].extend(p.extra).spacing(PAD);
@@ -625,6 +653,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             meta: meta(lead.align_y(Center), rest),
             color: head_color(app, &a.cover),
             extra: vec![heart, dots(MenuKind::Album(Box::new(a.clone())))],
+            banner: None,
         };
         return Some((p, songs, cols(app, false, false, songs.len())));
     }
@@ -640,6 +669,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             meta: meta.spacing(8).into(),
             color: head_color(app, &p.cover),
             extra: vec![dots(MenuKind::Playlist(p.clone()))],
+            banner: None,
         };
         return Some((page, songs, cols(app, true, true, songs.len())));
     }
@@ -684,6 +714,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         meta,
         color,
         extra,
+        banner: None,
     };
     Some((page, &p.items, cols(app, true, true, n)))
 }
@@ -780,6 +811,8 @@ fn artist(app: &App) -> Option<El<'_>> {
     let body = column![popular, discog, similar, shelf("Appears On", None, appears)];
     let body = body.push(about).spacing(40);
     let body = body.padding(padding::bottom(PAD * 2.0));
+    let banner = app.data::<String>(&a.banner_key()).map(String::as_str);
+    let banner = banner.filter(|u| app.cfg.settings.banners && !u.is_empty());
     let follow = if on { "Following" } else { "Follow" };
     let follow = theme::pill_btn(follow, Message::Star(vec![a.id.clone()], !on));
     let p = Page {
@@ -789,6 +822,7 @@ fn artist(app: &App) -> Option<El<'_>> {
         meta: sub(counts, 14.0).color(TEXT).into(),
         color: head_color(app, &a.cover),
         extra: vec![follow.into(), dots(MenuKind::Artist(a.clone()))],
+        banner,
     };
     let height = BAR + 600.0 + 2.0 * (app.grid().1 + 100.0);
     Some(page(app, p, body.into(), height))
@@ -1034,6 +1068,9 @@ fn settings(app: &App) -> El<'_> {
     let rate = pick(rates.into(), br, |s, v| s.transcode_max_bitrate = v);
     let sync = tog(st.queue_sync, |s, b| s.queue_sync = b);
     let scrobble = tog(st.scrobble, |s, b| s.scrobble = b);
+    let banners = tog(st.banners, |s, b| s.banners = b);
+    let banners_label =
+        "Show artist banners from TheAudioDB (this sends artist names to TheAudioDB)";
     let zoom = pick(zooms.into(), st.zoom, |s, v| s.zoom = v);
     let frame = tog(st.system_frame, |s, b| s.system_frame = b);
     let frame_label = "Use the system title bar on Wayland desktops that do not draw one";
@@ -1076,6 +1113,7 @@ fn settings(app: &App) -> El<'_> {
         line("Send played tracks to the server (scrobble)", scrobble),
         head("Display"),
         line("Zoom", zoom),
+        line(banners_label, banners),
     ];
     let col = col.push(frame).push(tray).push(head("Servers"));
     let col = col.extend(app.cfg.servers.iter().map(server));
@@ -1110,7 +1148,11 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let info = row![lines.width(Fill), heart_btn(&s.id, starred, 20.0)].align_y(Center);
     let about = card(column![bold("About the artist", 16.0), artist]);
     let preview = lyric_at(app, s).map(|(l, cur, _)| {
-        let lines = l.lines[cur..].iter().take(3).zip([1.0, 1.0, 0.4]);
+        let lines = l.lines[cur..]
+            .iter()
+            .filter(|x| !x.1.is_empty())
+            .take(3)
+            .zip([1.0, 1.0, 0.4]);
         let lines =
             lines.map(|((_, t), a)| ell(t, w - 32.0, 20.0, Bold).color(TEXT.scale_alpha(a)));
         let body = column![bold("Lyrics preview", 16.0)].extend(lines.map(Into::into));

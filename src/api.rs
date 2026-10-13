@@ -62,6 +62,17 @@ pub struct Artist {
     pub album_count: u32,
     pub song_count: u32,
     pub starred: bool,
+    #[serde(alias = "mbzArtistId")]
+    pub music_brainz_id: String,
+}
+
+impl Artist {
+    pub fn banner_key(&self) -> String {
+        match self.music_brainz_id.as_str() {
+            "" => format!("banner:{}", self.name),
+            m => format!("banner:mb:{m}"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -430,7 +441,7 @@ impl Session {
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
-        let name = format!("{}-{size}", id.replace(['/', '\\'], "_"));
+        let name = format!("{}-{size}", id.replace([':', '/', '\\'], "_"));
         cache_dir("covers").join(&self.server.id).join(name)
     }
 
@@ -439,7 +450,10 @@ impl Session {
         if let Ok(b) = fs::read(&file).await {
             return Ok(b.into());
         }
-        let url = self.url("getCoverArt", &json!({"id": id, "size": size}));
+        let url = match id.starts_with("https://") {
+            true => id.to_string(),
+            false => self.url("getCoverArt", &json!({"id": id, "size": size})),
+        };
         let res = self.http.get(url).send().await.map_err(net_err)?;
         let status = res.status().as_u16();
         let http = format!("The server returned HTTP {status} for cover art.");
@@ -520,6 +534,35 @@ impl Session {
         let mut i: Info = self.get("getArtistInfo2", q, "/artistInfo2").await?;
         i.similar.retain(|a| a.album_count > 0);
         Ok(i)
+    }
+
+    pub async fn banner(&self, q: &str) -> Result<String> {
+        let base = "https://www.theaudiodb.com/api/v1/json/123";
+        let req = match q.strip_prefix("mb:") {
+            Some(m) => self
+                .http
+                .get(format!("{base}/artist-mb.php"))
+                .query(&[("i", m)]),
+            None => self
+                .http
+                .get(format!("{base}/search.php"))
+                .query(&[("s", q)]),
+        };
+        let res = req.send().await.map_err(net_err)?;
+        let status = res.status().as_u16();
+        ensure!(status < 300, "TheAudioDB returned HTTP {status}.");
+        let v: Value = serde_json::from_slice(&res.bytes().await.map_err(net_err)?)?;
+        let same = |a: &&Value| {
+            a["strArtist"]
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(q))
+        };
+        let mut hit = v["artists"].as_array().into_iter().flatten();
+        let hit = hit.find(|a| q.starts_with("mb:") || same(a));
+        Ok(hit
+            .and_then(|a| a["strArtistFanart"].as_str())
+            .unwrap_or("")
+            .into())
     }
 
     pub async fn playlists(&self) -> Result<Vec<Playlist>> {
