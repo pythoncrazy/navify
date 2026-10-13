@@ -29,6 +29,7 @@ pub struct Server {
     pub ext: Vec<String>,
 }
 
+#[derive(Clone)]
 pub struct Session {
     pub server: Server,
     jwt: Arc<Mutex<String>>,
@@ -361,12 +362,6 @@ fn net_err(e: &reqwest::Error) -> anyhow::Error {
     )
 }
 
-impl Clone for Session {
-    fn clone(&self) -> Self {
-        Self { server: self.server.clone(), jwt: self.jwt.clone(), http: self.http.clone() }
-    }
-}
-
 impl std::fmt::Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Session").field("server", &self.server.id).finish()
@@ -574,6 +569,17 @@ impl Session {
         Ok((parse(v)?, total))
     }
 
+    async fn nd_page<T: DeserializeOwned + Default>(
+        &self,
+        path: &str,
+        offset: usize,
+        size: usize,
+        mut q: Vec<(&str, String)>,
+    ) -> Result<(T, usize)> {
+        q.extend([("_start", offset.to_string()), ("_end", (offset + size).to_string())]);
+        self.nd(Method::GET, path, &q).await
+    }
+
     pub fn url(&self, method: &str, params: &[(&str, String)]) -> String {
         self.http
             .get(format!("{}/rest/{method}", self.server.url))
@@ -644,18 +650,13 @@ impl Session {
         size: usize,
     ) -> Result<(Vec<Album>, usize)> {
         if self.server.native {
-            let (field, order) = sort_key(sort, ALBUM_SORTS);
-            let mut q = vec![
-                ("_start", offset.to_string()),
-                ("_end", (offset + size).to_string()),
-                ("_sort", field.to_string()),
-                ("_order", order.to_string()),
-            ];
-            q.extend_from_slice(filter);
-            if sort == "starred" {
-                q.push(("starred", "true".to_string()));
-            }
-            self.nd(Method::GET, "album", &q).await
+            self.nd_page(
+                "album",
+                offset,
+                size,
+                [sort_q(sort, ALBUM_SORTS), filter.to_vec()].concat(),
+            )
+            .await
         } else {
             let t = ALBUM_SORTS.iter().find(|(k, ..)| *k == sort).expect("a known sort").1;
             let mut q = vec![
@@ -702,17 +703,8 @@ impl Session {
 
     pub async fn artists(&self, offset: usize, size: usize) -> Result<(Vec<Artist>, usize)> {
         if self.server.native {
-            self.nd(
-                Method::GET,
-                "artist",
-                &[
-                    ("_start", offset.to_string()),
-                    ("_end", (offset + size).to_string()),
-                    ("_sort", "name".to_string()),
-                    ("_order", "ASC".to_string()),
-                ],
-            )
-            .await
+            let q = vec![("_sort", "name".to_string()), ("_order", "ASC".to_string())];
+            self.nd_page("artist", offset, size, q).await
         } else {
             let v: Value = self.rest("getArtists", &[], "/artists/index").await?;
             let all = index(&v)?;
@@ -757,10 +749,8 @@ impl Session {
                 ("artists_id", id.to_string()),
                 ("_sort", "play_count".into()),
                 ("_order", "DESC".into()),
-                ("_start", "0".into()),
-                ("_end", "10".into()),
             ];
-            let (v, _) = self.nd::<Vec<Song>>(Method::GET, "song", &q).await?;
+            let (v, _) = self.nd_page::<Vec<Song>>("song", 0, 10, q.to_vec()).await?;
             return Ok(v);
         }
         let by = if self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
@@ -816,18 +806,8 @@ impl Session {
         size: usize,
     ) -> Result<(Vec<Song>, usize)> {
         if self.server.native {
-            let (field, order) = sort_key(sort, SONG_SORTS);
-            let mut q = vec![
-                ("_start", offset.to_string()),
-                ("_end", (offset + size).to_string()),
-                ("_sort", field.to_string()),
-                ("_order", order.to_string()),
-            ];
-            q.extend_from_slice(filter);
-            if sort == "starred" {
-                q.push(("starred", "true".to_string()));
-            }
-            self.nd(Method::GET, "song", &q).await
+            self.nd_page("song", offset, size, [sort_q(sort, SONG_SORTS), filter.to_vec()].concat())
+                .await
         } else if sort == "starred" {
             let (.., songs) = self.starred().await?;
             let total = songs.len();
@@ -995,11 +975,15 @@ fn md5_hex(s: &str) -> String {
     md5::Md5::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn sort_key<'a>(sort: &str, map: &'a [(&'a str, &'a str, &'a str)]) -> (&'a str, &'a str) {
+fn sort_q(sort: &str, map: &[(&str, &str, &str)]) -> Vec<(&'static str, String)> {
     let field = map.iter().find(|(k, ..)| *k == sort).expect("a known sort").2;
     let order =
         if matches!(sort, "name" | "artist" | "album" | "genre" | "year") { "ASC" } else { "DESC" };
-    (field, order)
+    let mut q = vec![("_sort", field.to_string()), ("_order", order.to_string())];
+    if sort == "starred" {
+        q.push(("starred", "true".to_string()));
+    }
+    q
 }
 
 const ALBUM_SORTS: &[(&str, &str, &str)] = &[

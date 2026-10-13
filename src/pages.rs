@@ -140,11 +140,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
             _ => String::new(),
         }
     };
-    let heart = (hot || starred).then(|| {
-        theme::sq(theme::heart(starred, 16.0).center(), 32.0)
-            .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
-            .on_press(Message::Star(vec![s.id.clone()], !starred))
-    });
+    let heart = (hot || starred).then(|| heart_btn(&s.id, starred, 16.0));
     let last = row![
         container(heart).width(32),
         theme::sub(fmt_dur(s.duration), 14.0).width(56).align_x(Alignment::End),
@@ -383,11 +379,8 @@ fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
         .iter()
         .filter(|(g, _)| *g == "all" || albums.iter().any(|x| group(x) == *g))
         .map(|(g, l)| -> El<'a> {
-            button(theme::txt(if *g == "all" { "All" } else { l }, 14.0, Weight::Normal))
-                .on_press(Message::Nav(format!("discography:{id}:{g}")))
-                .style(theme::chip(f == *g))
-                .padding([6, 12])
-                .into()
+            let label = if *g == "all" { "All" } else { l };
+            theme::chip_btn(label, f == *g, Message::Nav(format!("discography:{id}:{g}")))
         });
     let tool = |c: char, on: bool, m: Message| -> El<'a> {
         theme::sq(i(c, 20.0).center(), 32.0)
@@ -487,9 +480,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
             Space::new().height(Fill),
             row![
                 play_btn(app, 40.0, &key, Message::PlayCtx(key.clone(), 0)),
-                theme::sq(theme::heart(on, 24.0).center(), 32.0)
-                    .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
-                    .on_press(Message::Star(vec![al.id.clone()], !on)),
+                heart_btn(&al.id, on, 24.0),
                 bar_btn(icon::DOTS, Message::Menu(Box::new(MenuKind::Album(Box::new(al.clone()))))),
             ]
             .spacing(16)
@@ -774,6 +765,13 @@ fn hero<'a>(app: &App, art: El<'a>, kind: &str, title: &str, meta: El<'a>, c: Co
     .into()
 }
 
+fn heart_btn<'a>(id: &str, on: bool, px: f32) -> El<'a> {
+    theme::sq(theme::heart(on, px).center(), 32.0)
+        .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
+        .on_press(Message::Star(vec![id.into()], !on))
+        .into()
+}
+
 fn bar_btn<'a>(c: char, msg: Message) -> El<'a> {
     button(theme::icon(c, 28.0).center())
         .on_press(msg)
@@ -814,14 +812,6 @@ struct Detail<'a> {
 fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
     let key = app.route.as_str();
     let px = art_px(app);
-    let star = |id: &str, on: bool| -> El<'a> {
-        let on = app.is_starred(id, on);
-        button(theme::heart(on, 32.0).center())
-            .padding(0)
-            .style(theme::link(if on { theme::ACCENT } else { theme::SUB }))
-            .on_press(Message::Star(vec![id.into()], !on))
-            .into()
-    };
     let dots = |k: MenuKind| bar_btn(icon::DOTS, Message::Menu(Box::new(k)));
     if let Some((a, songs)) = app.data::<(Album, Vec<Song>)>(key) {
         let artists: Vec<Artist> = if a.artists.is_empty() {
@@ -850,7 +840,10 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             ),
             color: head_color(app, &a.cover),
             songs,
-            extra: vec![star(&a.id, a.starred), dots(MenuKind::Album(Box::new(a.clone())))],
+            extra: vec![
+                heart_btn(&a.id, app.is_starred(&a.id, a.starred), 32.0),
+                dots(MenuKind::Album(Box::new(a.clone()))),
+            ],
             cols: cols(app, false, false, songs.len()),
         });
     }
@@ -1044,11 +1037,7 @@ fn artist<'a>(app: &'a App) -> El<'a> {
             .enumerate()
             .filter(|(n, (g, _))| *n == 0 || albums.iter().any(|x| group(x) == *g))
             .map(|(n, (_, l))| {
-                button(theme::txt(*l, 14.0, Weight::Normal))
-                    .on_press(Message::DiscChip(n as u8))
-                    .style(theme::chip(app.disc_chip as usize == n))
-                    .padding([6, 12])
-                    .into()
+                theme::chip_btn(l, app.disc_chip as usize == n, Message::DiscChip(n as u8))
             }),
     )
     .spacing(8);
@@ -1333,13 +1322,7 @@ fn albums<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
                 ("year", "Year"),
                 ("random", "Random"),
             ]
-            .map(|(k, name)| {
-                button(theme::txt(name, 14.0, Weight::Normal))
-                    .style(theme::chip(cur == k))
-                    .padding([6, 12])
-                    .on_press(Message::Nav(format!("albums:{k}")))
-                    .into()
-            }),
+            .map(|(k, name)| theme::chip_btn(name, cur == k, Message::Nav(format!("albums:{k}")))),
         )
         .spacing(8)
         .into()
@@ -1677,11 +1660,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
                     ]
                     .spacing(4)
                     .width(Fill),
-                    button(theme::heart(starred, 20.0).center())
-                        .padding(0)
-                        .width(32)
-                        .style(theme::link(if starred { theme::ACCENT } else { theme::SUB }))
-                        .on_press(Message::Star(vec![s.id.clone()], !starred)),
+                    heart_btn(&s.id, starred, 20.0),
                 ]
                 .align_y(Alignment::Center),
                 container(

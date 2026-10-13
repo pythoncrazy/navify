@@ -407,11 +407,7 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
         container(
             iced::widget::Row::with_children(
                 [(1u8, "Playlists"), (2, "Albums"), (3, "Artists")].map(|(n, name)| {
-                    button(theme::txt(name, 14.0, Weight::Normal))
-                        .on_press(Message::LibFilter(n))
-                        .style(theme::chip(app.lib_filter == n))
-                        .padding([6, 12])
-                        .into()
+                    theme::chip_btn(name, app.lib_filter == n, Message::LibFilter(n))
                 }),
             )
             .spacing(8),

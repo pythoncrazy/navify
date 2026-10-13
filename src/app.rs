@@ -100,7 +100,6 @@ pub enum Message {
     Toggle,
     Prev,
     Next(bool),
-    Ended,
     Seek(f32),
     Shuffle,
     Repeat,
@@ -257,7 +256,6 @@ pub struct App {
     pub pending: HashSet<String>,
     pub scrolls: HashMap<String, (f32, f32)>,
     pub covers: Covers,
-    pub cover_tasks: usize,
     pub player: Option<navify_audio::Player>,
     media: Option<souvlaki::MediaControls>,
     pub tray: Option<Box<dyn Any>>,
@@ -520,6 +518,7 @@ impl App {
                 v.downcast_ref::<SearchRes>().map(|r| &r.albums[..]),
                 v.downcast_ref::<(Artist, Vec<Album>)>().map(|x| &x.1[..]),
                 v.downcast_ref::<Vec<Album>>().map(|x| &x[..]),
+                v.downcast_ref::<Lib>().map(|l| &l.albums[..]),
                 v.downcast_ref::<(Album, Vec<Song>)>().map(|x| std::slice::from_ref(&x.0)),
             ]
             .into_iter()
@@ -542,6 +541,7 @@ impl App {
                 v.downcast_ref::<SearchRes>().map(|r| &r.artists[..]),
                 v.downcast_ref::<(Artist, Vec<Album>)>().map(|x| std::slice::from_ref(&x.0)),
                 v.downcast_ref::<Info>().map(|x| &x.similar[..]),
+                v.downcast_ref::<Lib>().map(|l| &l.artists[..]),
             ]
             .into_iter()
             .flatten()
@@ -602,7 +602,6 @@ impl App {
             pending: HashSet::new(),
             scrolls: HashMap::new(),
             covers: Covers::default(),
-            cover_tasks: 0,
             player: tokio::runtime::Handle::try_current().ok().map(|h| {
                 let (p, mut rx) = navify_audio::Player::new(h.clone(), Session::client());
                 let tx = tx.clone();
@@ -678,37 +677,9 @@ impl App {
         let Some((kind, id)) = key.split_once(':').filter(|_| !self.cache.contains_key(key)) else {
             return;
         };
-        let (mut albums, mut artists) = (Vec::new(), Vec::new());
-        for (_, v) in self.cache.values() {
-            if let Some(h) = v.downcast_ref::<Home>() {
-                albums.extend([&h.recent, &h.added, &h.frequent, &h.random].into_iter().flatten());
-            }
-            if let Some(l) = v.downcast_ref::<Lib>() {
-                albums.extend(&l.albums);
-                artists.extend(&l.artists);
-            }
-            if let Some(s) = v.downcast_ref::<SearchRes>() {
-                albums.extend(&s.albums);
-                artists.extend(&s.artists);
-            }
-            if let Some(a) = v.downcast_ref::<(Artist, Vec<Album>)>() {
-                albums.extend(&a.1);
-                artists.push(&a.0);
-            }
-            artists.extend(v.downcast_ref::<Info>().into_iter().flat_map(|i| &i.similar));
-            albums.extend(v.downcast_ref::<Pager<Album>>().into_iter().flat_map(|p| &p.items));
-            albums.extend(v.downcast_ref::<Vec<Album>>().into_iter().flatten());
-            artists.extend(v.downcast_ref::<Pager<Artist>>().into_iter().flat_map(|p| &p.items));
-        }
         let v: Option<AnyData> = match kind {
-            "album" => albums
-                .into_iter()
-                .find(|a| a.id == id)
-                .map(|a| Arc::new((a.clone(), Vec::<Song>::new())) as AnyData),
-            "artist" => artists
-                .into_iter()
-                .find(|a| a.id == id)
-                .map(|a| Arc::new((a.clone(), Vec::<Album>::new())) as AnyData),
+            "album" => self.find_album(id).map(|a| Arc::new((a, Vec::<Song>::new())) as AnyData),
+            "artist" => self.find_artist(id).map(|a| Arc::new((a, Vec::<Album>::new())) as AnyData),
             "playlist" => self
                 .data::<Lib>("lib")
                 .and_then(|l| l.playlists.iter().find(|p| p.id == id))
@@ -1310,7 +1281,6 @@ impl App {
                     }
                 }
             }
-            Message::Ended => self.update(Message::Next(false)),
             Message::Seek(pos) => {
                 let again = pos < 5.0 && self.pos() > 10.0;
                 self.position = pos;
@@ -2138,7 +2108,7 @@ impl App {
                         None => Task::batch([done, self.listen(true)]),
                     }
                 }
-                navify_audio::Event::Ended => self.update(Message::Ended),
+                navify_audio::Event::Ended => self.update(Message::Next(false)),
                 navify_audio::Event::Error(e) => {
                     let done = self.listen(false);
                     (self.playing, self.loaded) = (false, false);

@@ -298,6 +298,10 @@ pub fn track(sel: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
+pub fn chip_btn<'a, M: Clone + 'a>(label: &str, on: bool, m: M) -> iced::Element<'a, M> {
+    button(txt(label, 14.0, Weight::Normal)).on_press(m).style(chip(on)).padding([6, 12]).into()
+}
+
 pub fn chip(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, s| match (on, s) {
         (true, _) => btn_style(TEXT, BG, 500.0),
