@@ -79,6 +79,7 @@ pub enum Set {
     Device(String),
     Zoom(f32),
     Remaining(bool),
+    Frame(bool),
     DiscGrid(bool),
 }
 
@@ -1686,6 +1687,7 @@ impl App {
                     }
                     Set::Scrobble(b) => self.cfg.settings.scrobble = b,
                     Set::Remaining(b) => self.cfg.settings.remaining = b,
+                    Set::Frame(b) => self.cfg.settings.system_frame = b,
                     Set::DiscGrid(b) => {
                         self.cfg.settings.disc_grid = b;
                         extra = self.disc_load();
@@ -2329,9 +2331,9 @@ impl App {
     pub fn title(&self) -> String {
         match self.current_song() {
             Some(s) if !self.queue.is_empty() => {
-                format!("navify - {} \u{2022} {}", s.title, s.artist)
+                format!("{} \u{2022} {}", s.title, s.artist)
             }
-            _ => "navify".into(),
+            _ => "Navify".into(),
         }
     }
 

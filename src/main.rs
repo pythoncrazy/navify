@@ -59,6 +59,13 @@ fn main() -> iced::Result {
         return Ok(());
     }
     let cfg = Config::load();
+    #[cfg(target_os = "linux")]
+    if cfg.settings.system_frame
+        && std::env::var_os("DISPLAY").is_some()
+        && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d == "GNOME"))
+    {
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+    }
     let icon = image::load_from_memory(ICON).expect("the bundled icon is a PNG").into_rgba8();
     let ((w, h), s) = (cfg.settings.window, cfg.settings.zoom);
     application(App::boot, App::update, App::view)

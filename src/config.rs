@@ -31,6 +31,7 @@ pub struct Settings {
     pub window: (f32, f32),
     pub remaining: bool,
     pub disc_grid: bool,
+    pub system_frame: bool,
 }
 
 impl Default for Settings {
@@ -51,6 +52,7 @@ impl Default for Settings {
             window: (1280.0, 800.0),
             remaining: false,
             disc_grid: false,
+            system_frame: true,
         }
     }
 }
