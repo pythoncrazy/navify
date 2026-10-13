@@ -12,6 +12,35 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "A Spotify-style desktop client for Navidrome and OpenSubsonic servers"
+repository = "https://github.com/pythoncrazy/navify"
+
+[package.metadata.packager]
+product-name = "Navify"
+identifier = "io.github.pythoncrazy.navify"
+category = "Music"
+license-file = "LICENSE"
+binaries = [{ path = "navify", main = true }]
+icons = [
+    "assets/icons/hicolor/32x32/apps/navify.png",
+    "assets/icons/hicolor/128x128/apps/navify.png",
+    "assets/icons/hicolor/256x256/apps/navify.png",
+    "assets/icons/hicolor/512x512/apps/navify.png",
+]
+
+[package.metadata.packager.deb]
+depends = ["libasound2t64 | libasound2", "libdbus-1-3"]
+desktop-template = "assets/navify.desktop"
+section = "sound"
+
+[package.metadata.packager.pacman]
+depends = ["alsa-lib", "dbus"]
+
+[package.metadata.packager.nsis]
+installer-icon = "assets/navify.ico"
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -79,6 +108,9 @@ features = ["keychain"]
 version = "1.1.0"
 default-features = false
 
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"
+
 [dev-dependencies]
 dotenvy = "0.15.7"
 iced_test = "0.14.0"
@@ -97,12 +129,7 @@ proc-macro2.opt-level = 0
 navify-audio.opt-level = 3
 
 [profile.release]
-incremental = true
-strip = true
-panic = "abort"
-
-[profile.dist]
-inherits = "release"
-incremental = false
 lto = "fat"
 codegen-units = 1
+strip = true
+panic = "abort"
