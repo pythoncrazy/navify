@@ -36,30 +36,27 @@ pub struct Session {
     http: reqwest::Client,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Rg {
-    #[serde(rename = "rgTrackGain", alias = "trackGain")]
+    #[serde(rename = "rgTrackGain")]
     pub track_gain: Option<f32>,
-    #[serde(rename = "rgAlbumGain", alias = "albumGain")]
+    #[serde(rename = "rgAlbumGain")]
     pub album_gain: Option<f32>,
-    #[serde(rename = "rgTrackPeak", alias = "trackPeak")]
+    #[serde(rename = "rgTrackPeak")]
     pub track_peak: Option<f32>,
-    #[serde(rename = "rgAlbumPeak", alias = "albumPeak")]
+    #[serde(rename = "rgAlbumPeak")]
     pub album_peak: Option<f32>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Genre {
-    pub id: String,
     #[serde(alias = "value")]
     pub name: String,
-    pub song_count: u32,
-    pub album_count: u32,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Artist {
     pub id: String,
@@ -70,14 +67,9 @@ pub struct Artist {
     pub song_count: u32,
     #[serde(deserialize_with = "de_starred")]
     pub starred: bool,
-    pub starred_at: String,
-    #[serde(alias = "rating")]
-    pub user_rating: u8,
-    #[serde(deserialize_with = "de_genres")]
-    pub genres: Vec<Genre>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Album {
     pub id: String,
@@ -90,42 +82,24 @@ pub struct Album {
     pub year: u32,
     pub song_count: u32,
     pub duration: f32,
-    pub size: u64,
-    #[serde(alias = "createdAt")]
-    pub created: String,
-    #[serde(alias = "updatedAt", alias = "changed")]
-    pub updated: String,
-    pub played: String,
     pub play_count: u32,
     #[serde(deserialize_with = "de_starred")]
     pub starred: bool,
-    pub starred_at: String,
-    #[serde(alias = "rating")]
-    pub user_rating: u8,
-    #[serde(deserialize_with = "de_genres")]
-    pub genres: Vec<Genre>,
     #[serde(rename = "coverArt")]
     pub cover: String,
-    #[serde(rename = "explicitStatus", deserialize_with = "de_explicit")]
-    pub explicit: bool,
     #[serde(alias = "isCompilation")]
     pub compilation: bool,
     #[serde(rename = "releaseTypes")]
     pub release_types: Vec<String>,
     #[serde(rename = "releaseDate", deserialize_with = "de_date")]
     pub release_date: String,
-    #[serde(rename = "originalReleaseDate", alias = "originalDate", deserialize_with = "de_date")]
-    pub original_date: String,
-    pub version: String,
     #[serde(rename = "artists")]
     pub artists: Vec<Artist>,
     #[serde(rename = "albumArtists")]
     pub album_artists: Vec<Artist>,
-    #[serde(flatten)]
-    pub rg: Rg,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Song {
     pub id: String,
@@ -134,49 +108,29 @@ pub struct Song {
     pub album_id: String,
     pub artist: String,
     pub artist_id: String,
-    #[serde(alias = "displayAlbumArtist")]
-    pub album_artist: String,
-    pub album_artist_id: String,
     #[serde(rename = "track", alias = "trackNumber")]
     pub track: u32,
     #[serde(rename = "discNumber")]
     pub disc: u32,
-    pub year: u32,
     pub duration: f32,
-    pub suffix: String,
-    pub bit_rate: u32,
-    pub size: u64,
-    pub path: String,
     pub play_count: u32,
     #[serde(alias = "rating")]
     pub user_rating: u8,
     #[serde(deserialize_with = "de_starred")]
     pub starred: bool,
-    pub starred_at: String,
-    #[serde(alias = "playDate")]
-    pub played: String,
     #[serde(alias = "createdAt")]
     pub created: String,
-    #[serde(rename = "explicitStatus", deserialize_with = "de_explicit")]
-    pub explicit: bool,
     #[serde(rename = "coverArt")]
     pub cover: String,
-    #[serde(deserialize_with = "de_genres")]
-    pub genres: Vec<Genre>,
     #[serde(rename = "isDir")]
     pub is_dir: bool,
-    #[serde(rename = "mediaType")]
-    pub media_type: String,
-    pub song_count: u32,
     #[serde(rename = "artists")]
     pub artists: Vec<Artist>,
-    #[serde(rename = "albumArtists")]
-    pub album_artists: Vec<Artist>,
     #[serde(flatten)]
     pub rg: Rg,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Playlist {
     pub id: String,
@@ -187,11 +141,6 @@ pub struct Playlist {
     pub public: bool,
     pub song_count: u32,
     pub duration: f32,
-    pub sync: bool,
-    #[serde(alias = "createdAt")]
-    pub created: String,
-    #[serde(alias = "updatedAt", alias = "changed")]
-    pub updated: String,
     #[serde(rename = "coverArt")]
     pub cover: String,
 }
@@ -202,24 +151,13 @@ pub struct Info {
     pub biography: String,
     #[serde(rename = "similarArtist")]
     pub similar: Vec<Artist>,
-    #[serde(rename = "mediumImageUrl")]
-    pub image: String,
-    #[serde(rename = "lastFmUrl")]
-    pub last_fm_url: String,
-    #[serde(rename = "musicBrainzId")]
-    pub music_brainz_id: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Lyrics {
-    pub lang: String,
     pub synced: bool,
     pub offset: i64,
-    #[serde(rename = "displayArtist")]
-    pub artist: String,
-    #[serde(rename = "displayTitle")]
-    pub title: String,
     #[serde(rename = "line", deserialize_with = "de_lines")]
     pub lines: Vec<(Option<u64>, String)>,
 }
@@ -232,10 +170,6 @@ fn de_starred<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::E
     })
 }
 
-fn de_explicit<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
-    Ok(matches!(Value::deserialize(d)?.as_str(), Some("e" | "explicit")))
-}
-
 fn de_date<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
     Ok(match Value::deserialize(d)? {
         Value::String(s) => s,
@@ -246,22 +180,6 @@ fn de_date<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Er
             m.get("day").and_then(Value::as_u64).unwrap_or_default()
         ),
         _ => String::new(),
-    })
-}
-
-fn de_genres<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<Genre>, D::Error> {
-    Ok(match Value::deserialize(d)? {
-        Value::Array(a) => a
-            .into_iter()
-            .map(|v| match v {
-                Value::String(name) => Ok(Genre { name, ..Genre::default() }),
-                v => serde_json::from_value(v).map_err(serde::de::Error::custom),
-            })
-            .collect::<std::result::Result<_, _>>()?,
-        Value::String(s) => {
-            s.split(',').map(|n| Genre { name: n.trim().to_string(), ..Genre::default() }).collect()
-        }
-        _ => Vec::new(),
     })
 }
 
@@ -880,10 +798,6 @@ impl Session {
         self.rest("getMusicDirectory", &[("id", id.to_string())], "/directory/child").await
     }
 
-    pub async fn random_songs(&self, count: usize) -> Result<Vec<Song>> {
-        self.rest("getRandomSongs", &[("size", count.to_string())], "/randomSongs/song").await
-    }
-
     pub async fn similar_songs(&self, song_id: &str, count: usize) -> Result<Vec<Song>> {
         self.rest(
             "getSimilarSongs2",
@@ -899,14 +813,13 @@ impl Session {
             &[("id", song_id.to_string()), ("submission", submission.to_string())],
             "",
         )
-        .await?;
-        Ok(())
+        .await
+        .map(drop)
     }
 
     pub async fn star(&self, ids: &[String], on: bool) -> Result<()> {
         let p: Vec<(&str, String)> = ids.iter().map(|i| ("id", i.clone())).collect();
-        self.rest::<Value>(if on { "star" } else { "unstar" }, &p, "").await?;
-        Ok(())
+        self.rest::<Value>(if on { "star" } else { "unstar" }, &p, "").await.map(drop)
     }
 
     pub async fn rate(&self, id: &str, rating: u8) -> Result<()> {
@@ -915,8 +828,8 @@ impl Session {
             &[("id", id.to_string()), ("rating", rating.to_string())],
             "",
         )
-        .await?;
-        Ok(())
+        .await
+        .map(drop)
     }
 
     pub async fn playlist_create(&self, name: &str, song_ids: &[String]) -> Result<Playlist> {
@@ -938,13 +851,11 @@ impl Session {
         p.extend(comment.map(|c| ("comment", c.to_string())));
         p.extend(add.iter().map(|i| ("songIdToAdd", i.clone())));
         p.extend(remove.iter().map(|i| ("songIndexToRemove", i.to_string())));
-        self.rest::<Value>("updatePlaylist", &p, "").await?;
-        Ok(())
+        self.rest::<Value>("updatePlaylist", &p, "").await.map(drop)
     }
 
     pub async fn playlist_delete(&self, id: &str) -> Result<()> {
-        self.rest::<Value>("deletePlaylist", &[("id", id.to_string())], "").await?;
-        Ok(())
+        self.rest::<Value>("deletePlaylist", &[("id", id.to_string())], "").await.map(drop)
     }
 
     pub async fn play_queue(&self) -> Result<(Vec<Song>, String, u64)> {
@@ -965,8 +876,7 @@ impl Session {
         let mut p: Vec<(&str, String)> = ids.iter().map(|i| ("id", i.clone())).collect();
         p.push(("current", current.to_string()));
         p.push(("position", position_ms.to_string()));
-        self.rest::<Value>("savePlayQueue", &p, "").await?;
-        Ok(())
+        self.rest::<Value>("savePlayQueue", &p, "").await.map(drop)
     }
 }
 

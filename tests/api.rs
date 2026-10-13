@@ -218,18 +218,14 @@ fn song_deserializes_native_and_subsonic() {
         assert_eq!(song.track, 3);
         assert!(song.starred);
         assert_eq!(song.user_rating, 4);
-        assert!(song.explicit);
-        assert_eq!(song.genres[0].name, "Rock");
         assert_eq!(song.rg.track_gain, Some(-7.5));
         assert_eq!(song.rg.album_peak, Some(1.2));
     }
     assert_eq!(n.id, "n1");
     assert_eq!(n.artists[0].name, "Ar");
-    assert_eq!(n.album_artists[0].name, "AA");
     assert_eq!(s.id, "s1");
     assert_eq!(s.cover, "mf-s1_x");
     assert_eq!(s.artists[0].id, "ar1");
-    assert_eq!(s.album_artists[0].name, "AA");
     assert_eq!(n.cover, "n1");
     assert!((s.duration - 123.0).abs() < f32::EPSILON);
 }
@@ -325,7 +321,6 @@ fn local_subsonic_read_suite() {
         assert!(!idx.is_empty());
         let dir = s.directory(&idx[0].id).await.expect("directory");
         assert!(!dir.is_empty());
-        let _ = s.random_songs(3).await.expect("random");
         let _ = s.similar_songs(&songs[0].id, 3).await.expect("similar");
         let _ = s.starred().await.expect("starred");
         let _ = s.lyrics(&songs[0].id).await.expect("lyrics");

@@ -61,6 +61,14 @@ pub fn filled<'a>(c: char, size: f32) -> Txt<'a> {
     text(c).font(FILL).size(size)
 }
 
+pub fn link_btn<'a, M: Clone + 'a>(
+    c: impl Into<iced::Element<'a, M>>,
+    color: Color,
+    m: M,
+) -> button::Button<'a, M, Theme, iced::Renderer> {
+    button(c).padding(0).style(link(color)).on_press(m)
+}
+
 pub fn sq<'a, M>(
     c: impl Into<iced::Element<'a, M>>,
     px: f32,

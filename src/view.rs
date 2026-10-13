@@ -205,11 +205,7 @@ pub fn artists_line<'a>(artists: &[Artist], size: f32, w: f32) -> Element<'a, Me
         r = r.push(if a.id.is_empty() {
             Element::from(t.color(theme::SUB))
         } else {
-            button(t)
-                .padding(0)
-                .style(theme::link(theme::SUB))
-                .on_press(Message::Nav(format!("artist:{}", a.id)))
-                .into()
+            theme::link_btn(t, theme::SUB, Message::Nav(format!("artist:{}", a.id))).into()
         });
     }
     r.into()
@@ -375,14 +371,13 @@ fn lib_panel<'a>(app: &'a App) -> Element<'a, Message> {
     } else {
         row![
             tip(
-                button(
+                theme::link_btn(
                     row![i(icon::LIBRARY, 22.0), theme::bold("Your Library", 16.0)]
                         .spacing(12)
-                        .align_y(Alignment::Center)
-                )
-                .padding(0)
-                .style(theme::link(theme::SUB))
-                .on_press(Message::LibCollapse),
+                        .align_y(Alignment::Center),
+                    theme::SUB,
+                    Message::LibCollapse
+                ),
                 "Collapse Your Library",
                 tooltip::Position::Bottom,
             ),

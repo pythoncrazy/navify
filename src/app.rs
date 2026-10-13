@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use iced::widget::operation::{self as op, AbsoluteOffset};
 use iced::{Color, Task, widget::image};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -1015,13 +1016,10 @@ impl App {
         tasks.push(self.covers_now());
         tasks.push(self.disc_load());
         let target = self.scrolls.get(&route).map(|(o, _)| *o).unwrap_or(0.0);
-        tasks.push(iced::widget::operation::scroll_to(
-            crate::view::SCROLL,
-            iced::widget::operation::AbsoluteOffset::<Option<f32>> { x: None, y: Some(target) },
-        ));
+        tasks.push(op::scroll_to(crate::view::SCROLL, AbsoluteOffset { x: 0.0, y: target }));
         if route == "login" {
             let n = [&self.login.url, &self.login.user].iter().position(|v| v.is_empty());
-            tasks.push(iced::widget::operation::focus(format!("login{}", n.unwrap_or(2))));
+            tasks.push(op::focus(format!("login{}", n.unwrap_or(2))));
         }
         if route == "settings" {
             tasks.push(Task::perform(tokio::task::spawn_blocking(navify_audio::devices), |d| {
@@ -1182,14 +1180,7 @@ impl App {
                 }
                 match self.next_index() {
                     Some(n) => self.play_index(n, 0.0),
-                    None => {
-                        let l = self.listen(false);
-                        (self.playing, self.loaded) = (false, false);
-                        if let Some(p) = &self.player {
-                            p.stop();
-                        }
-                        l
-                    }
+                    None => self.halt(),
                 }
             }
             Message::Seek(pos) => {
@@ -1302,14 +1293,10 @@ impl App {
                 self.debounce_save_queue()
             }
             Message::QClear => {
-                let done = self.listen(false);
+                let done = self.halt();
                 self.queue.clear();
                 self.index = 0;
                 self.shuffle = self.shuffle.as_ref().map(|_| Vec::new());
-                (self.playing, self.loaded) = (false, false);
-                if let Some(p) = &self.player {
-                    p.stop();
-                }
                 Task::batch([done, self.debounce_save_queue()])
             }
             Message::Menu(kind) => {
@@ -1321,13 +1308,8 @@ impl App {
                     return Task::none();
                 }
                 let row = (self.cfg.settings.speed * 10.0).round() - 5.0;
-                iced::widget::operation::scroll_to(
-                    "speed",
-                    iced::widget::operation::AbsoluteOffset::<Option<f32>> {
-                        x: None,
-                        y: Some((row * 40.0 - (crate::pages::SPEED_H - 88.0) / 2.0).max(0.0)),
-                    },
-                )
+                let y = (row * 40.0 - (crate::pages::SPEED_H - 88.0) / 2.0).max(0.0);
+                op::scroll_to("speed", AbsoluteOffset { x: 0.0, y })
             }
             Message::MenuSub(n) => {
                 if let Some(m) = &mut self.menu {
@@ -1472,7 +1454,7 @@ impl App {
                 {
                     self.login.error =
                         ["Enter the server address.", "Enter the username."][n].into();
-                    return iced::widget::operation::focus(format!("login{n}"));
+                    return op::focus(format!("login{n}"));
                 }
                 self.login.busy = true;
                 self.login.error.clear();
@@ -1529,17 +1511,14 @@ impl App {
                     self.cfg.servers.retain(|s| s.id != id);
                     config::forget(&id)
                 });
+                let h = self.halt();
                 self.session = None;
                 self.queue.clear();
-                (self.playing, self.loaded) = (false, false);
-                if let Some(p) = &self.player {
-                    p.stop();
-                }
                 self.cache.clear();
                 let t = self.persist();
                 let n = self.nav("login".into());
                 let g = gone.map_or_else(|e| self.toast(&e.to_string()), |()| Task::none());
-                Task::batch([t, n, g])
+                Task::batch([h, t, n, g])
             }
             Message::UseServer(id) => {
                 let Some(srv) = self.cfg.servers.iter().find(|s| s.id == id) else {
@@ -1669,11 +1648,8 @@ impl App {
                         .inspect_err(|e| eprintln!("The tray icon is not available. {e}"))
                         .ok();
                 }
-                let y = self.scrolls.get(&self.route).map(|(o, _)| *o);
-                let scroll = iced::widget::operation::scroll_to(
-                    crate::view::SCROLL,
-                    iced::widget::operation::AbsoluteOffset::<Option<f32>> { x: None, y },
-                );
+                let y = self.scrolls.get(&self.route).map_or(0.0, |(o, _)| *o);
+                let scroll = op::scroll_to(crate::view::SCROLL, AbsoluteOffset { x: 0.0, y });
                 if self.media.is_some() {
                     return scroll;
                 }
@@ -1787,11 +1763,7 @@ impl App {
                 _ => Task::none(),
             },
             Message::Hover(k, on) => {
-                if on {
-                    self.hover = Some(k);
-                } else if self.hover.as_ref() == Some(&k) {
-                    self.hover = None;
-                }
+                self.hover = if on { Some(k) } else { self.hover.take().filter(|h| *h != k) };
                 Task::none()
             }
             Message::PlayAt(key, n) => match self.songs_of(&key) {
@@ -1809,7 +1781,7 @@ impl App {
                 self.cache.remove(&key);
                 self.request(&key, 0)
             }
-            Message::FocusSearch => iced::widget::operation::focus("search"),
+            Message::FocusSearch => op::focus("search"),
             Message::FocusMove(back) => {
                 layer_focus(self.modal.is_some() || self.menu.is_some(), move |cur, n| match cur {
                     Some(i) => (i + if back { n - 1 } else { 1 }) % n,
@@ -1850,13 +1822,7 @@ impl App {
                     return Task::none();
                 };
                 self.scrolls.insert(key, (to.max(0.0), view));
-                iced::widget::operation::scroll_to(
-                    crate::view::SCROLL,
-                    iced::widget::operation::AbsoluteOffset::<Option<f32>> {
-                        x: None,
-                        y: Some(to.max(0.0)),
-                    },
-                )
+                op::scroll_to(crate::view::SCROLL, AbsoluteOffset { x: 0.0, y: to.max(0.0) })
             }
             Message::Enter => match self.sel.clone() {
                 Some((k, n)) if self.menu.is_none() && self.modal.is_none() => {
@@ -1901,10 +1867,7 @@ impl App {
                 Task::none()
             }
             Message::SeekRelease => {
-                if let Some(v) = self.seek_preview.take() {
-                    return self.update(Message::Seek(v));
-                }
-                Task::none()
+                self.seek_preview.take().map_or(Task::none(), |v| self.update(Message::Seek(v)))
             }
             Message::Tick => {
                 self.position = self.pos();
@@ -1925,7 +1888,7 @@ impl App {
                 Task::batch([
                     art,
                     layer_focus(true, |_, n| n.min(2) - 1)
-                        .chain(iced::widget::operation::select_all(iced::widget::Id::new("layer"))),
+                        .chain(op::select_all(iced::widget::Id::new("layer"))),
                 ])
             }
             Message::Edit(id, name, comment) => {
@@ -2012,6 +1975,15 @@ impl App {
             },
         }
     }
+    fn halt(&mut self) -> Task<Message> {
+        let l = self.listen(false);
+        (self.playing, self.loaded) = (false, false);
+        if let Some(p) = &self.player {
+            p.stop();
+        }
+        l
+    }
+
     fn queue_next_refresh(&self) {
         if let Some(p) = &self.player {
             let n = if self.repeat == 2 { Some(self.index) } else { self.next_index() };
@@ -2227,12 +2199,8 @@ impl App {
     }
 
     pub fn title(&self) -> String {
-        match self.current_song() {
-            Some(s) if !self.queue.is_empty() => {
-                format!("{} \u{2022} {}", s.title, s.artist)
-            }
-            _ => "Navify".into(),
-        }
+        self.current_song()
+            .map_or("Navify".into(), |s| format!("{} \u{2022} {}", s.title, s.artist))
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
