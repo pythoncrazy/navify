@@ -411,10 +411,8 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
     let (lo, hi) = span(off - top, off + view - top, ROW, n, 6);
     let year = (al.year > 0).then(|| al.year.to_string());
     let count = Some(plural(al.song_count, "song"));
-    let meta = [Some(kind(al).0.to_string()), year, count]
-        .into_iter()
-        .flatten();
-    let meta = meta.collect::<Vec<_>>().join(DOT);
+    let meta = [Some(kind(al).0.to_string()), year, count];
+    let meta = meta.into_iter().flatten().collect::<Vec<_>>().join(DOT);
     let name = ell(&al.name, app.main_w() - 3.0 * PAD - 136.0, 32.0, Bold);
     let on = app.is_starred(&al.id, al.starred);
     let open = Message::Nav(key.clone());
@@ -536,17 +534,11 @@ fn home(app: &App) -> Option<El<'_>> {
     });
     let c = h.recent.first().map_or(GREY, |a| head_color(app, &a.cover));
     let height = 200.0 + 5.0 * (app.grid().1 + 100.0);
-    let pls = shelf(
-        "Your playlists",
-        None,
-        pls.iter().take(k).map(|p| playlist_card(app, p)),
-    );
+    let pls = pls.iter().take(k).map(|p| playlist_card(app, p));
+    let pls = shelf("Your playlists", None, pls);
     let tiles = container(Column::from_vec(rows.collect()).spacing(8)).padding([0.0, PAD]);
-    let col = column![tiles]
-        .extend(shelves)
-        .push(pls)
-        .spacing(40)
-        .padding([PAD, 0.0]);
+    let col = column![tiles].extend(shelves).push(pls).spacing(40);
+    let col = col.padding([PAD, 0.0]);
     let fade = theme::fade(theme::shade(c, 0.7), 332.0 / height);
     Some(container(col).width(Fill).style(fade).into())
 }

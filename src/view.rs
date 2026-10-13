@@ -303,13 +303,11 @@ fn lib_panel(app: &App) -> El<'_> {
         (f == 3, i::USER, dim, "All artists", "artists"),
         (f == 0, i::FOLDER, dim, "Folders", "folders"),
     ];
-    let pins = pins
-        .into_iter()
-        .filter(|p| p.0)
-        .map(|(_, c, (bg, fg), t, r)| {
-            let art = art(48.0, i(c, 0.0).color(fg), bg);
-            item(art, t, "Library", r.into())
-        });
+    let pins = pins.into_iter().filter(|p| p.0);
+    let pins = pins.map(|(_, c, (bg, fg), t, r)| {
+        let art = art(48.0, i(c, 0.0).color(fg), bg);
+        item(art, t, "Library", r.into())
+    });
     let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
         let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
             let s = format!("Playlist \u{2022} {}", p.owner);

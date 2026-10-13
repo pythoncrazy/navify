@@ -206,10 +206,8 @@ pub fn pill_btn<'a, M: Clone + 'a>(label: &'a str, m: M) -> Btn<'a, M> {
         b.border = Border::default().color(edge).width(1).rounded(500);
         b
     };
-    button(bold(label, 14.0))
-        .style(style)
-        .padding([7, 15])
-        .on_press(m)
+    let b = button(bold(label, 14.0)).style(style);
+    b.padding([7, 15]).on_press(m)
 }
 
 pub fn chip_btn<'a, M: Clone + 'a>(label: &str, on: bool, m: M) -> Element<'a, M> {
@@ -242,9 +240,8 @@ pub fn color_of(s: &str) -> Color {
         0xdc148c, 0x006450, 0x8400e7, 0x1e3264, 0xe8115b, 0x27856a, 0x477d95, 0xe13300, 0xba5d07,
         0x8d67ab, 0x509bf5, 0x148a08,
     ];
-    let h = s
-        .bytes()
-        .fold(7, |h: usize, b| h.wrapping_mul(31) + b as usize);
+    let hash = |h: usize, b| h.wrapping_mul(31).wrapping_add(usize::from(b));
+    let h = s.bytes().fold(7, hash);
     let [_, r, g, b] = P[h % P.len()].to_be_bytes();
     Color::from_rgb8(r, g, b)
 }
