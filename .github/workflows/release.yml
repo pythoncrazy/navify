@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,44 +12,79 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bin: navify
-            archive: tar.gz
+            formats: deb,appimage,pacman
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            formats: deb,appimage,pacman
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: navify.exe
-            archive: zip
+            formats: nsis
           - os: macos-latest
             target: aarch64-apple-darwin
-            bin: navify
-            archive: tar.gz
-          - os: macos-13
+            formats: dmg
+          - os: macos-latest
             target: x86_64-apple-darwin
-            bin: navify
-            archive: tar.gz
+            formats: dmg
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: 1
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev pkg-config
-      - name: Build
-        run: cargo build --profile dist --target ${{ matrix.target }} -p navify
-      - name: Package
+      - name: Tag matches the Cargo version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: test "$GITHUB_REF_NAME" = "v$(cargo pkgid | sed 's/.*[#@]//')"
+      - run: cargo install --locked cargo-packager@0.11.8
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - run: cargo packager --release --target ${{ matrix.target }} -f ${{ matrix.formats }} -o dist
+      - name: Portable archive
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/dist
-          if [ "${{ matrix.archive }}" = zip ]; then
-            7z a "$GITHUB_WORKSPACE/navify-${{ matrix.target }}.zip" ${{ matrix.bin }}
+          dir=target/${{ matrix.target }}/release
+          name=navify-${GITHUB_REF_NAME//\//-}-${{ matrix.target }}
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a "dist/$name.zip" "./$dir/navify.exe" LICENSE
           else
-            tar czf "$GITHUB_WORKSPACE/navify-${{ matrix.target }}.tar.gz" ${{ matrix.bin }}
+            tar czf "dist/$name.tar.gz" -C "$dir" navify -C "$GITHUB_WORKSPACE" LICENSE
           fi
+          [ ! -f dist/PKGBUILD ] || mv dist/PKGBUILD "dist/PKGBUILD-${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+            dist/*.dmg
+            dist/PKGBUILD-*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum * > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          files: navify-${{ matrix.target }}.*
+          files: dist/*
+          draft: true
+          generate_release_notes: true
