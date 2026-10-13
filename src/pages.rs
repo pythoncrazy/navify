@@ -1,7 +1,7 @@
 use iced::font::Weight;
 use iced::widget::{
-    Column, Row, Space, button, column, container, hover, image, mouse_area, pick_list, row,
-    scrollable, slider, stack, text, text_input, toggler,
+    Column, Row, Space, button, column, container, hover, mouse_area, pick_list, row, scrollable,
+    slider, stack, text, text_input, toggler,
 };
 use iced::{Alignment, Color, Element, Fill, color};
 
@@ -731,55 +731,53 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
 }
 
 fn artist<'a>(app: &'a App) -> El<'a> {
-    let Some((a, albums, top, info)) =
-        app.data::<(Artist, Vec<Album>, Vec<Song>, Info)>(&app.route)
-    else {
+    let key = app.route.as_str();
+    let Some((a, albums)) = app.data::<(Artist, Vec<Album>)>(key) else {
         return Space::new().into();
     };
-    let hh = (app.view_size().1 * 0.4).clamp(240.0, 400.0);
+    let id = &key["artist:".len()..];
+    let top = app.data::<Vec<Song>>(&format!("top:{id}")).map_or(&[][..], |v| &v[..]);
+    let info = app.data::<Info>(&format!("info:{id}"));
     let c = head_color(app, &a.cover);
-    let name = theme::ell(&a.name, app.main_w() - 2.0 * PAD, 96.0, Weight::Black).line_height(1.1);
-    let label =
-        theme::sub(format!("{} albums \u{2022} {} songs", a.album_count, a.song_count), 16.0)
-            .color(theme::TEXT);
-    let hero: El = match app.covers.get(&(a.cover.clone(), 640)) {
-        Some(img) => stack![
-            image(img).width(Fill).height(hh).content_fit(iced::ContentFit::Cover),
-            container(Space::new())
-                .width(Fill)
-                .height(hh)
-                .style(theme::grad(Color::TRANSPARENT, Color { a: 0.6, ..theme::BG })),
-            container(column![name, label].spacing(8)).align_bottom(hh).padding(PAD),
-        ]
-        .into(),
-        None => container(column![name, label].spacing(8))
-            .align_bottom(hh)
-            .width(Fill)
-            .padding(PAD)
-            .style(theme::grad(c, theme::shade(c, 0.5)))
-            .into(),
-    };
-    let key = app.route.as_str();
+    let counts = [(a.album_count, "album"), (a.song_count, "song")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, w)| format!("{} {w}{}", fmt_n(*n as usize), if *n == 1 { "" } else { "s" }))
+        .collect::<Vec<_>>()
+        .join(" \u{2022} ");
+    let hero = hero(
+        app,
+        cover(app, &a.cover, 300, art_px(app), true),
+        "Artist",
+        &a.name,
+        theme::sub(counts, 14.0).color(theme::TEXT).into(),
+        c,
+    );
     let on = app.is_starred(&a.id, a.starred);
     let n = if app.popular_all { 10 } else { 5 }.min(top.len());
     let c3 = cols(app, false, false);
-    let popular = column![heading("Popular", None)]
-        .extend(
-            top.iter()
-                .take(n)
-                .enumerate()
-                .map(|(k, s)| container(track(app, s, k, key, c3)).padding([0.0, PAD]).into()),
-        )
-        .push((top.len() > 5).then(|| {
-            container(
-                button(theme::bold(if app.popular_all { "Show less" } else { "See more" }, 14.0))
+    let popular = (!top.is_empty()).then(|| {
+        column![heading("Popular", None)]
+            .extend(
+                top.iter()
+                    .take(n)
+                    .enumerate()
+                    .map(|(k, s)| container(track(app, s, k, key, c3)).padding([0.0, PAD]).into()),
+            )
+            .push((top.len() > 5).then(|| {
+                container(
+                    button(theme::bold(
+                        if app.popular_all { "Show less" } else { "See more" },
+                        14.0,
+                    ))
                     .padding(16)
                     .style(theme::link(theme::SUB))
                     .on_press(Message::Popular),
-            )
-            .padding([0.0, PAD])
-        }))
-        .spacing(8);
+                )
+                .padding([0.0, PAD])
+            }))
+            .spacing(8)
+    });
     let k = app.grid().0;
     let mut disc: Vec<&Album> = albums.iter().collect();
     disc.sort_by_key(|x| std::cmp::Reverse(x.year));
@@ -798,59 +796,57 @@ fn artist<'a>(app: &'a App) -> El<'a> {
                             .padding([7, 15])
                             .on_press(Message::Star(vec![a.id.clone()], !on))
                             .into(),
-                        icon_btn(
-                            icon::DOTS,
-                            16.0,
-                            Message::Menu(Box::new(MenuKind::Artist(a.clone())))
-                        )
-                        .into(),
+                        bar_btn(icon::DOTS, Message::Menu(Box::new(MenuKind::Artist(a.clone())))),
                     ],
                 ),
-                column![
-                    popular,
-                    shelf(
-                        "Discography",
-                        None,
-                        disc.iter()
-                            .take(k)
-                            .map(|x| {
-                                let kind = if x.song_count <= 6 && x.duration < 1800.0 {
-                                    "EP"
-                                } else {
-                                    "Album"
-                                };
-                                let year = if x.year > 0 {
-                                    format!("{} \u{2022} ", x.year)
-                                } else {
-                                    String::new()
-                                };
-                                album_card(app, x, format!("{year}{kind}"))
-                            })
-                            .collect()
-                    ),
-                    shelf(
-                        "Fans also like",
-                        None,
-                        info.similar.iter().take(k).map(|x| artist_card(app, x)).collect()
-                    ),
-                ]
-                .push((!info.biography.is_empty()).then(|| {
-                    column![
-                        heading("About", None),
-                        container(
-                            container(
-                                theme::txt(strip_html(&info.biography), 16.0, Weight::Normal)
-                                    .color(theme::SUB)
-                            )
-                            .padding(PAD)
-                            .max_width(672)
-                            .style(theme::fill(theme::ELEVATED, 8.0))
+                column![]
+                    .push(popular)
+                    .push((!disc.is_empty()).then(|| {
+                        shelf(
+                            "Discography",
+                            None,
+                            disc.iter()
+                                .take(k)
+                                .map(|x| {
+                                    let kind = if x.song_count <= 6 && x.duration < 1800.0 {
+                                        "EP"
+                                    } else {
+                                        "Album"
+                                    };
+                                    let year = if x.year > 0 {
+                                        format!("{} \u{2022} ", x.year)
+                                    } else {
+                                        String::new()
+                                    };
+                                    album_card(app, x, format!("{year}{kind}"))
+                                })
+                                .collect(),
                         )
-                        .padding([0.0, PAD])
-                    ]
-                    .spacing(8)
-                }))
-                .spacing(40),
+                    }))
+                    .push(info.filter(|i| !i.similar.is_empty()).map(|i| {
+                        shelf(
+                            "Fans also like",
+                            None,
+                            i.similar.iter().take(k).map(|x| artist_card(app, x)).collect(),
+                        )
+                    }))
+                    .push(info.filter(|i| !i.biography.is_empty()).map(|info| {
+                        column![
+                            heading("About", None),
+                            container(
+                                container(
+                                    theme::txt(strip_html(&info.biography), 16.0, Weight::Normal)
+                                        .color(theme::SUB)
+                                )
+                                .padding(PAD)
+                                .max_width(672)
+                                .style(theme::fill(theme::ELEVATED, 8.0))
+                            )
+                            .padding([0.0, PAD])
+                        ]
+                        .spacing(8)
+                    }))
+                    .spacing(40),
             ]
             .padding(theme::pad(0.0, 0.0, PAD * 2.0, 0.0)),
         )

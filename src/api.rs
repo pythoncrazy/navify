@@ -697,46 +697,35 @@ impl Session {
         }
     }
 
-    pub async fn artist(&self, id: &str) -> Result<(Artist, Vec<Album>, Vec<Song>, Info)> {
-        let aa = async {
-            if self.server.native {
-                let p = format!("artist/{id}");
-                let q = [("role_albumartist_id", id.to_string())];
-                let (a, al) = tokio::try_join!(
-                    self.nd::<Artist>(Method::GET, &p, &[]),
-                    self.nd::<Vec<Album>>(Method::GET, "album", &q),
-                )?;
-                Ok((a.0, al.0))
-            } else {
-                let v: Value = self.rest("getArtist", &[("id", id.to_string())], "/artist").await?;
-                Ok((serde_json::from_value(v.clone())?, vlist(&v, "album")))
-            }
-        };
-        let info = async {
-            let ip = [("id", id.to_string()), ("count", "20".to_string())];
-            let mut i = self.rest::<Info>("getArtistInfo2", &ip, "/artistInfo2").await?;
-            i.similar.retain(|a| a.album_count > 0);
-            anyhow::Ok(i)
-        };
-        if self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
-            let tp = [("id", id.to_string()), ("count", "20".to_string())];
-            let ((a, al), t, i) = tokio::try_join!(
-                aa,
-                self.rest::<Vec<Song>>("getTopSongs", &tp, "/topSongs/song"),
-                info,
+    pub async fn artist(&self, id: &str) -> Result<(Artist, Vec<Album>)> {
+        if self.server.native {
+            let p = format!("artist/{id}");
+            let q = [("role_albumartist_id", id.to_string())];
+            let (a, al) = tokio::try_join!(
+                self.nd::<Artist>(Method::GET, &p, &[]),
+                self.nd::<Vec<Album>>(Method::GET, "album", &q),
             )?;
-            Ok((a, al, t, i))
+            Ok((a.0, al.0))
         } else {
-            let ((a, al), i) = tokio::try_join!(aa, info)?;
-            let t = self
-                .rest::<Vec<Song>>(
-                    "getTopSongs",
-                    &[("artist", a.name.clone()), ("count", "20".to_string())],
-                    "/topSongs/song",
-                )
-                .await?;
-            Ok((a, al, t, i))
+            let v: Value = self.rest("getArtist", &[("id", id.to_string())], "/artist").await?;
+            Ok((serde_json::from_value(v.clone())?, vlist(&v, "album")))
         }
+    }
+
+    pub async fn top_songs(&self, id: &str) -> Result<Vec<Song>> {
+        let by = if self.server.ext.iter().any(|e| e == "topSongsByArtistId") {
+            ("id", id.to_string())
+        } else {
+            ("artist", self.artist(id).await?.0.name)
+        };
+        self.rest("getTopSongs", &[by, ("count", "20".to_string())], "/topSongs/song").await
+    }
+
+    pub async fn artist_info(&self, id: &str) -> Result<Info> {
+        let ip = [("id", id.to_string()), ("count", "20".to_string())];
+        let mut i = self.rest::<Info>("getArtistInfo2", &ip, "/artistInfo2").await?;
+        i.similar.retain(|a| a.album_count > 0);
+        Ok(i)
     }
 
     pub async fn playlists(&self) -> Result<Vec<Playlist>> {

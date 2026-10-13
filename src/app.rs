@@ -451,6 +451,10 @@ impl App {
     }
 
     fn songs_of(&self, key: &str) -> Option<(Vec<Song>, String)> {
+        if let Some(id) = key.strip_prefix("artist:") {
+            let top = self.data::<Vec<Song>>(&format!("top:{id}"))?;
+            return Some((top.clone(), self.find_artist(id)?.name));
+        }
         let (s, name) = song_list(&self.cache.get(key)?.1)?;
         Some((s.to_vec(), if key == "liked" { "Liked Songs" } else { name }.to_string()))
     }
@@ -479,7 +483,7 @@ impl App {
             [
                 v.downcast_ref::<Pager<Album>>().map(|p| &p.items[..]),
                 v.downcast_ref::<SearchRes>().map(|r| &r.albums[..]),
-                v.downcast_ref::<(Artist, Vec<Album>, Vec<Song>, Info)>().map(|x| &x.1[..]),
+                v.downcast_ref::<(Artist, Vec<Album>)>().map(|x| &x.1[..]),
                 v.downcast_ref::<(Album, Vec<Song>)>().map(|x| std::slice::from_ref(&x.0)),
             ]
             .into_iter()
@@ -497,12 +501,11 @@ impl App {
 
     fn find_artist(&self, id: &str) -> Option<Artist> {
         self.cache.values().find_map(|(_, v)| {
-            let a = v.downcast_ref::<(Artist, Vec<Album>, Vec<Song>, Info)>();
             [
                 v.downcast_ref::<Pager<Artist>>().map(|p| &p.items[..]),
                 v.downcast_ref::<SearchRes>().map(|r| &r.artists[..]),
-                a.map(|x| std::slice::from_ref(&x.0)),
-                a.map(|x| &x.3.similar[..]),
+                v.downcast_ref::<(Artist, Vec<Album>)>().map(|x| std::slice::from_ref(&x.0)),
+                v.downcast_ref::<Info>().map(|x| &x.similar[..]),
             ]
             .into_iter()
             .flatten()
@@ -648,10 +651,11 @@ impl App {
                 albums.extend(&s.albums);
                 artists.extend(&s.artists);
             }
-            if let Some(a) = v.downcast_ref::<(Artist, Vec<Album>, Vec<Song>, Info)>() {
+            if let Some(a) = v.downcast_ref::<(Artist, Vec<Album>)>() {
                 albums.extend(&a.1);
-                artists.extend(&a.3.similar);
+                artists.push(&a.0);
             }
+            artists.extend(v.downcast_ref::<Info>().into_iter().flat_map(|i| &i.similar));
             albums.extend(v.downcast_ref::<Pager<Album>>().into_iter().flat_map(|p| &p.items));
             artists.extend(v.downcast_ref::<Pager<Artist>>().into_iter().flat_map(|p| &p.items));
         }
@@ -660,10 +664,10 @@ impl App {
                 .into_iter()
                 .find(|a| a.id == id)
                 .map(|a| Arc::new((a.clone(), Vec::<Song>::new())) as AnyData),
-            "artist" => artists.into_iter().find(|a| a.id == id).map(|a| {
-                Arc::new((a.clone(), Vec::<Album>::new(), Vec::<Song>::new(), Info::default()))
-                    as AnyData
-            }),
+            "artist" => artists
+                .into_iter()
+                .find(|a| a.id == id)
+                .map(|a| Arc::new((a.clone(), Vec::<Album>::new())) as AnyData),
             "playlist" => self
                 .data::<Lib>("lib")
                 .and_then(|l| l.playlists.iter().find(|p| p.id == id))
@@ -953,6 +957,8 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 }
                 "album" => Arc::new(s.album(arg).await?),
                 "artist" => Arc::new(s.artist(arg).await?),
+                "top" => Arc::new(s.top_songs(arg).await?),
+                "info" => Arc::new(s.artist_info(arg).await?),
                 "playlist" => Arc::new(s.playlist(arg).await?),
                 "liked" => {
                     let (v, t) = s.songs("starred", &[], offset, PAGE).await?;
@@ -1030,9 +1036,15 @@ impl App {
             ("lyrics", None) => "lib".to_string(),
             (r, _) => r.to_string(),
         };
-        self.cache.retain(|k, (t, _)| t.elapsed() < STALE || *k == key || k == "lib");
+        let parts =
+            route.strip_prefix("artist:").map(|id| [format!("top:{id}"), format!("info:{id}")]);
+        let parts = parts.as_ref().map_or(&[][..], |p| &p[..]);
+        self.cache.retain(|k, (t, _)| {
+            t.elapsed() < STALE || *k == key || k == "lib" || parts.contains(k)
+        });
         self.seed(&key);
         let mut tasks = vec![self.request(&key), self.request("lib")];
+        tasks.extend(parts.iter().map(|k| self.request(k)));
         let ids = self.visible_covers();
         tasks.push(self.want_covers(ids));
         let target = self.scrolls.get(&route).map(|(o, _)| *o).unwrap_or(0.0);
@@ -1750,7 +1762,8 @@ impl App {
                                 (v, p.name)
                             }
                             "artist" => {
-                                let (a, _, t, _) = s.artist(&id).await?;
+                                let ((a, _), t) =
+                                    tokio::try_join!(s.artist(&id), s.top_songs(&id))?;
                                 (t, a.name)
                             }
                             "liked" => (
@@ -2127,15 +2140,17 @@ impl App {
             out.extend(rows(&p.items).map(|c| (c, 128)));
         } else if let Some(s) = self.data::<Vec<Song>>(key) {
             out.extend(rows(s).map(|c| (c, 128)));
-        } else if let Some((a, albums, top, info)) =
-            self.data::<(Artist, Vec<Album>, Vec<Song>, Info)>(key)
-        {
+        } else if let Some((a, albums)) = self.data::<(Artist, Vec<Album>)>(key) {
             let mut disc: Vec<&Album> = albums.iter().collect();
             disc.sort_by_key(|x| std::cmp::Reverse(x.year));
-            out.push((&a.cover, 640));
+            let id = &key["artist:".len()..];
+            let top = self.data::<Vec<Song>>(&format!("top:{id}")).map_or(&[][..], |v| &v[..]);
+            let similar =
+                self.data::<Info>(&format!("info:{id}")).map_or(&[][..], |i| &i.similar[..]);
+            out.push((&a.cover, 300));
             out.extend(top.iter().take(10).map(|s| (s.cover.as_str(), 128)));
             out.extend(disc.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
-            out.extend(info.similar.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
+            out.extend(similar.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
         } else if let Some(p) = self.data::<Pager<Album>>(key) {
             out.extend(
                 p.items[span(p.items.len(), cw + 52.0, cols)]
@@ -2227,10 +2242,6 @@ fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
             v.downcast_ref::<(Playlist, Vec<Song>)>().map(|(p, s)| (&s[..], p.name.as_str()))
         })
         .or_else(|| v.downcast_ref::<Pager<Song>>().map(|p| (&p.items[..], "Songs")))
-        .or_else(|| {
-            v.downcast_ref::<(Artist, Vec<Album>, Vec<Song>, Info)>()
-                .map(|(a, _, t, _)| (&t[..], a.name.as_str()))
-        })
         .or_else(|| v.downcast_ref::<SearchRes>().map(|r| (&r.songs[..], "Search")))
         .or_else(|| v.downcast_ref::<Vec<Song>>().map(|s| (&s[..], "Folder")))
 }

@@ -77,12 +77,12 @@ fn artist_page() {
         let s = live().await;
         let (artists, total) = s.artists(0, 5).await.expect("artists");
         assert!(total > 10);
-        let (artist, albums, top, info) = s.artist(&artists[0].id).await.expect("artist");
-        assert_eq!(artist.id, artists[0].id);
+        let id = &artists[0].id;
+        let ((artist, _), _, info) =
+            tokio::try_join!(s.artist(id), s.top_songs(id), s.artist_info(id)).expect("artist");
+        assert_eq!(artist.id, *id);
         assert!(!artist.name.is_empty());
-        let _ = albums;
-        let _ = top;
-        let _ = info;
+        assert!(info.similar.iter().all(|a| a.album_count > 0));
     });
 }
 
@@ -313,8 +313,7 @@ fn local_subsonic_read_suite() {
         assert_eq!(album.id, albums[0].id);
         assert!(!songs.is_empty());
         let (artists, _) = s.artists(0, 10).await.expect("artists");
-        let (artist, albums, top, info) = s.artist(&artists[0].id).await.expect("artist");
-        let _ = (albums, top, info, artist);
+        let _ = s.artist(&artists[0].id).await.expect("artist");
         let playlists = s.playlists().await.expect("playlists");
         if let Some(pl) = playlists.first() {
             let _ = s.playlist(&pl.id).await.expect("playlist");
