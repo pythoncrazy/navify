@@ -27,7 +27,8 @@
   Long lists load in pages of 100 as you scroll.
 - **Search:** one search box for songs, artists, and albums, with genre tiles to browse.
 - **Artists:** popular songs, discography, similar artists, and artist radio.
-- **Lyrics:** synced lyrics follow the song. Click a line to go to that time.
+- **Lyrics:** synced lyrics follow the song. When you scroll, the lyrics stop and a button
+  takes you back to the current line. Click a line to go to that time.
 - **Queue:** play next, add to queue, shuffle, and repeat. Navify can save the queue on the server.
 - **Playlists:** make, rename, change, and delete playlists.
 - **Scrobble:** Navify sends plays to the server, which can send them to Last.fm or ListenBrainz.

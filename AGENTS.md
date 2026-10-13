@@ -62,8 +62,9 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
   - `examples/shots.rs`: renders screenshots of the routes with `iced_test`.
 - Do not enable the iced `tester` feature. It stops the boot tasks of the app.
 - Test the running app only on a virtual display: `env -u WAYLAND_DISPLAY dbus-run-session -- xvfb-run -a <command>`. Never open windows on the desktop of the user. wgpu fails on Xvfb (no DRI3), so use `ICED_BACKEND=tiny-skia` there.
-- Measurements (tiny-skia, Xvfb, home page loaded): RSS 62 MB, idle CPU 0 ticks in 30 s, 6 threads. Playback: about 1% CPU. Requests: cold start 12, album open 4 (2 data, 2 covers), album reopen 0 in the stale time (`tests/cache.rs`). The souvlaki D-Bus thread wakes one time each second (library limit).
+- Measurements (release, tiny-skia, headless mutter 1280x800, demo library, home page loaded): RSS 31 MB, idle CPU 0 ticks in 30 s, 6 threads. Playback: 10 ticks in 30 s (0.33% of one core). The progress updates one time each second, and four times each second on the lyrics page. Requests: cold start 12, album open 4 (2 data, 2 covers), album reopen 0 in the stale time (`tests/cache.rs`). The souvlaki D-Bus thread wakes one time each second (library limit).
 - Tray test (local scripts, not in git): `target/dev/tray-test.sh` with `target/dev/tray-host.py`, a fake StatusNotifierWatcher. Run it in headless mutter: `env -u WAYLAND_DISPLAY -u DISPLAY dbus-run-session -- mutter --headless --wayland --virtual-monitor 1280x800 --wayland-display navify-t -- bash target/dev/tray-test.sh`.
+- An ALSA null device ends each song at once. For playback tests in real time, use an ALSA `file` plugin that pipes to a reader at 192000 bytes each second.
 - Local test server for tests that change data: `tests/` read `NAVIFY_TEST_LOCAL_URL` and related variables. A Navidrome release binary with generated test tracks works well (see Phase A tests). Never change data on the `.env` server; it is the real library of the user.
 
 ## Roadmap
@@ -81,7 +82,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 ### Phase B: UI (Spotify desktop look)
 
 - Architecture: routes are strings that are also cache keys (`home`, `search:<q>`, `album:<id>`, `artist:<id>`, `playlist:<id>`, `liked`, `albums`, `artists`, `songs`, `genres`, `genre:<name>`, `folders`, `folder:<id>`, `lyrics`, `settings`). Back/forward history. Query cache `HashMap<String, (Instant, Arc<dyn Any + Send + Sync>)>`, stale time 5 min, a pending set to remove duplicate requests, one `fetch(key)` function, and one `Loaded(key, result)` message. Pages of 100 load as the user scrolls. Optimistic overlays for stars and ratings.
-- Images: cover sizes 128, 300, and 640 only. Decode with the `image` crate in a blocking task. Keep `Handle::from_rgba` in an LRU with a 64 MB byte limit. Calculate the dominant color from the same pixels.
+- Images: cover sizes 128, 192, 300, and 640 only. Use the smallest size that is not smaller than the displayed size times the zoom. Decode one cover at a time with the `image` crate in a blocking task. Keep `Handle::from_rgba` in an LRU with a 24 MB byte limit. Calculate the dominant color from the same pixels.
 - Virtualized lists and grids: fixed 56 px rows, render only the visible rows ± 6. Keep the scroll offset per route.
 - Player: queue, index, shuffle order, repeat (0 off, 1 all, 2 one). ReplayGain linear gain = 10^((gain_db + preamp)/20), clamped by 1/peak. Send the next track to the engine for gapless playback. Scrobble with `submission=false` at start and `submission=true` after 50% or 240 s. Queue sync: restore after login, save 5 s after a change and on pause or quit.
 - Keyboard: Space, Ctrl/Cmd+Left/Right, Ctrl/Cmd+Up/Down, Ctrl/Cmd+K and L (search), Ctrl/Cmd+S (shuffle), Ctrl/Cmd+R (repeat), Alt+Left/Right (back/forward). Previous restarts the track after 3 s.
