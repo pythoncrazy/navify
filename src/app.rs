@@ -189,31 +189,45 @@ pub struct Covers {
 
 impl Covers {
     fn slot(size: u32) -> usize {
-        SIZES.iter().position(|s| *s == size).unwrap_or_else(|| panic!("cover size {size} is not a bucket"))
+        SIZES
+            .iter()
+            .position(|s| *s == size)
+            .unwrap_or_else(|| panic!("cover size {size} is not a bucket"))
     }
 
     pub fn get(&self, id: &str, size: u32) -> Option<image::Handle> {
         let e = self.map.get(id)?;
         let mut near = [0, 1, 2];
         near.sort_unstable_by_key(|&j| SIZES[j].abs_diff(size));
-        near.iter().find_map(|&j| e[j].as_ref()).map(|(_, h, _)| h.clone())
+        near.iter()
+            .find_map(|&j| e[j].as_ref())
+            .map(|(_, h, _)| h.clone())
     }
 
     pub fn has(&self, id: &str, size: u32) -> bool {
-        self.map.get(id).is_some_and(|e| e[Self::slot(size)].is_some())
+        self.map
+            .get(id)
+            .is_some_and(|e| e[Self::slot(size)].is_some())
     }
 
     pub fn insert(&mut self, (id, size): (String, u32), w: u32, h: u32, c: Color, px: Vec<u8>) {
         self.tick += 1;
         let (i, n) = (Self::slot(size), (w * h * 4) as usize);
         self.color.insert(id.clone(), c);
-        let old =
-            self.map.entry(id.clone()).or_default()[i].replace((self.tick, image::Handle::from_rgba(w, h, px), n));
+        let old = self.map.entry(id.clone()).or_default()[i].replace((
+            self.tick,
+            image::Handle::from_rgba(w, h, px),
+            n,
+        ));
         self.bytes = self.bytes + n - old.map_or(0, |o| o.2);
         self.order.push_back((id, i, self.tick));
         while self.bytes > COVER_CAP {
-            let Some((id, j, t)) = self.order.pop_front() else { break };
-            let Some(e) = self.map.get_mut(&id) else { continue };
+            let Some((id, j, t)) = self.order.pop_front() else {
+                break;
+            };
+            let Some(e) = self.map.get_mut(&id) else {
+                continue;
+            };
             if e[j].as_ref().is_some_and(|x| x.0 == t) {
                 self.bytes -= e[j].take().expect("the slot is full").2;
                 if e.iter().all(Option::is_none) {
@@ -309,7 +323,11 @@ impl App {
             ))
         })();
         let prune = app.disk(Some(300 << 20));
-        let open = if app.shot.is_some() { Task::none() } else { iced::window::open(app.window()).1.map(Message::Win) };
+        let open = if app.shot.is_some() {
+            Task::none()
+        } else {
+            iced::window::open(app.window()).1.map(Message::Win)
+        };
         let t = Task::batch([
             prune,
             open,
@@ -342,7 +360,10 @@ impl App {
 
     fn apply_shot_setup(&mut self) -> Task<Message> {
         let mut task = Task::none();
-        let setups = self.shot.take().and_then(|s| s.split_once('|').map(|(_, x)| x.to_string()));
+        let setups = self
+            .shot
+            .take()
+            .and_then(|s| s.split_once('|').map(|(_, x)| x.to_string()));
         for s in setups.iter().flat_map(|x| x.split(',')) {
             match s {
                 "queue" | "panel1" => {
@@ -353,7 +374,12 @@ impl App {
                 }
                 "menu" => {
                     if let Some(sg) = self.any_songs().into_iter().next() {
-                        self.menu = Some(Menu { x: 480.0, y: 300.0, kind: MenuKind::Song(vec![sg]), sub: 0 });
+                        self.menu = Some(Menu {
+                            x: 480.0,
+                            y: 300.0,
+                            kind: MenuKind::Song(vec![sg]),
+                            sub: 0,
+                        });
                     }
                 }
                 "toast" => {
@@ -381,7 +407,11 @@ impl App {
     }
 
     pub fn data<T: 'static>(&self, key: &str) -> Option<&T> {
-        self.cache.get(key).map(|(_, v)| v).or_else(|| self.seeds.get(key)).and_then(|v| v.downcast_ref())
+        self.cache
+            .get(key)
+            .map(|(_, v)| v)
+            .or_else(|| self.seeds.get(key))
+            .and_then(|v| v.downcast_ref())
     }
 
     pub fn is_starred(&self, id: &str, server: bool) -> bool {
@@ -389,7 +419,10 @@ impl App {
     }
 
     pub fn scroll(&self) -> (f32, f32) {
-        self.scrolls.get(&self.route).copied().unwrap_or((0.0, self.view_size().1 - 136.0))
+        self.scrolls
+            .get(&self.route)
+            .copied()
+            .unwrap_or((0.0, self.view_size().1 - 136.0))
     }
 
     pub fn scale(&self) -> f32 {
@@ -397,7 +430,9 @@ impl App {
     }
 
     pub fn window(&self) -> iced::window::Settings {
-        let icon = ::image::load_from_memory(ICON).expect("the bundled icon is a PNG").into_rgba8();
+        let icon = ::image::load_from_memory(ICON)
+            .expect("the bundled icon is a PNG")
+            .into_rgba8();
         let ((w, h), s) = (self.cfg.settings.window, self.scale());
         iced::window::Settings {
             size: iced::Size::new(w.max(800.0), h.max(600.0)) * (1.0 / s),
@@ -422,7 +457,9 @@ impl App {
     }
 
     fn pick(&mut self, key: String, n: usize) {
-        let m = iced::keyboard::Modifiers::from_bits_truncate(MODS.load(std::sync::atomic::Ordering::Relaxed));
+        let m = iced::keyboard::Modifiers::from_bits_truncate(
+            MODS.load(std::sync::atomic::Ordering::Relaxed),
+        );
         let same = self.sel.as_ref().is_some_and(|s| s.0 == key);
         if same && m.shift() {
             self.picked = (self.anchor.min(n)..=self.anchor.max(n)).collect();
@@ -457,7 +494,10 @@ impl App {
             return Some((top.clone(), self.find_artist(id)?.name));
         }
         let (s, name) = song_list(&self.cache.get(key)?.1)?;
-        Some((s.to_vec(), if key == "liked" { "Liked Songs" } else { name }.to_string()))
+        Some((
+            s.to_vec(),
+            if key == "liked" { "Liked Songs" } else { name }.to_string(),
+        ))
     }
 
     fn edit<T: Clone + Send + Sync + 'static>(&mut self, key: &str, f: impl FnOnce(&mut T)) {
@@ -487,7 +527,8 @@ impl App {
                 v.downcast_ref::<(Artist, Vec<Album>)>().map(|x| &x.1[..]),
                 v.downcast_ref::<Vec<Album>>().map(|x| &x[..]),
                 v.downcast_ref::<Lib>().map(|l| &l.albums[..]),
-                v.downcast_ref::<(Album, Vec<Song>)>().map(|x| std::slice::from_ref(&x.0)),
+                v.downcast_ref::<(Album, Vec<Song>)>()
+                    .map(|x| std::slice::from_ref(&x.0)),
             ]
             .into_iter()
             .flatten()
@@ -507,7 +548,8 @@ impl App {
             [
                 v.downcast_ref::<Pager<Artist>>().map(|p| &p.items[..]),
                 v.downcast_ref::<SearchRes>().map(|r| &r.artists[..]),
-                v.downcast_ref::<(Artist, Vec<Album>)>().map(|x| std::slice::from_ref(&x.0)),
+                v.downcast_ref::<(Artist, Vec<Album>)>()
+                    .map(|x| std::slice::from_ref(&x.0)),
                 v.downcast_ref::<Info>().map(|x| &x.similar[..]),
                 v.downcast_ref::<Lib>().map(|l| &l.artists[..]),
             ]
@@ -584,12 +626,19 @@ impl App {
     }
 
     fn seed(&mut self, key: &str) {
-        let Some((kind, id)) = key.split_once(':').filter(|_| !self.cache.contains_key(key)) else {
+        let Some((kind, id)) = key
+            .split_once(':')
+            .filter(|_| !self.cache.contains_key(key))
+        else {
             return;
         };
         let v: Option<AnyData> = match kind {
-            "album" => self.find_album(id).map(|a| Arc::new((a, Vec::<Song>::new())) as AnyData),
-            "artist" => self.find_artist(id).map(|a| Arc::new((a, Vec::<Album>::new())) as AnyData),
+            "album" => self
+                .find_album(id)
+                .map(|a| Arc::new((a, Vec::<Song>::new())) as AnyData),
+            "artist" => self
+                .find_artist(id)
+                .map(|a| Arc::new((a, Vec::<Album>::new())) as AnyData),
             "playlist" => self
                 .data::<Lib>("lib")
                 .and_then(|l| l.playlists.iter().find(|p| p.id == id))
@@ -602,10 +651,17 @@ impl App {
     }
 
     fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
-        if offset == 0 && self.cache.get(key).is_some_and(|(t, v)| t.elapsed() < STALE && !v.is::<String>()) {
+        if offset == 0
+            && self
+                .cache
+                .get(key)
+                .is_some_and(|(t, v)| t.elapsed() < STALE && !v.is::<String>())
+        {
             return Task::none();
         }
-        let Some(s) = self.session.clone() else { return Task::none() };
+        let Some(s) = self.session.clone() else {
+            return Task::none();
+        };
         if !self.pending.insert(format!("{key}#{offset}")) {
             return Task::none();
         }
@@ -616,7 +672,9 @@ impl App {
         self.toast_seq += 1;
         let n = self.toast_seq;
         self.toast = Some((n, text.to_string()));
-        Task::perform(tokio::time::sleep(Duration::from_secs(3)), move |_| Message::Toast(n, String::new()))
+        Task::perform(tokio::time::sleep(Duration::from_secs(3)), move |_| {
+            Message::Toast(n, String::new())
+        })
     }
 
     fn debounce_save_queue(&mut self) -> Task<Message> {
@@ -625,7 +683,9 @@ impl App {
         }
         self.save_seq += 1;
         let n = self.save_seq;
-        Task::perform(tokio::time::sleep(Duration::from_secs(5)), move |_| Message::SaveQ(n))
+        Task::perform(tokio::time::sleep(Duration::from_secs(5)), move |_| {
+            Message::SaveQ(n)
+        })
     }
 
     fn persist(&self) -> Task<Message> {
@@ -649,18 +709,33 @@ impl App {
             _ => return 1.0,
         }
         .unwrap_or(st.fallback_db);
-        let peak = song.rg.track_peak.or(song.rg.album_peak).unwrap_or(1.0).max(1e-3);
+        let peak = song
+            .rg
+            .track_peak
+            .or(song.rg.album_peak)
+            .unwrap_or(1.0)
+            .max(1e-3);
         10f32.powf((db + st.preamp_db) / 20.0).min(1.0 / peak)
     }
 
     fn track(&self, song: &Song) -> Track {
         let st = &self.cfg.settings;
-        let (url, transcoded) = self.session.as_ref().expect("playback needs a session").stream_url(
-            song,
-            Some(st.transcode_format.as_str()).filter(|f| !f.is_empty()),
-            st.transcode_max_bitrate,
-        );
-        Track { id: song.id.clone(), url, gain: self.gain(song), transcoded, duration: song.duration }
+        let (url, transcoded) = self
+            .session
+            .as_ref()
+            .expect("playback needs a session")
+            .stream_url(
+                song,
+                Some(st.transcode_format.as_str()).filter(|f| !f.is_empty()),
+                st.transcode_max_bitrate,
+            );
+        Track {
+            id: song.id.clone(),
+            url,
+            gain: self.gain(song),
+            transcoded,
+            duration: song.duration,
+        }
     }
 
     fn disk(&self, covers: Option<u64>) -> Task<Message> {
@@ -668,15 +743,25 @@ impl App {
         Task::perform(
             tokio::task::spawn_blocking(move || {
                 covers.inspect(|&c| crate::api::prune(&dir.join("covers"), c));
-                crate::api::cache_files(&dir).iter().map(|f| f.2).sum::<u64>()
+                crate::api::cache_files(&dir)
+                    .iter()
+                    .map(|f| f.2)
+                    .sum::<u64>()
             }),
-            |n| Message::Loaded("disk".into(), Ok(Arc::new(n.expect("cache scan")) as AnyData)),
+            |n| {
+                Message::Loaded(
+                    "disk".into(),
+                    Ok(Arc::new(n.expect("cache scan")) as AnyData),
+                )
+            },
         )
     }
 
     fn next_index(&self) -> Option<usize> {
         let len = self.queue.len();
-        (self.index + 1 < len).then_some(self.index + 1).or((self.repeat == 1 && len > 0).then_some(0))
+        (self.index + 1 < len)
+            .then_some(self.index + 1)
+            .or((self.repeat == 1 && len > 0).then_some(0))
     }
 
     fn start(&mut self, i: usize, shuffled: bool) -> Task<Message> {
@@ -688,7 +773,11 @@ impl App {
         if self.queue.is_empty() {
             return Task::none();
         }
-        let done = if self.loaded { self.listen(false) } else { Task::none() };
+        let done = if self.loaded {
+            self.listen(false)
+        } else {
+            Task::none()
+        };
         self.index = i.min(self.queue.len() - 1);
         self.playing = true;
         let t = self.track(&self.queue[self.real_index()]);
@@ -706,7 +795,9 @@ impl App {
     fn began(&mut self) -> Task<Message> {
         (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
         self.queue_next_refresh();
-        let Some(song) = self.current_song().cloned() else { return Task::none() };
+        let Some(song) = self.current_song().cloned() else {
+            return Task::none();
+        };
         let lyr = self.request(&format!("lyrics:{}", song.id), 0);
         let now = if self.cfg.settings.scrobble {
             self.send(
@@ -720,18 +811,30 @@ impl App {
     }
 
     fn pos(&self) -> f32 {
-        self.player.as_ref().filter(|_| self.loaded).map_or(self.position, |p| p.position())
+        self.player
+            .as_ref()
+            .filter(|_| self.loaded)
+            .map_or(self.position, |p| p.position())
     }
 
     fn listen(&mut self, on: bool) -> Task<Message> {
         let (speed, enabled) = (self.cfg.settings.speed, self.cfg.settings.scrobble);
-        self.heard += self.since.take().map_or(0.0, |t| t.elapsed().as_secs_f32() * speed);
+        self.heard += self
+            .since
+            .take()
+            .map_or(0.0, |t| t.elapsed().as_secs_f32() * speed);
         self.since = on.then(Instant::now);
         self.listen_seq += 1;
-        let Some(song) = self.current_song().filter(|s| enabled && !self.scrobbled && s.duration > 0.0) else {
+        let Some(song) = self
+            .current_song()
+            .filter(|s| enabled && !self.scrobbled && s.duration > 0.0)
+        else {
             return Task::none();
         };
-        let (id, left) = (song.id.clone(), (song.duration * 0.5).min(240.0) - self.heard);
+        let (id, left) = (
+            song.id.clone(),
+            (song.duration * 0.5).min(240.0) - self.heard,
+        );
         if left <= 0.0 {
             self.scrobbled = true;
             self.send(
@@ -740,14 +843,21 @@ impl App {
             )
         } else if on {
             let n = self.listen_seq;
-            Task::perform(tokio::time::sleep(Duration::from_secs_f32(left / speed)), move |_| Message::Heard(n))
+            Task::perform(
+                tokio::time::sleep(Duration::from_secs_f32(left / speed)),
+                move |_| Message::Heard(n),
+            )
         } else {
             Task::none()
         }
     }
 
     fn restore(&self) -> Task<Message> {
-        let Some(s) = self.session.clone().filter(|_| self.cfg.settings.queue_sync && self.shot.is_none()) else {
+        let Some(s) = self
+            .session
+            .clone()
+            .filter(|_| self.cfg.settings.queue_sync && self.shot.is_none())
+        else {
             return Task::none();
         };
         Task::perform(async move { s.play_queue().await }, |r| match r {
@@ -758,7 +868,11 @@ impl App {
 
     pub(crate) fn real_at(&self, i: usize) -> usize {
         self.shuffle.as_ref().map_or(i, |o| {
-            assert_eq!(o.len(), self.queue.len(), "the shuffle order covers the queue");
+            assert_eq!(
+                o.len(),
+                self.queue.len(),
+                "the shuffle order covers the queue"
+            );
             o[i]
         })
     }
@@ -769,18 +883,24 @@ impl App {
     }
 
     fn want_covers(&mut self, ids: impl IntoIterator<Item = (String, u32)>) -> Task<Message> {
-        let Some(s) = self.session.clone() else { return Task::none() };
+        let Some(s) = self.session.clone() else {
+            return Task::none();
+        };
         let tasks: Vec<Task<Message>> = ids
             .into_iter()
             .filter(|(id, size)| {
-                !id.is_empty() && !self.covers.has(id, *size) && self.covers.want.insert((id.clone(), *size))
+                !id.is_empty()
+                    && !self.covers.has(id, *size)
+                    && self.covers.want.insert((id.clone(), *size))
             })
             .map(|(id, size)| {
                 let (s, k) = (s.clone(), id.clone());
                 Task::perform(
                     async move {
                         let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
-                        tokio::task::spawn_blocking(move || decode(&b, size)).await.expect("decode task")
+                        tokio::task::spawn_blocking(move || decode(&b, size))
+                            .await
+                            .expect("decode task")
                     },
                     move |r| Message::Cover(id, size, r),
                 )
@@ -799,11 +919,18 @@ fn decode(b: &[u8], size: u32) -> Result<(u32, u32, Color, Vec<u8>), String> {
     } else {
         img
     };
-    Ok((img.width(), img.height(), dominant(&img), img.to_rgba8().into_raw()))
+    Ok((
+        img.width(),
+        img.height(),
+        dominant(&img),
+        img.to_rgba8().into_raw(),
+    ))
 }
 
 fn dominant(img: &::image::DynamicImage) -> Color {
-    let small = img.resize_exact(24, 24, ::image::imageops::FilterType::Triangle).to_rgb8();
+    let small = img
+        .resize_exact(24, 24, ::image::imageops::FilterType::Triangle)
+        .to_rgb8();
     let mut hue = [[0f32; 4]; 12];
     let mut all = [0f32; 3];
     for p in small.pixels() {
@@ -821,7 +948,10 @@ fn dominant(img: &::image::DynamicImage) -> Color {
         *k = [k[0] + w, k[1] + r * w, k[2] + g * w, k[3] + b * w];
         all = [all[0] + r, all[1] + g, all[2] + b];
     }
-    let [w, r, g, b] = hue.into_iter().max_by(|a, b| a[0].total_cmp(&b[0])).expect("12 hue bins");
+    let [w, r, g, b] = hue
+        .into_iter()
+        .max_by(|a, b| a[0].total_cmp(&b[0]))
+        .expect("12 hue bins");
     if w < 576.0 * 0.03 {
         let l = ((all[0] * 0.3 + all[1] * 0.59 + all[2] * 0.11) / 576.0).clamp(0.15, 0.35);
         return Color::from_rgb(l, l, l);
@@ -840,7 +970,11 @@ macro_rules! pager {
 }
 
 fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {
-    Arc::new(Pager { items, total, offset })
+    Arc::new(Pager {
+        items,
+        total,
+        offset,
+    })
 }
 
 fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
@@ -857,11 +991,20 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                         s.albums("frequent", &[], 0, 12),
                         s.albums("random", &[], 0, 12),
                     )?;
-                    Arc::new(Home { recent: r.0, added: a.0, frequent: f.0, random: x.0 })
+                    Arc::new(Home {
+                        recent: r.0,
+                        added: a.0,
+                        frequent: f.0,
+                        random: x.0,
+                    })
                 }
                 "lib" => {
                     let (p, st) = tokio::try_join!(s.playlists(), s.starred())?;
-                    Arc::new(Lib { playlists: p, artists: st.0, albums: st.1 })
+                    Arc::new(Lib {
+                        playlists: p,
+                        artists: st.0,
+                        albums: st.1,
+                    })
                 }
                 "album" => Arc::new(s.album(arg).await?),
                 "artist" => Arc::new(s.artist(arg).await?),
@@ -875,21 +1018,34 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                     pager(s.albums(sort, &[], offset, PAGE).await?, offset)
                 }
                 "artists" => pager(s.artists(offset, PAGE).await?, offset),
-                "songs" => pager(s.songs(if arg.is_empty() { "name" } else { arg }, offset, PAGE).await?, offset),
+                "songs" => pager(
+                    s.songs(if arg.is_empty() { "name" } else { arg }, offset, PAGE)
+                        .await?,
+                    offset,
+                ),
                 "genres" => Arc::new(s.genres().await?),
-                "genre" => pager(s.albums("newest", &[("genre", arg)], offset, PAGE).await?, offset),
+                "genre" => pager(
+                    s.albums("newest", &[("genre", arg)], offset, PAGE).await?,
+                    offset,
+                ),
                 "folders" => Arc::new(s.indexes().await?),
                 "folder" => Arc::new(s.directory(arg).await?),
                 "lyrics" => Arc::new(s.lyrics(arg).await?),
                 "search" => Arc::new({
                     let (a, b, c) = s.search(arg, 20).await?;
-                    SearchRes { artists: a, albums: b, songs: c }
+                    SearchRes {
+                        artists: a,
+                        albums: b,
+                        songs: c,
+                    }
                 }),
                 _ => return Err(anyhow::anyhow!("unknown key {key}")),
             };
             Ok::<AnyData, anyhow::Error>(v)
         },
-        move |r: Result<AnyData, anyhow::Error>| Message::Loaded(key2, r.map_err(|e| e.to_string())),
+        move |r: Result<AnyData, anyhow::Error>| {
+            Message::Loaded(key2, r.map_err(|e| e.to_string()))
+        },
     )
 }
 
@@ -898,7 +1054,9 @@ impl App {
     where
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
-        let Some(s) = self.session.clone() else { return Task::none() };
+        let Some(s) = self.session.clone() else {
+            return Task::none();
+        };
         Task::perform(f(s), move |r| match r {
             Ok(()) => Message::Noop,
             Err(e) => Message::Toast(0, format!("{fail} {e}")),
@@ -917,7 +1075,9 @@ impl App {
 
     pub fn key_of(&self, route: &str) -> String {
         match (route.split_once(':'), self.current_song()) {
-            (None, _) if matches!(route, "settings" | "login" | "search" | "genres") => "genres".into(),
+            (None, _) if matches!(route, "settings" | "login" | "search" | "genres") => {
+                "genres".into()
+            }
             (None, Some(s)) if route == "lyrics" => format!("lyrics:{}", s.id),
             (None, None) if route == "lyrics" => "lib".into(),
             (Some(("discography", a)), _) => format!("artist:{}", a.split(':').next().unwrap_or(a)),
@@ -932,7 +1092,12 @@ impl App {
             .map(|a| format!("album:{}", a.id))
             .collect();
         let covers = self.covers_now();
-        Task::batch(keys.iter().map(|k| self.request(k, 0)).chain([covers]).collect::<Vec<_>>())
+        Task::batch(
+            keys.iter()
+                .map(|k| self.request(k, 0))
+                .chain([covers])
+                .collect::<Vec<_>>(),
+        )
     }
 
     fn show(&mut self) -> Task<Message> {
@@ -941,26 +1106,43 @@ impl App {
         (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
         (self.popular_all, self.disc_chip) = (false, 0);
         let key = self.key_of(&route);
-        let parts = route
-            .strip_prefix("artist:")
-            .map(|id| [format!("top:{id}"), format!("info:{id}"), format!("appears:{id}")]);
+        let parts = route.strip_prefix("artist:").map(|id| {
+            [
+                format!("top:{id}"),
+                format!("info:{id}"),
+                format!("appears:{id}"),
+            ]
+        });
         let parts = parts.as_ref().map_or(&[][..], |p| &p[..]);
-        self.cache.retain(|k, (t, _)| t.elapsed() < STALE || *k == key || k == "lib" || parts.contains(k));
+        self.cache.retain(|k, (t, _)| {
+            t.elapsed() < STALE || *k == key || k == "lib" || parts.contains(k)
+        });
         self.seed(&key);
         let mut tasks = vec![self.request(&key, 0), self.request("lib", 0)];
         tasks.extend(parts.iter().map(|k| self.request(k, 0)));
         tasks.push(self.covers_now());
         tasks.push(self.disc_load());
         let target = self.scrolls.get(&route).map(|(o, _)| *o).unwrap_or(0.0);
-        tasks.push(op::scroll_to(crate::view::SCROLL, AbsoluteOffset { x: 0.0, y: target }));
+        tasks.push(op::scroll_to(
+            crate::view::SCROLL,
+            AbsoluteOffset { x: 0.0, y: target },
+        ));
         if route == "login" {
-            let n = [&self.login.url, &self.login.user].iter().position(|v| v.is_empty());
+            let n = [&self.login.url, &self.login.user]
+                .iter()
+                .position(|v| v.is_empty());
             tasks.push(op::focus(format!("login{}", n.unwrap_or(2))));
         }
         if route == "settings" {
-            tasks.push(Task::perform(tokio::task::spawn_blocking(navify_audio::devices), |d| {
-                Message::Loaded("devices".into(), d.expect("device scan").map(|v| Arc::new(v) as AnyData))
-            }));
+            tasks.push(Task::perform(
+                tokio::task::spawn_blocking(navify_audio::devices),
+                |d| {
+                    Message::Loaded(
+                        "devices".into(),
+                        d.expect("device scan").map(|v| Arc::new(v) as AnyData),
+                    )
+                },
+            ));
             tasks.push(self.disk(None));
         }
         Task::batch(tasks)
@@ -988,9 +1170,13 @@ impl App {
                 album: song.as_ref().map(|s| s.album.as_str()),
                 artist: song.as_ref().map(|s| s.artist.as_str()),
                 cover_url: art.as_deref(),
-                duration: song.as_ref().map(|s| Duration::from_secs_f32(s.duration.max(0.0))),
+                duration: song
+                    .as_ref()
+                    .map(|s| Duration::from_secs_f32(s.duration.max(0.0))),
             });
-            let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f32(pos.max(0.0))));
+            let progress = Some(souvlaki::MediaPosition(Duration::from_secs_f32(
+                pos.max(0.0),
+            )));
             let _ = m.set_playback(match (&song, self.playing) {
                 (None, _) => souvlaki::MediaPlayback::Stopped,
                 (_, true) => souvlaki::MediaPlayback::Playing { progress },
@@ -1063,15 +1249,25 @@ impl App {
                 self.search_q = q;
                 self.search_seq += 1;
                 let n = self.search_seq;
-                Task::perform(tokio::time::sleep(Duration::from_millis(250)), move |_| Message::SearchGo(n))
+                Task::perform(tokio::time::sleep(Duration::from_millis(250)), move |_| {
+                    Message::SearchGo(n)
+                })
             }
             Message::SearchGo(n) => {
                 if n != self.search_seq {
                     return Task::none();
                 }
                 let q = self.search_q.trim().to_string();
-                let r = if q.is_empty() { "search".into() } else { format!("search:{q}") };
-                if r != self.route { self.nav(r) } else { self.request(&r, 0) }
+                let r = if q.is_empty() {
+                    "search".into()
+                } else {
+                    format!("search:{q}")
+                };
+                if r != self.route {
+                    self.nav(r)
+                } else {
+                    self.request(&r, 0)
+                }
             }
             Message::Play(songs, i, source) => {
                 self.queue = songs;
@@ -1128,7 +1324,11 @@ impl App {
                 Task::batch([done, self.listen(self.playing)])
             }
             Message::Shuffle => {
-                let cur = if self.index < self.queue.len() { self.real_index() } else { 0 };
+                let cur = if self.index < self.queue.len() {
+                    self.real_index()
+                } else {
+                    0
+                };
                 if self.shuffle.take().is_some() {
                     self.index = cur;
                 } else {
@@ -1165,7 +1365,9 @@ impl App {
                     self.starred.insert(id.clone(), on);
                     self.apply_star(id, on);
                 });
-                let Some(s) = self.session.clone() else { return Task::none() };
+                let Some(s) = self.session.clone() else {
+                    return Task::none();
+                };
                 Task::perform(
                     async move {
                         let r = s.star(&ids, on).await;
@@ -1187,7 +1389,10 @@ impl App {
             Message::Rate(id, n) => {
                 self.ratings.insert(id.clone(), n);
                 self.menu = None;
-                self.send(|s| async move { s.rate(&id, n).await }, "Could not set the rating.")
+                self.send(
+                    |s| async move { s.rate(&id, n).await },
+                    "Could not set the rating.",
+                )
             }
             Message::Queue(songs, next) => {
                 let (n, at) = (songs.len(), if next { self.index + 1 } else { usize::MAX });
@@ -1230,9 +1435,17 @@ impl App {
             }
             Message::Menu(kind) => {
                 let bits = CURSOR.load(std::sync::atomic::Ordering::Relaxed);
-                let (x, y) = (f32::from_bits((bits >> 32) as u32), f32::from_bits(bits as u32));
+                let (x, y) = (
+                    f32::from_bits((bits >> 32) as u32),
+                    f32::from_bits(bits as u32),
+                );
                 let speed = matches!(*kind, MenuKind::Speed);
-                self.menu = Some(Menu { x, y, kind: *kind, sub: 0 });
+                self.menu = Some(Menu {
+                    x,
+                    y,
+                    kind: *kind,
+                    sub: 0,
+                });
                 if !speed {
                     return Task::none();
                 }
@@ -1258,9 +1471,14 @@ impl App {
                 self.menu = None;
                 let songs: Vec<Song> = ids.iter().filter_map(|id| self.find_song(id)).collect();
                 let n = songs.len() as u32;
-                self.edit::<(Playlist, Vec<Song>)>(&format!("playlist:{pid}"), |(_, s)| s.extend(songs));
+                self.edit::<(Playlist, Vec<Song>)>(&format!("playlist:{pid}"), |(_, s)| {
+                    s.extend(songs)
+                });
                 self.edit::<Lib>("lib", |l| {
-                    l.playlists.iter_mut().filter(|p| p.id == pid).for_each(|p| p.song_count += n)
+                    l.playlists
+                        .iter_mut()
+                        .filter(|p| p.id == pid)
+                        .for_each(|p| p.song_count += n)
                 });
                 let name = self
                     .data::<Lib>("lib")
@@ -1276,11 +1494,16 @@ impl App {
             }
             Message::PlNew(name, ids) => {
                 self.menu = None;
-                let Some(s) = self.session.clone() else { return Task::none() };
-                Task::perform(async move { s.playlist_create(&name, &ids).await }, |r| match r {
-                    Ok(p) => Message::PlCreated(p),
-                    Err(e) => Message::Toast(0, format!("Could not make the playlist. {e}")),
-                })
+                let Some(s) = self.session.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move { s.playlist_create(&name, &ids).await },
+                    |r| match r {
+                        Ok(p) => Message::PlCreated(p),
+                        Err(e) => Message::Toast(0, format!("Could not make the playlist. {e}")),
+                    },
+                )
             }
             Message::PlDel(id) => {
                 self.menu = None;
@@ -1288,10 +1511,17 @@ impl App {
                 let r = format!("playlist:{id}");
                 self.edit::<Lib>("lib", |l| l.playlists.retain(|p| p.id != id));
                 self.cache.remove(&r);
-                let back = if self.route == r { self.nav("home".into()) } else { Task::none() };
+                let back = if self.route == r {
+                    self.nav("home".into())
+                } else {
+                    Task::none()
+                };
                 Task::batch([
                     back,
-                    self.send(|s| async move { s.playlist_delete(&id).await }, "Could not delete the playlist."),
+                    self.send(
+                        |s| async move { s.playlist_delete(&id).await },
+                        "Could not delete the playlist.",
+                    ),
                 ])
             }
             Message::PlRemove(idx) => {
@@ -1319,15 +1549,24 @@ impl App {
             }
             Message::Radio(id) => {
                 self.menu = None;
-                let Some(s) = self.session.clone() else { return Task::none() };
-                Task::perform(async move { s.similar_songs(&id, 30).await.map_err(|e| e.to_string()) }, |r| match r {
-                    Ok(v) if !v.is_empty() => Message::Play(v, 0, "Radio".into()),
-                    Ok(_) => Message::Toast(0, "No similar songs were found.".into()),
-                    Err(e) => Message::Toast(0, format!("Could not start the radio. {e}")),
-                })
+                let Some(s) = self.session.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move { s.similar_songs(&id, 30).await.map_err(|e| e.to_string()) },
+                    |r| match r {
+                        Ok(v) if !v.is_empty() => Message::Play(v, 0, "Radio".into()),
+                        Ok(_) => Message::Toast(0, "No similar songs were found.".into()),
+                        Err(e) => Message::Toast(0, format!("Could not start the radio. {e}")),
+                    },
+                )
             }
             Message::Toast(n, text) if text.is_empty() => {
-                if self.toast.as_ref().is_some_and(|(tn, _)| *tn == n || n == 0) {
+                if self
+                    .toast
+                    .as_ref()
+                    .is_some_and(|(tn, _)| *tn == n || n == 0)
+                {
                     self.toast = None;
                 }
                 Task::none()
@@ -1367,13 +1606,21 @@ impl App {
                 if self.login.busy {
                     return Task::none();
                 }
-                if let Some(n) = [&self.login.url, &self.login.user].iter().position(|v| v.trim().is_empty()) {
-                    self.login.error = ["Enter the server address.", "Enter the username."][n].into();
+                if let Some(n) = [&self.login.url, &self.login.user]
+                    .iter()
+                    .position(|v| v.trim().is_empty())
+                {
+                    self.login.error =
+                        ["Enter the server address.", "Enter the username."][n].into();
                     return op::focus(format!("login{n}"));
                 }
                 self.login.busy = true;
                 self.login.error.clear();
-                let (u, n, p) = (self.login.url.clone(), self.login.user.clone(), self.login.pass.clone());
+                let (u, n, p) = (
+                    self.login.url.clone(),
+                    self.login.user.clone(),
+                    self.login.pass.clone(),
+                );
                 Task::perform(
                     async move { Session::login(&u, &n, &p).await.map_err(|e| e.to_string()) },
                     Message::LoggedIn,
@@ -1395,7 +1642,8 @@ impl App {
                         self.route.clear();
                         self.history.clear();
                         let t = self.persist();
-                        let n = self.nav(shot_key(self.shot.as_deref()).unwrap_or_else(|| "home".into()));
+                        let n = self
+                            .nav(shot_key(self.shot.as_deref()).unwrap_or_else(|| "home".into()));
                         let q = self.restore();
                         let k = kept.map_or_else(|e| self.toast(&e.to_string()), |()| Task::none());
                         Task::batch([t, n, q, k])
@@ -1442,10 +1690,16 @@ impl App {
                 self.pending.clear();
                 let t = self.persist();
                 let n = self.nav("home".into());
-                let check =
-                    Task::perform(async move { s.rest::<serde_json::Value>("ping", &[], "").await.is_ok() }, |ok| {
-                        if ok { Message::Noop } else { Message::NativeFailed }
-                    });
+                let check = Task::perform(
+                    async move { s.rest::<serde_json::Value>("ping", &[], "").await.is_ok() },
+                    |ok| {
+                        if ok {
+                            Message::Noop
+                        } else {
+                            Message::NativeFailed
+                        }
+                    },
+                );
                 Task::batch([t, n, check])
             }
             Message::NativeFailed => {
@@ -1456,7 +1710,8 @@ impl App {
             }
             Message::DropServer(id) => {
                 self.cfg.servers.retain(|s| s.id != id);
-                let gone = config::forget(&id).map_or_else(|e| self.toast(&e.to_string()), |()| Task::none());
+                let gone = config::forget(&id)
+                    .map_or_else(|e| self.toast(&e.to_string()), |()| Task::none());
                 Task::batch([self.persist(), gone])
             }
             Message::Set(Edit(f)) => {
@@ -1465,7 +1720,8 @@ impl App {
                 f(&mut self.cfg.settings);
                 let n = &self.cfg.settings;
                 if let Some(p) = &self.player {
-                    (o.crossfade_secs != n.crossfade_secs).then(|| p.set_crossfade(n.crossfade_secs));
+                    (o.crossfade_secs != n.crossfade_secs)
+                        .then(|| p.set_crossfade(n.crossfade_secs));
                     (o.speed != n.speed).then(|| p.set_speed(n.speed));
                     (o.device != n.device).then(|| p.set_device(&n.device));
                 }
@@ -1488,41 +1744,59 @@ impl App {
                 let (w, h) = self.view_size();
                 Task::batch([
                     if grid { self.disc_load() } else { Task::none() },
-                    if zoom { self.update(Message::Resize(w, h)) } else { Task::none() },
-                    if heard { self.listen(self.playing) } else { Task::none() },
+                    if zoom {
+                        self.update(Message::Resize(w, h))
+                    } else {
+                        Task::none()
+                    },
+                    if heard {
+                        self.listen(self.playing)
+                    } else {
+                        Task::none()
+                    },
                     self.persist(),
                 ])
             }
             Message::ClearCache => {
-                self.covers = Covers { want: std::mem::take(&mut self.covers.want), ..Default::default() };
-                Task::perform(tokio::fs::remove_dir_all(crate::api::cache_dir("")), |r| match r {
-                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                        Message::Toast(0, format!("Could not clear the cache. {e}"))
-                    }
-                    _ => Message::Noop,
-                })
+                self.covers = Covers {
+                    want: std::mem::take(&mut self.covers.want),
+                    ..Default::default()
+                };
+                Task::perform(
+                    tokio::fs::remove_dir_all(crate::api::cache_dir("")),
+                    |r| match r {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                            Message::Toast(0, format!("Could not clear the cache. {e}"))
+                        }
+                        _ => Message::Noop,
+                    },
+                )
                 .chain(self.disk(None))
             }
             Message::Focus(true) => self.update(Message::Shown(true)),
-            Message::Focus(false) => Task::perform(tokio::time::sleep(Duration::from_millis(300)), |_| ())
-                .then(|_| iced::window::latest())
-                .and_then(iced::window::is_minimized)
-                .map(|m| Message::Shown(m != Some(true))),
+            Message::Focus(false) => {
+                Task::perform(tokio::time::sleep(Duration::from_millis(300)), |_| ())
+                    .then(|_| iced::window::latest())
+                    .and_then(iced::window::is_minimized)
+                    .map(|m| Message::Shown(m != Some(true)))
+            }
             Message::Shown(v) => {
                 self.hidden = !v;
                 Task::none()
             }
-            Message::Close => Task::batch([self.persist(), self.update(Message::SaveQ(self.save_seq))])
-                .collect()
-                .map(|_| Message::Quit),
+            Message::Close => {
+                Task::batch([self.persist(), self.update(Message::SaveQ(self.save_seq))])
+                    .collect()
+                    .map(|_| Message::Quit)
+            }
             Message::CloseWindow => self.update(if self.tray.is_some() && self.cfg.settings.tray {
                 Message::Window(false)
             } else {
                 Message::Close
             }),
-            Message::Window(false) if self.tray.is_none() => {
-                self.win.map_or(Task::none(), |id| iced::window::minimize(id, true))
-            }
+            Message::Window(false) if self.tray.is_none() => self
+                .win
+                .map_or(Task::none(), |id| iced::window::minimize(id, true)),
             Message::Window(show) => {
                 let Some(id) = self.win else {
                     return iced::window::open(self.window()).1.map(Message::Win);
@@ -1573,9 +1847,15 @@ impl App {
                     return Task::none();
                 }
                 let ids: Vec<String> = self.queue.iter().map(|x| x.id.clone()).collect();
-                let cur = self.current_song().map(|x| x.id.clone()).unwrap_or_default();
+                let cur = self
+                    .current_song()
+                    .map(|x| x.id.clone())
+                    .unwrap_or_default();
                 let pos = (self.pos() * 1000.0) as u64;
-                self.send(|s| async move { s.save_play_queue(&ids, &cur, pos).await }, "Could not save the play queue.")
+                self.send(
+                    |s| async move { s.save_play_queue(&ids, &cur, pos).await },
+                    "Could not save the play queue.",
+                )
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
@@ -1585,7 +1865,9 @@ impl App {
                 if let Some((v, src)) = self.songs_of(&route).filter(|(v, _)| !v.is_empty()) {
                     return self.update(Message::PlayCtxDone(v, src, mode));
                 }
-                let Some(s) = self.session.clone() else { return Task::none() };
+                let Some(s) = self.session.clone() else {
+                    return Task::none();
+                };
                 let (kind, id) = route.split_once(':').unwrap_or((route.as_str(), ""));
                 let (kind, id) = (kind.to_string(), id.to_string());
                 Task::perform(
@@ -1600,12 +1882,18 @@ impl App {
                                 (v, p.name)
                             }
                             "artist" => {
-                                let ((a, _), t) = tokio::try_join!(s.artist(&id), s.top_songs(&id))?;
+                                let ((a, _), t) =
+                                    tokio::try_join!(s.artist(&id), s.top_songs(&id))?;
                                 (t, a.name)
                             }
-                            "liked" => (s.songs("starred", 0, PAGE * 5).await?.0, "Liked Songs".into()),
+                            "liked" => (
+                                s.songs("starred", 0, PAGE * 5).await?.0,
+                                "Liked Songs".into(),
+                            ),
                             "songs" => (
-                                s.songs(if id.is_empty() { "name" } else { &id }, 0, PAGE * 5).await?.0,
+                                s.songs(if id.is_empty() { "name" } else { &id }, 0, PAGE * 5)
+                                    .await?
+                                    .0,
                                 "Songs".into(),
                             ),
                             _ => (Vec::new(), String::new()),
@@ -1634,7 +1922,12 @@ impl App {
                     (self.sel, self.picked, self.anchor) = (Some((key.clone(), n)), [n].into(), n);
                 }
                 let list = self.songs_of(&key).expect("a rendered row has its list").0;
-                let idx: Vec<usize> = self.picked.iter().copied().filter(|&i| !list[i].is_dir).collect();
+                let idx: Vec<usize> = self
+                    .picked
+                    .iter()
+                    .copied()
+                    .filter(|&i| !list[i].is_dir)
+                    .collect();
                 let songs = idx.iter().map(|&i| list[i].clone()).collect();
                 self.update(Message::Menu(Box::new(if key.starts_with("playlist:") {
                     MenuKind::SongIn(songs, idx)
@@ -1643,7 +1936,9 @@ impl App {
                 })))
             }
             Message::SelectAll => {
-                let Some((list, _)) = self.songs_of(&self.route) else { return Task::none() };
+                let Some((list, _)) = self.songs_of(&self.route) else {
+                    return Task::none();
+                };
                 self.sel = Some((self.route.clone(), 0));
                 (self.picked, self.anchor) = ((0..list.len()).collect(), 0);
                 Task::none()
@@ -1655,12 +1950,19 @@ impl App {
                 _ => Task::none(),
             },
             Message::Hover(k, on) => {
-                self.hover = if on { Some(k) } else { self.hover.take().filter(|h| *h != k) };
+                self.hover = if on {
+                    Some(k)
+                } else {
+                    self.hover.take().filter(|h| *h != k)
+                };
                 Task::none()
             }
             Message::PlayAt(key, n) => match self.songs_of(&key) {
                 Some((list, src)) => {
-                    let n = n - list[..n.min(list.len())].iter().filter(|s| s.is_dir).count();
+                    let n = n - list[..n.min(list.len())]
+                        .iter()
+                        .filter(|s| s.is_dir)
+                        .count();
                     let list = list.into_iter().filter(|s| !s.is_dir).collect();
                     let t = self.update(Message::Play(list, n, src));
                     self.ctx = key;
@@ -1674,25 +1976,35 @@ impl App {
                 self.request(&key, 0)
             }
             Message::FocusSearch => op::focus("search"),
-            Message::FocusMove(back) => {
-                layer_focus(self.modal.is_some() || self.menu.is_some(), move |cur, n| match cur {
+            Message::FocusMove(back) => layer_focus(
+                self.modal.is_some() || self.menu.is_some(),
+                move |cur, n| match cur {
                     Some(i) => (i + if back { n - 1 } else { 1 }) % n,
                     None if back => n - 1,
                     None => 0,
-                })
-            }
+                },
+            ),
             Message::Arrow(up) if self.menu.is_some() => self.update(Message::FocusMove(up)),
             Message::Arrow(up) => {
-                let Some((key, n)) = self.sel.clone() else { return Task::none() };
+                let Some((key, n)) = self.sel.clone() else {
+                    return Task::none();
+                };
                 let list = self.songs_of(&key).expect("a selected row has its list").0;
-                let n = if up { n.saturating_sub(1) } else { (n + 1).min(list.len().saturating_sub(1)) };
+                let n = if up {
+                    n.saturating_sub(1)
+                } else {
+                    (n + 1).min(list.len().saturating_sub(1))
+                };
                 self.pick(key.clone(), n);
                 let (kind, _) = key.split_once(':').unwrap_or((&key, ""));
                 if key != self.route || !matches!(kind, "album" | "playlist" | "liked" | "songs") {
                     return Task::none();
                 }
                 let discs = if kind == "album" && list.iter().any(|s| s.disc != list[0].disc) {
-                    1 + list[..=n].windows(2).filter(|w| w[0].disc != w[1].disc).count()
+                    1 + list[..=n]
+                        .windows(2)
+                        .filter(|w| w[0].disc != w[1].disc)
+                        .count()
                 } else {
                     0
                 };
@@ -1710,10 +2022,18 @@ impl App {
                     return Task::none();
                 };
                 self.scrolls.insert(key, (to.max(0.0), view));
-                op::scroll_to(crate::view::SCROLL, AbsoluteOffset { x: 0.0, y: to.max(0.0) })
+                op::scroll_to(
+                    crate::view::SCROLL,
+                    AbsoluteOffset {
+                        x: 0.0,
+                        y: to.max(0.0),
+                    },
+                )
             }
             Message::Enter => match self.sel.clone() {
-                Some((k, n)) if self.menu.is_none() && self.modal.is_none() => self.update(Message::PlayAt(k, n)),
+                Some((k, n)) if self.menu.is_none() && self.modal.is_none() => {
+                    self.update(Message::PlayAt(k, n))
+                }
                 _ => Task::none(),
             },
             Message::VolUp => self.update(Message::Vol((self.volume + 0.1).min(1.0))),
@@ -1752,7 +2072,10 @@ impl App {
                 self.seek_preview = Some(v);
                 Task::none()
             }
-            Message::SeekRelease => self.seek_preview.take().map_or(Task::none(), |v| self.update(Message::Seek(v))),
+            Message::SeekRelease => self
+                .seek_preview
+                .take()
+                .map_or(Task::none(), |v| self.update(Message::Seek(v))),
             Message::Tick => {
                 self.position = self.pos();
                 Task::none()
@@ -1771,7 +2094,8 @@ impl App {
                 self.modal = Some((id, kind));
                 Task::batch([
                     art,
-                    layer_focus(true, |_, n| n.min(2) - 1).chain(op::select_all(iced::widget::Id::new("layer"))),
+                    layer_focus(true, |_, n| n.min(2) - 1)
+                        .chain(op::select_all(iced::widget::Id::new("layer"))),
                 ])
             }
             Message::Edit(id, name, comment) => {
@@ -1779,10 +2103,15 @@ impl App {
                 let (name, comment) = (name.trim().to_string(), comment.trim().to_string());
                 assert!(!name.is_empty(), "the dialog blocks an empty name");
                 let set = |p: &mut Playlist| (p.name, p.comment) = (name.clone(), comment.clone());
-                self.edit::<Lib>("lib", |l| l.playlists.iter_mut().filter(|p| p.id == id).for_each(set));
+                self.edit::<Lib>("lib", |l| {
+                    l.playlists.iter_mut().filter(|p| p.id == id).for_each(set)
+                });
                 self.edit::<(Playlist, Vec<Song>)>(&format!("playlist:{id}"), |(p, _)| set(p));
                 self.send(
-                    |s| async move { s.playlist_update(&id, Some(&name), Some(&comment), &[], &[]).await },
+                    |s| async move {
+                        s.playlist_update(&id, Some(&name), Some(&comment), &[], &[])
+                            .await
+                    },
                     "Could not change the playlist.",
                 )
             }
@@ -1793,7 +2122,10 @@ impl App {
                     dbus_name: "navify",
                     hwnd: (hwnd != 0).then_some(hwnd as *mut std::ffi::c_void),
                 })
-                .and_then(|mut m| m.attach(move |e| drop(tx.send(Message::Media(e)))).map(|()| m));
+                .and_then(|mut m| {
+                    m.attach(move |e| drop(tx.send(Message::Media(e))))
+                        .map(|()| m)
+                });
                 match m {
                     Ok(m) => self.media = Some(m),
                     Err(e) => {
@@ -1835,8 +2167,13 @@ impl App {
             Message::Audio(e) => match e {
                 navify_audio::Event::Started(id) => {
                     let done = self.listen(false);
-                    let n = if self.repeat == 2 { Some(self.index) } else { self.next_index() };
-                    match n.filter(|&n| self.queue.get(self.real_at(n)).is_some_and(|s| s.id == id)) {
+                    let n = if self.repeat == 2 {
+                        Some(self.index)
+                    } else {
+                        self.next_index()
+                    };
+                    match n.filter(|&n| self.queue.get(self.real_at(n)).is_some_and(|s| s.id == id))
+                    {
                         Some(n) => {
                             self.index = n;
                             Task::batch([done, self.began(), self.listen(true)])
@@ -1864,13 +2201,19 @@ impl App {
 
     fn queue_next_refresh(&self) {
         if let Some(p) = &self.player {
-            let n = if self.repeat == 2 { Some(self.index) } else { self.next_index() };
+            let n = if self.repeat == 2 {
+                Some(self.index)
+            } else {
+                self.next_index()
+            };
             p.queue_next(n.map(|n| self.track(&self.queue[self.real_at(n)])));
         }
     }
 
     fn merge(&self, key: &str, v: AnyData) -> AnyData {
-        let Some((_, old)) = self.cache.get(key) else { return v };
+        let Some((_, old)) = self.cache.get(key) else {
+            return v;
+        };
         pager!(v, b => old.downcast_ref::<Pager<_>>().filter(|_| b.offset > 0).map(|a| {
             Arc::new(Pager { items: [&a.items[..], &b.items[..]].concat(), total: b.total, offset: 0 }) as AnyData
         }))
@@ -1908,27 +2251,51 @@ impl App {
         } else if let Some(s) = self.data::<Vec<Song>>(key) {
             out.extend(rows(s).map(|c| (c, 128)));
         } else if key.starts_with("discography:") {
-            out.extend(crate::pages::disc_view(self).iter().map(|a| (a.cover.as_str(), 300)));
+            out.extend(
+                crate::pages::disc_view(self)
+                    .iter()
+                    .map(|a| (a.cover.as_str(), 300)),
+            );
         } else if let Some((a, albums)) = self.data::<(Artist, Vec<Album>)>(key) {
             let id = &key["artist:".len()..];
-            let top = self.data::<Vec<Song>>(&format!("top:{id}")).map_or(&[][..], |v| &v[..]);
-            let similar = self.data::<Info>(&format!("info:{id}")).map_or(&[][..], |i| &i.similar[..]);
-            let appears = self.data::<Vec<Album>>(&format!("appears:{id}")).map_or(&[][..], |v| &v[..]);
+            let top = self
+                .data::<Vec<Song>>(&format!("top:{id}"))
+                .map_or(&[][..], |v| &v[..]);
+            let similar = self
+                .data::<Info>(&format!("info:{id}"))
+                .map_or(&[][..], |i| &i.similar[..]);
+            let appears = self
+                .data::<Vec<Album>>(&format!("appears:{id}"))
+                .map_or(&[][..], |v| &v[..]);
             out.push((&a.cover, 300));
             out.extend(top.iter().take(10).map(|s| (s.cover.as_str(), 128)));
-            out.extend(crate::pages::disc_shelf(self, albums).iter().map(|x| (x.cover.as_str(), 300)));
+            out.extend(
+                crate::pages::disc_shelf(self, albums)
+                    .iter()
+                    .map(|x| (x.cover.as_str(), 300)),
+            );
             out.extend(similar.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
             out.extend(appears.iter().take(cols).map(|x| (x.cover.as_str(), 300)));
         } else if let Some(p) = self.data::<Pager<Album>>(key) {
-            out.extend(p.items[grid(p.items.len())].iter().map(|a| (a.cover.as_str(), 300)));
+            out.extend(
+                p.items[grid(p.items.len())]
+                    .iter()
+                    .map(|a| (a.cover.as_str(), 300)),
+            );
         } else if let Some(p) = self.data::<Pager<Artist>>(key) {
-            out.extend(p.items[grid(p.items.len())].iter().map(|a| (a.cover.as_str(), 300)));
+            out.extend(
+                p.items[grid(p.items.len())]
+                    .iter()
+                    .map(|a| (a.cover.as_str(), 300)),
+            );
         } else if let Some(r) = self.data::<SearchRes>(key) {
             out.extend(r.artists.iter().take(cols).map(|a| (a.cover.as_str(), 300)));
             out.extend(r.albums.iter().take(cols).map(|a| (a.cover.as_str(), 300)));
             out.extend(r.songs.iter().take(4).map(|s| (s.cover.as_str(), 128)));
         } else if let Some(h) = self.data::<Home>(key) {
-            let pls = self.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
+            let pls = self
+                .data::<Lib>("lib")
+                .map_or(&[][..], |l| &l.playlists[..]);
             out.extend(pls.iter().take(3).map(|p| (p.cover.as_str(), 128)));
             out.extend(h.recent.iter().take(7).map(|a| (a.cover.as_str(), 128)));
             for l in [&h.recent, &h.added, &h.frequent, &h.random] {
@@ -1939,7 +2306,11 @@ impl App {
         if let Some(s) = self.current_song() {
             out.extend([(s.cover.as_str(), 128), (s.cover.as_str(), 300)]);
         }
-        let ahead = if self.panel == 2 { 100 } else { self.panel as usize };
+        let ahead = if self.panel == 2 {
+            100
+        } else {
+            self.panel as usize
+        };
         out.extend(
             (self.index + 1..self.queue.len())
                 .take(ahead)
@@ -1955,7 +2326,10 @@ impl App {
     }
 }
 
-fn layer_focus(layer: bool, pick: impl Fn(Option<usize>, usize) -> usize + Send + 'static) -> Task<Message> {
+fn layer_focus(
+    layer: bool,
+    pick: impl Fn(Option<usize>, usize) -> usize + Send + 'static,
+) -> Task<Message> {
     use iced::advanced::widget::operation::{Focusable, Outcome};
     use iced::advanced::widget::{Id, Operation};
     struct Scan<F>(bool, F, usize, Option<usize>);
@@ -1995,9 +2369,18 @@ fn layer_focus(layer: bool, pick: impl Fn(Option<usize>, usize) -> usize + Send 
 fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
     v.downcast_ref::<(Album, Vec<Song>)>()
         .map(|(a, s)| (&s[..], a.name.as_str()))
-        .or_else(|| v.downcast_ref::<(Playlist, Vec<Song>)>().map(|(p, s)| (&s[..], p.name.as_str())))
-        .or_else(|| v.downcast_ref::<Pager<Song>>().map(|p| (&p.items[..], "Songs")))
-        .or_else(|| v.downcast_ref::<SearchRes>().map(|r| (&r.songs[..], "Search")))
+        .or_else(|| {
+            v.downcast_ref::<(Playlist, Vec<Song>)>()
+                .map(|(p, s)| (&s[..], p.name.as_str()))
+        })
+        .or_else(|| {
+            v.downcast_ref::<Pager<Song>>()
+                .map(|p| (&p.items[..], "Songs"))
+        })
+        .or_else(|| {
+            v.downcast_ref::<SearchRes>()
+                .map(|r| (&r.songs[..], "Search"))
+        })
         .or_else(|| v.downcast_ref::<Vec<Song>>().map(|s| (&s[..], "Folder")))
 }
 
@@ -2015,7 +2398,10 @@ fn shuffle(r: std::ops::Range<usize>, first: usize) -> Vec<usize> {
 pub static CURSOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static MODS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-type Chan = (UnboundedSender<Message>, std::sync::Mutex<Option<UnboundedReceiver<Message>>>);
+type Chan = (
+    UnboundedSender<Message>,
+    std::sync::Mutex<Option<UnboundedReceiver<Message>>>,
+);
 static CH: std::sync::LazyLock<Chan> = std::sync::LazyLock::new(|| {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     (tx, std::sync::Mutex::new(Some(rx)))
@@ -2027,14 +2413,17 @@ impl App {
     }
 
     pub fn title(&self) -> String {
-        self.current_song().map_or("Navify".into(), |s| format!("{} \u{2022} {}", s.title, s.artist))
+        self.current_song().map_or("Navify".into(), |s| {
+            format!("{} \u{2022} {}", s.title, s.artist)
+        })
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
         use iced::event;
         let mut subs = vec![event::listen_with(|e, status, _id| match e {
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                let bits = (u64::from(position.x.to_bits()) << 32) | u64::from(position.y.to_bits());
+                let bits =
+                    (u64::from(position.x.to_bits()) << 32) | u64::from(position.y.to_bits());
                 CURSOR.store(bits, std::sync::atomic::Ordering::Relaxed);
                 None
             }
@@ -2045,7 +2434,9 @@ impl App {
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::Focus(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::Focus(false)),
             iced::Event::Window(iced::window::Event::CloseRequested) => Some(Message::CloseWindow),
-            iced::Event::Window(iced::window::Event::Resized(s)) => Some(Message::Resize(s.width, s.height)),
+            iced::Event::Window(iced::window::Event::Resized(s)) => {
+                Some(Message::Resize(s.width, s.height))
+            }
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                 ..
@@ -2078,20 +2469,31 @@ impl App {
                         Key::Named(Named::Space) => Some(Message::Toggle),
                         Key::Named(Named::ArrowLeft) if modifiers.alt() => Some(Message::Back),
                         Key::Named(Named::ArrowRight) if modifiers.alt() => Some(Message::Fwd),
-                        Key::Named(d @ (Named::ArrowLeft | Named::ArrowRight)) if modifiers.shift() => {
+                        Key::Named(d @ (Named::ArrowLeft | Named::ArrowRight))
+                            if modifiers.shift() =>
+                        {
                             use souvlaki::{MediaControlEvent::SeekBy, SeekDirection as S};
-                            let dir = if d == Named::ArrowLeft { S::Backward } else { S::Forward };
-                            Some(Message::Media(SeekBy(dir, std::time::Duration::from_secs(5))))
+                            let dir = if d == Named::ArrowLeft {
+                                S::Backward
+                            } else {
+                                S::Forward
+                            };
+                            Some(Message::Media(SeekBy(
+                                dir,
+                                std::time::Duration::from_secs(5),
+                            )))
                         }
-                        Key::Character(c) if modifiers.alt() && modifiers.shift() => match c.to_lowercase().as_str() {
-                            "h" => Some(Message::Nav("home".into())),
-                            "s" => Some(Message::Nav("liked".into())),
-                            "j" => Some(Message::Panel(1)),
-                            "q" => Some(Message::Panel(2)),
-                            "l" => Some(Message::LibCollapse),
-                            "b" => Some(Message::Like),
-                            _ => None,
-                        },
+                        Key::Character(c) if modifiers.alt() && modifiers.shift() => {
+                            match c.to_lowercase().as_str() {
+                                "h" => Some(Message::Nav("home".into())),
+                                "s" => Some(Message::Nav("liked".into())),
+                                "j" => Some(Message::Panel(1)),
+                                "q" => Some(Message::Panel(2)),
+                                "l" => Some(Message::LibCollapse),
+                                "b" => Some(Message::Like),
+                                _ => None,
+                            }
+                        }
                         Key::Character(c) if modifiers.shift() => match c.as_str() {
                             "<" | "," => Some(Message::Faster(false)),
                             ">" | "." => Some(Message::Faster(true)),
@@ -2108,21 +2510,34 @@ impl App {
             iced::Event::Mouse(iced::mouse::Event::ButtonPressed(b))
                 if matches!(b, iced::mouse::Button::Back | iced::mouse::Button::Forward) =>
             {
-                Some(if b == iced::mouse::Button::Back { Message::Back } else { Message::Fwd })
+                Some(if b == iced::mouse::Button::Back {
+                    Message::Back
+                } else {
+                    Message::Fwd
+                })
             }
             _ => None,
         })];
         if self.playing && !self.hidden {
-            subs.push(iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tick));
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tick),
+            );
         }
         {
             fn audio_stream() -> impl iced::futures::Stream<Item = Message> {
-                iced::stream::channel(8, |mut tx: iced::futures::channel::mpsc::Sender<_>| async move {
-                    let mut rx = CH.1.lock().expect("event channel").take().expect("one listener");
-                    while let Some(m) = rx.recv().await {
-                        let _ = iced::futures::SinkExt::send(&mut tx, m).await;
-                    }
-                })
+                iced::stream::channel(
+                    8,
+                    |mut tx: iced::futures::channel::mpsc::Sender<_>| async move {
+                        let mut rx =
+                            CH.1.lock()
+                                .expect("event channel")
+                                .take()
+                                .expect("one listener");
+                        while let Some(m) = rx.recv().await {
+                            let _ = iced::futures::SinkExt::send(&mut tx, m).await;
+                        }
+                    },
+                )
             }
             subs.push(iced::Subscription::run(audio_stream));
         }

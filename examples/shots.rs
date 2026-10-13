@@ -43,13 +43,19 @@ fn main() {
     use iced_test::emulator::{Emulator, Event, Mode};
     use navify::app::Message;
     use std::time::{Duration, Instant};
-    let secs: u64 = std::env::var("NAVIFY_SHOT_WAIT").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+    let secs: u64 = std::env::var("NAVIFY_SHOT_WAIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
     let steps = std::env::var("NAVIFY_STEPS").unwrap_or_default();
     let mut steps = steps.split(';').map(str::trim).filter(|s| !s.is_empty());
     let (tx, mut rx) = iced_test::futures::futures::channel::mpsc::channel(100);
     let (w, h) = std::env::var("NAVIFY_SHOT_SIZE")
         .ok()
-        .and_then(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
+        .and_then(|s| {
+            s.split_once('x')
+                .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+        })
         .unwrap_or((1280.0, 800.0));
     let mut cfg = navify::config::Config::load();
     cfg.settings.window = (w, h);
@@ -78,7 +84,9 @@ fn main() {
                     if let Some((x, y)) = s
                         .split_once('(')
                         .and_then(|(_, r)| r.trim_end_matches(')').split_once(','))
-                        .and_then(|(x, y)| Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?)))
+                        .and_then(|(x, y)| {
+                            Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                        })
                     {
                         let bits = (u64::from(x.to_bits()) << 32) | u64::from(y.to_bits());
                         navify::app::CURSOR.store(bits, std::sync::atomic::Ordering::Relaxed);
@@ -91,9 +99,17 @@ fn main() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let shot = emu.screenshot(&app, &Theme::Dark, s);
-    let name = std::env::var("NAVIFY_SHOT").unwrap_or_else(|_| "shot".into()).replace([':', '/', '|'], "_");
+    let name = std::env::var("NAVIFY_SHOT")
+        .unwrap_or_else(|_| "shot".into())
+        .replace([':', '/', '|'], "_");
     let path = format!("/tmp/navify-shots/{name}.png");
-    image::save_buffer(&path, shot.as_ref(), shot.size.width, shot.size.height, image::ExtendedColorType::Rgba8)
-        .expect("save shot");
+    image::save_buffer(
+        &path,
+        shot.as_ref(),
+        shot.size.width,
+        shot.size.height,
+        image::ExtendedColorType::Rgba8,
+    )
+    .expect("save shot");
     eprintln!("wrote {path}");
 }

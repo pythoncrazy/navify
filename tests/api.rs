@@ -13,7 +13,9 @@ fn rt() -> &'static tokio::runtime::Runtime {
 async fn login(cell: &'static tokio::sync::OnceCell<Session>, vars: [&str; 3]) -> Session {
     cell.get_or_init(|| async {
         let [h, u, p] = vars.map(env);
-        Session::login(&h, &u, &p).await.unwrap_or_else(|e| panic!("login to {h} failed: {e}"))
+        Session::login(&h, &u, &p)
+            .await
+            .unwrap_or_else(|e| panic!("login to {h} failed: {e}"))
     })
     .await
     .clone()
@@ -21,12 +23,24 @@ async fn login(cell: &'static tokio::sync::OnceCell<Session>, vars: [&str; 3]) -
 
 async fn live() -> Session {
     static S: tokio::sync::OnceCell<Session> = tokio::sync::OnceCell::const_new();
-    login(&S, ["NAVIDROME_HOST", "NAVIDROME_USERNAME", "NAVIDROME_PASSWORD"]).await
+    login(
+        &S,
+        ["NAVIDROME_HOST", "NAVIDROME_USERNAME", "NAVIDROME_PASSWORD"],
+    )
+    .await
 }
 
 async fn local() -> Session {
     static S: tokio::sync::OnceCell<Session> = tokio::sync::OnceCell::const_new();
-    login(&S, ["NAVIFY_TEST_LOCAL_URL", "NAVIFY_TEST_LOCAL_USERNAME", "NAVIFY_TEST_LOCAL_PASSWORD"]).await
+    login(
+        &S,
+        [
+            "NAVIFY_TEST_LOCAL_URL",
+            "NAVIFY_TEST_LOCAL_USERNAME",
+            "NAVIFY_TEST_LOCAL_PASSWORD",
+        ],
+    )
+    .await
 }
 
 #[test]
@@ -106,7 +120,12 @@ fn search_returns_results() {
     rt().block_on(async {
         let s = live().await;
         let (albums, _) = s.albums("name", &[], 0, 1).await.expect("albums");
-        let word: String = albums[0].name.chars().filter(|c| c.is_alphabetic()).take(4).collect();
+        let word: String = albums[0]
+            .name
+            .chars()
+            .filter(|c| c.is_alphabetic())
+            .take(4)
+            .collect();
         let (artists, albums, songs) = s.search(&word, 5).await.expect("search");
         assert!(!(artists.is_empty() && albums.is_empty() && songs.is_empty()));
     });
@@ -151,7 +170,11 @@ fn subsonic_fallback_lists_albums() {
         s.server.native = false;
         let (albums, _) = s.albums("name", &[], 0, 10).await.expect("subsonic albums");
         assert_eq!(albums.len(), 10);
-        assert!(albums.iter().all(|a| !a.name.is_empty() && !a.cover.is_empty()));
+        assert!(
+            albums
+                .iter()
+                .all(|a| !a.name.is_empty() && !a.cover.is_empty())
+        );
         let songs = s.songs("starred", 0, 10).await.expect("starred songs");
         assert!(songs.0.iter().all(|s| s.starred));
     });
@@ -240,7 +263,9 @@ fn local_star_rate_scrobble() {
         s.star(std::slice::from_ref(&id), true).await.expect("star");
         let (.., starred) = s.starred().await.expect("starred");
         assert!(starred.iter().any(|x| x.id == id));
-        s.star(std::slice::from_ref(&id), false).await.expect("unstar");
+        s.star(std::slice::from_ref(&id), false)
+            .await
+            .expect("unstar");
         let (.., starred) = s.starred().await.expect("starred 2");
         assert!(!starred.iter().any(|x| x.id == id));
         s.rate(&id, 4).await.expect("rate");
@@ -256,17 +281,28 @@ fn local_playlist_roundtrip() {
         let s = local().await;
         let (songs, _) = s.songs("name", 0, 5).await.expect("songs");
         let ids: Vec<String> = songs.iter().take(3).map(|x| x.id.clone()).collect();
-        let pl = s.playlist_create("navify test", &ids[..2]).await.expect("create");
+        let pl = s
+            .playlist_create("navify test", &ids[..2])
+            .await
+            .expect("create");
         assert_eq!(pl.song_count, 2);
         let (_pl2, tracks) = s.playlist(&pl.id).await.expect("playlist");
         assert_eq!(tracks.len(), 2);
-        s.playlist_update(&pl.id, Some("navify test 2"), None, &ids[2..3], &[0]).await.expect("update");
+        s.playlist_update(&pl.id, Some("navify test 2"), None, &ids[2..3], &[0])
+            .await
+            .expect("update");
         let (pl3, tracks) = s.playlist(&pl.id).await.expect("playlist 2");
         assert_eq!(pl3.name, "navify test 2");
         assert_eq!(tracks.len(), 2);
         assert!(tracks.iter().any(|t| t.id == ids[2]));
         s.playlist_delete(&pl.id).await.expect("delete");
-        assert!(!s.playlists().await.expect("playlists").iter().any(|p| p.id == pl.id));
+        assert!(
+            !s.playlists()
+                .await
+                .expect("playlists")
+                .iter()
+                .any(|p| p.id == pl.id)
+        );
     });
 }
 
@@ -277,7 +313,9 @@ fn local_play_queue_roundtrip() {
         let s = local().await;
         let (songs, _) = s.songs("name", 0, 4).await.expect("songs");
         let ids: Vec<String> = songs.iter().map(|x| x.id.clone()).collect();
-        s.save_play_queue(&ids, &ids[1], 1234).await.expect("save queue");
+        s.save_play_queue(&ids, &ids[1], 1234)
+            .await
+            .expect("save queue");
         let (queue, current, position) = s.play_queue().await.expect("queue");
         assert_eq!(queue.len(), ids.len());
         assert_eq!(current, ids[1]);
@@ -292,11 +330,19 @@ fn local_subsonic_read_suite() {
         let mut s = local().await;
         for native in [true, false] {
             s.server.native = native;
-            for k in ["recent", "newest", "frequent", "random", "name", "artist", "year", "rating"] {
-                s.albums(k, &[], 0, 5).await.unwrap_or_else(|e| panic!("albums {k} {native}: {e}"));
+            for k in [
+                "recent", "newest", "frequent", "random", "name", "artist", "year", "rating",
+            ] {
+                s.albums(k, &[], 0, 5)
+                    .await
+                    .unwrap_or_else(|e| panic!("albums {k} {native}: {e}"));
             }
-            for k in ["name", "artist", "album", "newest", "recent", "frequent", "year", "rating"] {
-                s.songs(k, 0, 5).await.unwrap_or_else(|e| panic!("songs {k} {native}: {e}"));
+            for k in [
+                "name", "artist", "album", "newest", "recent", "frequent", "year", "rating",
+            ] {
+                s.songs(k, 0, 5)
+                    .await
+                    .unwrap_or_else(|e| panic!("songs {k} {native}: {e}"));
             }
         }
         let (albums, _) = s.albums("name", &[], 0, 10).await.expect("albums");

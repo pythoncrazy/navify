@@ -9,7 +9,11 @@ struct Rt(tokio::runtime::Runtime);
 
 impl iced::Executor for Rt {
     fn new() -> std::io::Result<Self> {
-        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map(Rt)
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map(Rt)
     }
 
     fn spawn(&self, f: impl Future<Output = ()> + Send + 'static) {
@@ -37,9 +41,12 @@ impl
     > for Probe
 {
     fn event(
-        _: &mut Self, _: &wayland_client::protocol::wl_registry::WlRegistry,
-        _: wayland_client::protocol::wl_registry::Event, _: &wayland_client::globals::GlobalListContents,
-        _: &wayland_client::Connection, _: &wayland_client::QueueHandle<Self>,
+        _: &mut Self,
+        _: &wayland_client::protocol::wl_registry::WlRegistry,
+        _: wayland_client::protocol::wl_registry::Event,
+        _: &wayland_client::globals::GlobalListContents,
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
     ) {
     }
 }
@@ -50,8 +57,14 @@ fn install() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     let icons = data.join("icons/hicolor");
     let files = [
-        (icons.join("256x256/apps/navify.png"), navify::app::ICON.to_vec()),
-        (icons.join("scalable/apps/navify.svg"), include_bytes!("../assets/navify.svg").to_vec()),
+        (
+            icons.join("256x256/apps/navify.png"),
+            navify::app::ICON.to_vec(),
+        ),
+        (
+            icons.join("scalable/apps/navify.svg"),
+            include_bytes!("../assets/navify.svg").to_vec(),
+        ),
         (
             data.join("applications/navify.desktop"),
             include_str!("../assets/navify.desktop")
@@ -82,13 +95,18 @@ fn main() -> iced::Result {
     }
     let cfg = Config::load();
     #[cfg(target_os = "linux")]
-    if ["DISPLAY", "WAYLAND_DISPLAY"].iter().all(|v| std::env::var_os(v).is_some())
+    if ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .all(|v| std::env::var_os(v).is_some())
         && std::env::var_os("WAYLAND_SOCKET").is_none()
     {
         use wayland_client::{Connection, globals::registry_queue_init};
         let ssd = Connection::connect_to_env().ok().and_then(|c| {
             let (globals, _) = registry_queue_init::<Probe>(&c).ok()?;
-            Some(globals.contents().with_list(|l| l.iter().any(|g| g.interface == "zxdg_decoration_manager_v1")))
+            Some(globals.contents().with_list(|l| {
+                l.iter()
+                    .any(|g| g.interface == "zxdg_decoration_manager_v1")
+            }))
         });
         if ssd.is_none() || (ssd == Some(false) && cfg.settings.system_frame) {
             unsafe { std::env::remove_var("WAYLAND_DISPLAY") };

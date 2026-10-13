@@ -2,7 +2,12 @@ use navify::api::{Server, Session, Song};
 use navify::app::{App, Message};
 
 fn songs(ids: &[&str]) -> Vec<Song> {
-    ids.iter().map(|id| Song { id: id.to_string(), ..Song::default() }).collect()
+    ids.iter()
+        .map(|id| Song {
+            id: id.to_string(),
+            ..Song::default()
+        })
+        .collect()
 }
 
 fn cur(app: &App) -> String {

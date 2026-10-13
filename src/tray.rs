@@ -31,23 +31,43 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
     let props = |i: usize| -> PropMap {
         let mut p = PropMap::new();
         match i {
-            0 => p.insert("children-display".into(), Variant(Box::new("submenu".to_string()))),
-            _ => p.insert("label".into(), Variant(Box::new(items()[i - 1].0.to_string()))),
+            0 => p.insert(
+                "children-display".into(),
+                Variant(Box::new("submenu".to_string())),
+            ),
+            _ => p.insert(
+                "label".into(),
+                Variant(Box::new(items()[i - 1].0.to_string())),
+            ),
         };
         p
     };
     let c = Connection::new_session().map_err(|e| e.to_string())?;
     let (owned,): (bool,) = c
-        .with_proxy("org.freedesktop.DBus", "/org/freedesktop/DBus", Duration::from_secs(2))
-        .method_call("org.freedesktop.DBus", "NameHasOwner", ("org.kde.StatusNotifierWatcher",))
+        .with_proxy(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            Duration::from_secs(2),
+        )
+        .method_call(
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            ("org.kde.StatusNotifierWatcher",),
+        )
         .map_err(|e| e.to_string())?;
     if !owned {
         return Err("The desktop has no system tray.".into());
     }
     let name = format!("org.kde.StatusNotifierItem-{}-1", std::process::id());
-    c.request_name(&name, false, true, false).map_err(|e| e.to_string())?;
-    let image = image::load_from_memory(ICON).expect("the tray icon is a PNG").into_rgba8();
-    let argb: Vec<u8> = image.pixels().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
+    c.request_name(&name, false, true, false)
+        .map_err(|e| e.to_string())?;
+    let image = image::load_from_memory(ICON)
+        .expect("the tray icon is a PNG")
+        .into_rgba8();
+    let argb: Vec<u8> = image
+        .pixels()
+        .flat_map(|p| [p[3], p[0], p[1], p[2]])
+        .collect();
     let pixmap = vec![(image.width() as i32, image.height() as i32, argb)];
     let mut cr = Crossroads::new();
     let send = move |m: Message| drop(tx.send(m));
@@ -71,15 +91,21 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
             Ok(())
         });
         let s = s1.clone();
-        b.method("SecondaryActivate", ("x", "y"), (), move |_, _, _: (i32, i32)| {
-            s(Message::Toggle);
-            Ok(())
-        });
+        b.method(
+            "SecondaryActivate",
+            ("x", "y"),
+            (),
+            move |_, _, _: (i32, i32)| {
+                s(Message::Toggle);
+                Ok(())
+            },
+        );
     });
     let menu = cr.register("com.canonical.dbusmenu", move |b| {
         b.property("Version").get(|_, _| Ok(3u32));
         b.property("Status").get(|_, _| Ok("normal".to_string()));
-        b.property("TextDirection").get(|_, _| Ok("ltr".to_string()));
+        b.property("TextDirection")
+            .get(|_, _| Ok("ltr".to_string()));
         b.method(
             "GetLayout",
             ("parentId", "recursionDepth", "propertyNames"),
@@ -87,9 +113,11 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
             move |_, _, _: (i32, i32, Vec<String>)| {
                 let kids = (1..=items().len())
                     .map(|i| {
-                        Variant(
-                            Box::new((i as i32, props(i), Vec::<Variant<Box<dyn RefArg>>>::new())) as Box<dyn RefArg>
-                        )
+                        Variant(Box::new((
+                            i as i32,
+                            props(i),
+                            Vec::<Variant<Box<dyn RefArg>>>::new(),
+                        )) as Box<dyn RefArg>)
                     })
                     .collect();
                 Ok((1u32, (0, props(0), kids) as Node))
@@ -110,24 +138,44 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
         let s = s2.clone();
         let click = move |id: i32, ev: &str| {
             if ev == "clicked"
-                && let Some((_, m)) = usize::try_from(id - 1).ok().and_then(|i| items().into_iter().nth(i))
+                && let Some((_, m)) = usize::try_from(id - 1)
+                    .ok()
+                    .and_then(|i| items().into_iter().nth(i))
             {
                 s(m);
             }
         };
         let k = click.clone();
-        b.method("Event", ("id", "eventId", "data", "timestamp"), (), move |_, _, (id, ev, _, _): Ev| {
-            k(id, &ev);
-            Ok(())
-        });
-        b.method("EventGroup", ("events",), ("idErrors",), move |_, _, (evs,): (Vec<Ev>,)| {
-            evs.iter().for_each(|(id, ev, _, _)| click(*id, ev));
-            Ok((Vec::<i32>::new(),))
-        });
-        b.method("AboutToShow", ("id",), ("needUpdate",), |_, _, _: (i32,)| Ok((false,)));
-        b.method("AboutToShowGroup", ("ids",), ("updatesNeeded", "idErrors"), |_, _, _: (Vec<i32>,)| {
-            Ok((Vec::<i32>::new(), Vec::<i32>::new()))
-        });
+        b.method(
+            "Event",
+            ("id", "eventId", "data", "timestamp"),
+            (),
+            move |_, _, (id, ev, _, _): Ev| {
+                k(id, &ev);
+                Ok(())
+            },
+        );
+        b.method(
+            "EventGroup",
+            ("events",),
+            ("idErrors",),
+            move |_, _, (evs,): (Vec<Ev>,)| {
+                evs.iter().for_each(|(id, ev, _, _)| click(*id, ev));
+                Ok((Vec::<i32>::new(),))
+            },
+        );
+        b.method(
+            "AboutToShow",
+            ("id",),
+            ("needUpdate",),
+            |_, _, _: (i32,)| Ok((false,)),
+        );
+        b.method(
+            "AboutToShowGroup",
+            ("ids",),
+            ("updatesNeeded", "idErrors"),
+            |_, _, _: (Vec<i32>,)| Ok((Vec::<i32>::new(), Vec::<i32>::new())),
+        );
     });
     cr.insert("/StatusNotifierItem", &[sni], ());
     cr.insert("/Menu", &[menu], ());
@@ -139,11 +187,15 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
     )
     .expect("the D-Bus names are valid")
     .append1(&name);
-    c.send(reg).map_err(|()| "Cannot register the tray icon.".to_string())?;
+    c.send(reg)
+        .map_err(|()| "Cannot register the tray icon.".to_string())?;
     std::thread::Builder::new()
         .name("tray".into())
         .spawn(move || {
-            c.start_receive(MatchRule::new_method_call(), Box::new(move |m, c| cr.handle_message(m, c).is_ok()));
+            c.start_receive(
+                MatchRule::new_method_call(),
+                Box::new(move |m, c| cr.handle_message(m, c).is_ok()),
+            );
             while c.process(Duration::from_millis(i32::MAX as u64)).is_ok() {}
         })
         .map_err(|e| e.to_string())?;
@@ -159,7 +211,8 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
     let entries = items().map(|(l, _)| MenuItem::new(l, true, None));
     for (i, e) in entries.iter().enumerate() {
         if i == entries.len() - 1 {
-            menu.append(&PredefinedMenuItem::separator()).map_err(|e| e.to_string())?;
+            menu.append(&PredefinedMenuItem::separator())
+                .map_err(|e| e.to_string())?;
         }
         menu.append(e).map_err(|e| e.to_string())?;
     }
@@ -171,11 +224,18 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
         }
     }));
     TrayIconEvent::set_event_handler(Some(move |e| {
-        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+        if let TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } = e
+        {
             drop(tx.send(Message::Window(true)));
         }
     }));
-    let image = image::load_from_memory(ICON).expect("the tray icon is a PNG").into_rgba8();
+    let image = image::load_from_memory(ICON)
+        .expect("the tray icon is a PNG")
+        .into_rgba8();
     let (w, h) = image.dimensions();
     let icon = Icon::from_rgba(image.into_raw(), w, h).map_err(|e| e.to_string())?;
     TrayIconBuilder::new()
