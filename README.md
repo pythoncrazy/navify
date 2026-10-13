@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Navify shows an album page, the library panel, and the Now Playing panel">
+  <img src="docs/screenshot.png" alt="Navify shows the home page of a demo library, the library panel, and the Now Playing panel">
 </p>
 
 ## Features
