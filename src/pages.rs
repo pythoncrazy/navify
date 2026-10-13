@@ -14,7 +14,7 @@ use crate::view::{
 };
 
 type El<'a> = Element<'a, Message>;
-type Cols = (f32, f32, f32);
+type Cols = (f32, f32, f32, f32);
 
 pub const PAD: f32 = 24.0;
 pub const ROW: f32 = 56.0;
@@ -31,19 +31,20 @@ pub fn art_px(app: &App) -> f32 {
     (128.0 + (app.main_w() - 600.0) * 104.0 / 424.0).clamp(128.0, 232.0)
 }
 
-fn cols(app: &App, album: bool, date: bool) -> Cols {
-    let w = app.main_w() - 2.0 * PAD - 32.0 - 16.0 - 16.0 - 120.0 - 16.0;
+fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
+    let idx = 16.0 + 8.0 * n.max(1).ilog10().saturating_sub(1) as f32;
+    let w = app.main_w() - 2.0 * PAD - 32.0 - idx - 16.0 - 120.0 - 16.0;
     let (album, date) = (album && w > 480.0, date && w > 640.0);
     let w = w - 16.0 * (album as u8 + date as u8) as f32;
     let fr = w / (6.0 + if album { 4.0 } else { 0.0 } + if date { 3.0 } else { 0.0 });
     let (a, d) = (if album { fr * 4.0 } else { 0.0 }, if date { fr * 3.0 } else { 0.0 });
-    (w - a - d, a, d)
+    (w - a - d, a, d, idx)
 }
 
 fn play_btn<'a>(app: &App, px: f32, ctx: &str, m: Message) -> El<'a> {
-    let on = app.playing && app.ctx == ctx;
+    let on = app.ctx == ctx && app.current_song().is_some();
     button(
-        theme::filled(if on { fill::PAUSE } else { fill::PLAY }, px * 0.4)
+        theme::filled(if on && app.playing { fill::PAUSE } else { fill::PLAY }, px * 0.4)
             .color(theme::BG)
             .center(),
     )
@@ -78,7 +79,7 @@ fn sep<'a>() -> El<'a> {
 fn table_head<'a>(c: Cols) -> El<'a> {
     let h = |t: &'static str, w: f32| (w > 0.0).then(|| theme::sub(t, 14.0).width(w));
     container(column![
-        row![theme::sub("#", 16.0).width(16).center()]
+        row![theme::sub("#", 16.0).width(c.3).center()]
             .push(h("Title", c.0))
             .push(h("Album", c.1))
             .push(h("Date added", c.2))
@@ -108,17 +109,16 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let art = !key.starts_with("album:");
     let idx: El = match (hot, cur && app.playing) {
         (true, true) => {
-            btn(theme::filled(fill::PAUSE, 16.0).center(), Message::Toggle).width(16).into()
+            btn(theme::filled(fill::PAUSE, 16.0).center(), Message::Toggle).width(c.3).into()
         }
         (true, false) => {
-            btn(theme::filled(fill::PLAY, 16.0).center(), Message::PlayAt(key.into(), n))
-                .width(16)
-                .into()
+            let m = if cur { Message::Toggle } else { Message::PlayAt(key.into(), n) };
+            btn(theme::filled(fill::PLAY, 16.0).center(), m).width(c.3).into()
         }
-        (false, true) => i(icon::EQ, 16.0).color(theme::ACCENT).width(16).center().into(),
+        (false, true) => i(icon::EQ, 16.0).color(theme::ACCENT).width(c.3).center().into(),
         _ => theme::txt(n + 1, 16.0, Weight::Normal)
             .color(if cur { theme::ACCENT } else { theme::SUB })
-            .width(16)
+            .width(c.3)
             .center()
             .into(),
     };
@@ -440,7 +440,7 @@ fn discography<'a>(app: &'a App, arg: &str) -> El<'a> {
         });
         return column![head, g].into();
     }
-    let c = cols(app, false, false);
+    let c = cols(app, false, false, 0);
     let (off, view) = app.scroll();
     let (mut y, mut gap, mut col) = (GRID_Y, 0.0, Column::new().push(head));
     for al in list {
@@ -851,7 +851,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             color: head_color(app, &a.cover),
             songs,
             extra: vec![star(&a.id, a.starred), dots(MenuKind::Album(Box::new(a.clone())))],
-            cols: cols(app, false, false),
+            cols: cols(app, false, false, songs.len()),
         });
     }
     if let Some((p, songs)) = app.data::<(Playlist, Vec<Song>)>(key) {
@@ -870,7 +870,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
             color: head_color(app, &p.cover),
             songs,
             extra: vec![dots(MenuKind::Playlist(p.clone()))],
-            cols: cols(app, true, true),
+            cols: cols(app, true, true, songs.len()),
         });
     }
     let liked = key == "liked";
@@ -919,7 +919,7 @@ fn detail_of<'a>(app: &'a App) -> Option<Detail<'a>> {
         color: if liked { color!(0x5038a0) } else { color!(0x1e6b52) },
         songs: &p.items,
         extra: sort.into_iter().flat_map(|s| [Space::new().width(Fill).into(), s]).collect(),
-        cols: cols(app, true, true),
+        cols: cols(app, true, true, p.total.max(p.items.len())),
     })
 }
 
@@ -1013,7 +1013,7 @@ fn artist<'a>(app: &'a App) -> El<'a> {
     );
     let on = app.is_starred(&a.id, a.starred);
     let n = if app.popular_all { 10 } else { 5 }.min(top.len());
-    let c3 = cols(app, true, false);
+    let c3 = cols(app, true, false, n);
     let popular = (!top.is_empty()).then(|| {
         column![heading("Popular", None)]
             .extend(
@@ -1260,7 +1260,7 @@ fn search<'a>(app: &'a App, q: &str) -> El<'a> {
         },
     );
     let sw = w - lw;
-    let sc = (sw - 32.0 - 16.0 - 16.0 - 120.0 - 16.0, 0.0, 0.0);
+    let sc = (sw - 32.0 - 16.0 - 16.0 - 120.0 - 16.0, 0.0, 0.0, 16.0);
     let k = app.grid().0;
     let pls: Vec<El> = app
         .data::<Lib>("lib")
@@ -1381,10 +1381,10 @@ fn folders<'a>(app: &'a App) -> El<'a> {
         .on_press(Message::Nav(format!("folder:{id}")))
         .into()
     };
-    let c = cols(app, false, false);
     let body: El = if let Some(a) = app.data::<Vec<Artist>>(&app.route) {
         Column::with_children(a.iter().map(|x| dir(&x.id, &x.name))).into()
     } else if let Some(v) = app.data::<Vec<Song>>(&app.route) {
+        let c = cols(app, false, false, v.len());
         Column::with_children(v.iter().enumerate().map(|(n, s)| {
             if s.is_dir { dir(&s.id, &s.title) } else { track(app, s, n, &app.route, c) }
         }))

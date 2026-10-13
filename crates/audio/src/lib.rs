@@ -1062,8 +1062,8 @@ impl Mixer {
                     o[0] = o[0] * c + b[0] * s;
                     o[1] = o[1] * c + b[1] * s;
                 });
-            self.fade.0 += CHUNK;
-            if self.fade.0 >= len || n < CHUNK {
+            self.fade.0 += out.len() / 2;
+            if self.fade.0 >= len || n < out.len() / 2 {
                 self.cur = self.inc.take();
             }
             return Ok((n.max(m), ev));

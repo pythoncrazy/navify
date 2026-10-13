@@ -274,8 +274,14 @@ fn de_lines<'de, D: Deserializer<'de>>(
         .collect())
 }
 
-fn vlist<T: DeserializeOwned + Default>(v: &Value, key: &str) -> Vec<T> {
-    serde_json::from_value(v[key].clone()).unwrap_or_default()
+fn vlist<T: DeserializeOwned>(v: &Value, key: &str) -> Result<Vec<T>> {
+    parse(v[key].clone())
+}
+
+fn index(v: &Value) -> Result<Vec<Artist>> {
+    let lists: Vec<Vec<Artist>> =
+        v.as_array().into_iter().flatten().map(|i| vlist(i, "artist")).collect::<Result<_>>()?;
+    Ok(lists.concat())
 }
 
 pub fn normalize(v: &mut Value) {
@@ -444,9 +450,16 @@ impl Session {
                     )
                 );
             }
-            s.server.salt = body["subsonicSalt"].as_str().unwrap_or_default().to_string();
-            s.server.token = body["subsonicToken"].as_str().unwrap_or_default().to_string();
-            s.server.jwt = body["token"].as_str().unwrap_or_default().to_string();
+            let get = |k: &str| {
+                body[k]
+                    .as_str()
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("The server login response has no {k}."))
+            };
+            s.server.salt = get("subsonicSalt")?;
+            s.server.token = get("subsonicToken")?;
+            s.server.jwt = get("token")?;
             *s.lock() = s.server.jwt.clone();
             s.server.native = true;
         }
@@ -566,8 +579,9 @@ impl Session {
             .get(format!("{}/rest/{method}", self.server.url))
             .query(&self.query(params))
             .build()
-            .map(|r| r.url().to_string())
-            .unwrap_or_default()
+            .expect("the server URL is valid")
+            .url()
+            .to_string()
     }
 
     pub fn stream_url(
@@ -588,7 +602,9 @@ impl Session {
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
-        cache_dir("covers").join(&self.server.id).join(format!("{id}-{size}"))
+        cache_dir("covers")
+            .join(&self.server.id)
+            .join(format!("{}-{size}", id.replace(['/', '\\'], "_")))
     }
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
         let file = self.cover_file(id, size);
@@ -678,7 +694,7 @@ impl Session {
             Ok((album.0, songs))
         } else {
             let v: Value = self.rest("getAlbum", &[("id", id.to_string())], "/album").await?;
-            let mut songs: Vec<Song> = vlist(&v, "song");
+            let mut songs: Vec<Song> = vlist(&v, "song")?;
             songs.sort_by_key(|s| (s.disc, s.track));
             Ok((serde_json::from_value(v.clone())?, songs))
         }
@@ -699,10 +715,7 @@ impl Session {
             .await
         } else {
             let v: Value = self.rest("getArtists", &[], "/artists/index").await?;
-            let all: Vec<Artist> = v
-                .as_array()
-                .map(|a| a.iter().flat_map(|i| vlist(i, "artist")).collect())
-                .unwrap_or_default();
+            let all = index(&v)?;
             let total = all.len();
             Ok((all.into_iter().skip(offset).take(size).collect(), total))
         }
@@ -719,7 +732,7 @@ impl Session {
             Ok((a.0, al.0))
         } else {
             let v: Value = self.rest("getArtist", &[("id", id.to_string())], "/artist").await?;
-            Ok((serde_json::from_value(v.clone())?, vlist(&v, "album")))
+            Ok((serde_json::from_value(v.clone())?, vlist(&v, "album")?))
         }
     }
 
@@ -791,7 +804,7 @@ impl Session {
             Ok((pl.0, tracks.0))
         } else {
             let v: Value = self.rest("getPlaylist", &[("id", id.to_string())], "/playlist").await?;
-            Ok((serde_json::from_value(v.clone()).unwrap_or_default(), vlist(&v, "entry")))
+            Ok((parse(v.clone())?, vlist(&v, "entry")?))
         }
     }
 
@@ -833,7 +846,7 @@ impl Session {
                     "/searchResult3",
                 )
                 .await?;
-            let list: Vec<Song> = vlist(&v, "song");
+            let list: Vec<Song> = vlist(&v, "song")?;
             let total = offset + list.len() + usize::from(list.len() == size);
             Ok((list, total))
         }
@@ -857,12 +870,12 @@ impl Session {
                 "/searchResult3",
             )
             .await?;
-        Ok((vlist(&v, "artist"), vlist(&v, "album"), vlist(&v, "song")))
+        Ok((vlist(&v, "artist")?, vlist(&v, "album")?, vlist(&v, "song")?))
     }
 
     pub async fn starred(&self) -> Result<(Vec<Artist>, Vec<Album>, Vec<Song>)> {
         let v: Value = self.rest("getStarred2", &[], "/starred2").await?;
-        Ok((vlist(&v, "artist"), vlist(&v, "album"), vlist(&v, "song")))
+        Ok((vlist(&v, "artist")?, vlist(&v, "album")?, vlist(&v, "song")?))
     }
 
     pub async fn genres(&self) -> Result<Vec<Genre>> {
@@ -880,9 +893,7 @@ impl Session {
 
     pub async fn indexes(&self) -> Result<Vec<Artist>> {
         let v: Value = self.rest("getIndexes", &[], "/indexes/index").await?;
-        Ok(v.as_array()
-            .map(|a| a.iter().flat_map(|i| vlist(i, "artist")).collect())
-            .unwrap_or_default())
+        index(&v)
     }
 
     pub async fn directory(&self, id: &str) -> Result<Vec<Song>> {
@@ -959,7 +970,7 @@ impl Session {
     pub async fn play_queue(&self) -> Result<(Vec<Song>, String, u64)> {
         let v: Value = self.rest("getPlayQueue", &[], "/playQueue").await?;
         Ok((
-            vlist(&v, "entry"),
+            vlist(&v, "entry")?,
             v["current"].as_str().unwrap_or_default().to_string(),
             v["position"].as_u64().unwrap_or_default(),
         ))

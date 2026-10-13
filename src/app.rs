@@ -179,10 +179,14 @@ pub enum Message {
     Win(iced::window::Id),
 }
 
+const SIZES: [u32; 3] = [128, 300, 640];
+
+type Slot = Option<(u64, image::Handle, usize)>;
+
 #[derive(Debug, Default)]
 pub struct Covers {
-    pub map: HashMap<(String, u32), (u64, image::Handle, usize)>,
-    order: VecDeque<((String, u32), u64)>,
+    pub map: HashMap<String, [Slot; 3]>,
+    order: VecDeque<(String, usize, u64)>,
     pub bytes: usize,
     tick: u64,
     pub color: HashMap<String, Color>,
@@ -190,28 +194,43 @@ pub struct Covers {
 }
 
 impl Covers {
-    pub fn get(&self, k: &(String, u32)) -> Option<image::Handle> {
-        let mut near = [128, 300, 640];
-        assert!(near.contains(&k.1), "cover size {} is not a bucket", k.1);
-        near.sort_unstable_by_key(|s| s.abs_diff(k.1));
-        near.iter().find_map(|s| self.map.get(&(k.0.clone(), *s))).map(|(_, h, _)| h.clone())
+    fn slot(size: u32) -> usize {
+        SIZES
+            .iter()
+            .position(|s| *s == size)
+            .unwrap_or_else(|| panic!("cover size {size} is not a bucket"))
     }
 
-    pub fn insert(&mut self, k: (String, u32), w: u32, h: u32, c: Color, px: Vec<u8>) {
+    pub fn get(&self, id: &str, size: u32) -> Option<image::Handle> {
+        let e = self.map.get(id)?;
+        let mut near = [0, 1, 2];
+        near.sort_unstable_by_key(|&j| SIZES[j].abs_diff(size));
+        near.iter().find_map(|&j| e[j].as_ref()).map(|(_, h, _)| h.clone())
+    }
+
+    pub fn has(&self, id: &str, size: u32) -> bool {
+        self.map.get(id).is_some_and(|e| e[Self::slot(size)].is_some())
+    }
+
+    pub fn insert(&mut self, (id, size): (String, u32), w: u32, h: u32, c: Color, px: Vec<u8>) {
         self.tick += 1;
-        let size = (w * h * 4) as usize;
-        self.color.insert(k.0.clone(), c);
-        let tk = self.tick;
-        self.map.insert(k.clone(), (tk, image::Handle::from_rgba(w, h, px), size));
-        self.bytes += size;
-        self.order.push_back((k.clone(), tk));
+        let (i, n) = (Self::slot(size), (w * h * 4) as usize);
+        self.color.insert(id.clone(), c);
+        let old = self.map.entry(id.clone()).or_default()[i].replace((
+            self.tick,
+            image::Handle::from_rgba(w, h, px),
+            n,
+        ));
+        self.bytes = self.bytes + n - old.map_or(0, |o| o.2);
+        self.order.push_back((id, i, self.tick));
         while self.bytes > COVER_CAP {
-            let Some((oldest, ot)) = self.order.pop_front() else { break };
-            if let Some((t, _, sz)) = self.map.get(&oldest)
-                && *t == ot
-            {
-                self.bytes = self.bytes.saturating_sub(*sz);
-                self.map.remove(&oldest);
+            let Some((id, j, t)) = self.order.pop_front() else { break };
+            let Some(e) = self.map.get_mut(&id) else { continue };
+            if e[j].as_ref().is_some_and(|x| x.0 == t) {
+                self.bytes -= e[j].take().expect("the slot is full").2;
+                if e.iter().all(Option::is_none) {
+                    self.map.remove(&id);
+                }
             }
         }
     }
@@ -741,7 +760,12 @@ impl App {
     }
 
     fn persist(&self) -> Task<Message> {
-        let c = self.cfg.clone();
+        let mut c = self.cfg.clone();
+        if let Some(s) = &self.session
+            && let Some(v) = c.servers.iter_mut().find(|v| v.id == s.server.id)
+        {
+            v.jwt = s.jwt();
+        }
         Task::perform(async move { c.save() }, |r| match r {
             Ok(()) => Message::Noop,
             Err(e) => Message::Toast(0, format!("Could not save the settings. {e}")),
@@ -800,6 +824,17 @@ impl App {
         } else {
             None
         }
+    }
+
+    fn order(&self, first: usize) -> Vec<usize> {
+        let mut o: Vec<usize> = (0..self.queue.len()).collect();
+        shuffle(&mut o, first);
+        o
+    }
+
+    fn start(&mut self, i: usize, shuffled: bool) -> Task<Message> {
+        self.shuffle = shuffled.then(|| self.order(i));
+        self.play_index(if shuffled { 0 } else { i }, 0.0)
     }
 
     fn play_index(&mut self, i: usize, at: f32) -> Task<Message> {
@@ -898,7 +933,7 @@ impl App {
             .into_iter()
             .filter(|(id, size)| {
                 !id.is_empty()
-                    && !self.covers.map.contains_key(&(id.clone(), *size))
+                    && !self.covers.has(id, *size)
                     && self.covers.want.insert((id.clone(), *size))
             })
             .map(|(id, size)| {
@@ -1118,11 +1153,11 @@ impl App {
     pub fn update(&mut self, m: Message) -> Task<Message> {
         let seek = matches!(m, Message::Seek(_));
         let t = self.handle(m);
-        let key = (self.current_song().map_or(String::new(), |s| s.id.clone()), self.playing);
-        if key == self.os && !seek {
+        let id = self.current_song().map_or("", |s| s.id.as_str());
+        if (id, self.playing) == (self.os.0.as_str(), self.os.1) && !seek {
             return t;
         }
-        self.os = key;
+        self.os = (id.to_string(), self.playing);
         let song = self.current_song().cloned();
         let pos = self.pos();
         if let Some(m) = &mut self.media {
@@ -1231,12 +1266,7 @@ impl App {
                 self.queue = songs;
                 self.source = source;
                 self.ctx.clear();
-                self.shuffle = self.shuffle.as_ref().map(|_| {
-                    let mut o: Vec<usize> = (0..self.queue.len()).collect();
-                    shuffle(&mut o, i);
-                    o
-                });
-                self.play_index(i, 0.0)
+                self.start(i, self.shuffle.is_some())
             }
             Message::PlayQueue(i) => self.play_index(i, 0.0),
             Message::Toggle => {
@@ -1295,23 +1325,12 @@ impl App {
                 Task::batch([done, self.listen(self.playing)])
             }
             Message::Shuffle => {
-                self.shuffle = match self.shuffle {
-                    Some(_) => None,
-                    None => {
-                        let cur = self.real_index();
-                        let mut o: Vec<usize> = (0..self.queue.len()).collect();
-                        shuffle(&mut o, cur);
-                        self.index = 0;
-                        Some(o)
-                    }
-                };
-                if self.shuffle.is_none()
-                    && let Some(i) = self
-                        .queue
-                        .iter()
-                        .position(|s| self.current_song().is_some_and(|c| c.id == s.id))
-                {
-                    self.index = i;
+                let cur = if self.index < self.queue.len() { self.real_index() } else { 0 };
+                if self.shuffle.take().is_some() {
+                    self.index = cur;
+                } else {
+                    self.shuffle = Some(self.order(cur));
+                    self.index = 0;
                 }
                 self.queue_next_refresh();
                 self.debounce_save_queue()
@@ -1385,12 +1404,9 @@ impl App {
                     self.queue.remove(ri);
                     if let Some(o) = &mut self.shuffle {
                         o.retain(|&x| x != ri);
-                        for x in o.iter_mut() {
-                            if *x > ri {
-                                *x -= 1;
-                            }
-                        }
-                    } else if self.index > ri {
+                        o.iter_mut().filter(|x| **x > ri).for_each(|x| *x -= 1);
+                    }
+                    if i < self.index {
                         self.index -= 1;
                     }
                 }
@@ -1873,14 +1889,7 @@ impl App {
             Message::PlayCtxDone(songs, src, mode) => {
                 self.queue = songs;
                 self.source = src;
-                self.shuffle = if mode == 1 {
-                    let mut o: Vec<usize> = (0..self.queue.len()).collect();
-                    shuffle(&mut o, 0);
-                    Some(o)
-                } else {
-                    None
-                };
-                self.play_index(0, 0.0)
+                self.start(0, mode == 1)
             }
             Message::Select(key, n) => {
                 self.pick(key, n);
@@ -1947,7 +1956,11 @@ impl App {
             Message::Arrow(up) => {
                 let Some((key, n)) = self.sel.clone() else { return Task::none() };
                 let list = self.songs_of(&key).expect("a selected row has its list").0;
-                let n = if up { n.saturating_sub(1) } else { (n + 1).min(list.len() - 1) };
+                let n = if up {
+                    n.saturating_sub(1)
+                } else {
+                    (n + 1).min(list.len().saturating_sub(1))
+                };
                 self.pick(key.clone(), n);
                 let (kind, _) = key.split_once(':').unwrap_or((&key, ""));
                 if key != self.route || !matches!(kind, "album" | "playlist" | "liked" | "songs") {
@@ -2142,7 +2155,7 @@ impl App {
             self.queue.extend(songs);
             let mut extra: Vec<usize> = (base..base + n).collect();
             shuffle(&mut extra, usize::MAX);
-            let pos = (self.index + 1).min(o.len());
+            let pos = at.min(o.len());
             for (k, x) in extra.into_iter().enumerate() {
                 o.insert(pos + k, x);
             }

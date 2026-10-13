@@ -41,10 +41,6 @@ pub fn txt<'a>(t: impl ToString, size: f32, w: Weight) -> Txt<'a> {
     text(t.to_string()).size(size).font(fw(w))
 }
 
-pub fn black<'a>(t: impl ToString, size: f32) -> Txt<'a> {
-    txt(t, size, Weight::Black)
-}
-
 pub fn bold<'a>(t: impl ToString, size: f32) -> Txt<'a> {
     txt(t, size, Weight::Bold)
 }
@@ -146,8 +142,6 @@ pub mod icon {
     pub const X: char = '\u{e1b2}';
     pub const CHECK: char = '\u{e06c}';
     pub const DOTS: char = '\u{e0b6}';
-    pub const BACK: char = '\u{e048}';
-    pub const FWD: char = '\u{e049}';
     pub const CLOCK: char = '\u{e087}';
     pub const LISTPLUS: char = '\u{e23f}';
     pub const USER: char = '\u{e19f}';
@@ -160,7 +154,6 @@ pub mod icon {
     pub const SERVER: char = '\u{e153}';
     pub const LIST: char = '\u{e106}';
     pub const GRID: char = '\u{e0ff}';
-    pub const ADD: char = '\u{e081}';
     pub const DOWN: char = '\u{e06d}';
     pub const UP: char = '\u{e070}';
 }
@@ -171,14 +164,6 @@ fn bg(color: impl Into<iced::Background>, radius: f32) -> container::Style {
 
 pub fn panel(_: &Theme) -> container::Style {
     bg(PANEL, 8.0)
-}
-
-pub fn elevated(_: &Theme) -> container::Style {
-    bg(ELEVATED, 8.0)
-}
-
-pub fn skel(_: &Theme) -> container::Style {
-    bg(CHIP, 4.0)
 }
 
 pub fn fill(c: Color, radius: f32) -> impl Fn(&Theme) -> container::Style {
@@ -246,53 +231,39 @@ pub fn diagonal(radius: f32) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
-pub fn search_field(_: &Theme, s: text_input::Status) -> text_input::Style {
-    let hot = matches!(s, text_input::Status::Hovered | text_input::Status::Focused { .. });
+fn input(
+    s: text_input::Status,
+    bg: [Color; 2],
+    edge: [Color; 2],
+    width: [f32; 2],
+    radius: f32,
+) -> text_input::Style {
+    let focus = matches!(s, text_input::Status::Focused { .. });
+    let hot = focus || matches!(s, text_input::Status::Hovered);
     text_input::Style {
-        background: if hot { color!(0x2a2a2a) } else { ELEVATED }.into(),
+        background: bg[hot as usize].into(),
         border: Border {
-            color: if matches!(s, text_input::Status::Focused { .. }) { TEXT } else { BG },
-            width: if matches!(s, text_input::Status::Focused { .. }) { 2.0 } else { 0.0 },
-            radius: 500.0.into(),
+            color: edge[hot as usize],
+            width: width[focus as usize],
+            radius: radius.into(),
         },
         icon: SUB,
         placeholder: SUB,
         value: TEXT,
         selection: tint(0.3),
     }
+}
+
+pub fn search_field(_: &Theme, s: text_input::Status) -> text_input::Style {
+    input(s, [ELEVATED, color!(0x2a2a2a)], [BG, TEXT], [0.0, 2.0], 500.0)
 }
 
 pub fn field(_: &Theme, s: text_input::Status) -> text_input::Style {
-    text_input::Style {
-        background: PANEL.into(),
-        border: Border {
-            color: match s {
-                text_input::Status::Focused { .. } | text_input::Status::Hovered => TEXT,
-                _ => FIELD,
-            },
-            width: if matches!(s, text_input::Status::Focused { .. }) { 2.0 } else { 1.0 },
-            radius: 4.0.into(),
-        },
-        icon: SUB,
-        placeholder: SUB,
-        value: TEXT,
-        selection: tint(0.3),
-    }
+    input(s, [PANEL, PANEL], [FIELD, TEXT], [1.0, 2.0], 4.0)
 }
 
 pub fn modal_field(_: &Theme, s: text_input::Status) -> text_input::Style {
-    text_input::Style {
-        background: MENU_HOVER.into(),
-        border: Border {
-            color: color!(0x535353),
-            width: if matches!(s, text_input::Status::Focused { .. }) { 1.0 } else { 0.0 },
-            radius: 4.0.into(),
-        },
-        icon: SUB,
-        placeholder: SUB,
-        value: TEXT,
-        selection: tint(0.3),
-    }
+    input(s, [MENU_HOVER, MENU_HOVER], [color!(0x535353), color!(0x535353)], [0.0, 1.0], 4.0)
 }
 
 fn btn_style(bg: Color, fg: Color, radius: f32) -> button::Style {
@@ -335,27 +306,25 @@ pub fn chip(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
-pub fn accent(_: &Theme, s: button::Status) -> button::Style {
-    let c = match s {
-        button::Status::Hovered => color!(0x3be477),
-        button::Status::Pressed => color!(0x1abc54),
-        _ => ACCENT,
+fn solid(s: button::Status, c: [Color; 3], fg: Color) -> button::Style {
+    let i = match s {
+        button::Status::Hovered => 1,
+        button::Status::Pressed => 2,
+        _ => 0,
     };
-    btn_style(c, BG, 500.0)
+    btn_style(c[i], fg, 500.0)
+}
+
+pub fn accent(_: &Theme, s: button::Status) -> button::Style {
+    solid(s, [ACCENT, color!(0x3be477), color!(0x1abc54)], BG)
 }
 
 pub fn danger(_: &Theme, s: button::Status) -> button::Style {
-    let c = match s {
-        button::Status::Hovered => color!(0xd81326),
-        button::Status::Pressed => color!(0xa60e1d),
-        _ => color!(0xe91429),
-    };
-    btn_style(c, TEXT, 500.0)
+    solid(s, [color!(0xe91429), color!(0xd81326), color!(0xa60e1d)], TEXT)
 }
 
 pub fn white(_: &Theme, s: button::Status) -> button::Style {
-    let hot = matches!(s, button::Status::Hovered | button::Status::Pressed);
-    btn_style(if hot { color!(0xf0f0f0) } else { TEXT }, BG, 500.0)
+    solid(s, [TEXT, color!(0xf0f0f0), color!(0xf0f0f0)], BG)
 }
 
 pub fn pill(_: &Theme, s: button::Status) -> button::Style {

@@ -165,7 +165,7 @@ pub fn cover(app: &App, id: &str, size: u32, px: f32, round: bool) -> Element<'s
     } else {
         6.0
     };
-    match app.covers.get(&(id.to_string(), size)) {
+    match app.covers.get(id, size) {
         Some(h) => image(h)
             .width(px)
             .height(px)
