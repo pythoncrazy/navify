@@ -30,7 +30,8 @@ mod linux {
 
     pub fn install() -> std::io::Result<()> {
         let data = dirs::data_dir().ok_or(std::io::ErrorKind::NotFound)?;
-        let exe = format!("Exec=\"{}\"", std::env::current_exe()?.display());
+        let exe = std::env::var_os("APPIMAGE").map_or_else(std::env::current_exe, |p| Ok(p.into()));
+        let exe = format!("Exec=\"{}\"", exe?.display());
         let desktop = include_str!("../assets/navify.desktop").replace("Exec=navify", &exe);
         let svg = include_bytes!("../assets/navify.svg");
         for (path, bytes) in [

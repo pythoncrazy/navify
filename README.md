@@ -70,8 +70,8 @@ Download a file for your system from the
 | System | File |
 | --- | --- |
 | Debian, Ubuntu | `navify_<version>_amd64.deb` or `_arm64.deb` |
-| Arch Linux | `PKGBUILD-<target>` with the matching `.tar.gz` |
-| Other Linux | `.AppImage`, or the portable `navify-v<version>-<target>.tar.gz` |
+| Arch Linux | `PKGBUILD-<target>` with `navify_<version>_x86_64.tar.gz` or `_aarch64.tar.gz` |
+| Other Linux | `navify_<version>_x86_64.AppImage` or `_aarch64.AppImage` |
 | Windows | `navify_<version>_x64-setup.exe` |
 | macOS | `Navify_<version>_aarch64.dmg` (Apple silicon) or `_x64.dmg` (Intel) |
 
@@ -80,11 +80,11 @@ Download a file for your system from the
 ### Linux
 
 Install the `.deb` with `sudo apt install ./navify_<version>_amd64.deb`.
-For Arch Linux, put the `PKGBUILD` and the `.tar.gz` in one directory and run `makepkg -si`.
+For Arch Linux, put the `PKGBUILD-<target>` and the `.tar.gz` in one directory.
+Change the name of `PKGBUILD-<target>` to `PKGBUILD`, then run `makepkg -si`.
 
-The portable archive contains only the program. Extract it to a directory on your `PATH`.
-Then run `navify --install` one time. This adds the menu entry and the icons
-to `~/.local/share`.
+On other systems, make the AppImage executable with `chmod +x` and start it.
+To add the menu entry and the icons to `~/.local/share`, run the AppImage with `--install` one time.
 
 The program needs ALSA and D-Bus. Navify uses Wayland or X11.
 On desktops that do not draw title bars for Wayland windows, such as GNOME,
