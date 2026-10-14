@@ -146,6 +146,8 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     assert!(app.modal.as_ref().is_some_and(|m| m.1 == 4) && cur(&app) == "c");
     let _ = app.update(Message::Confirm);
     assert!(app.modal.is_none() && cur(&app) == "a");
+    app.sel = Some(("album:gone".into(), 3));
+    let _ = app.update(Message::Arrow(false));
 }
 
 #[tokio::test]
