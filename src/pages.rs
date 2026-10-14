@@ -1175,6 +1175,14 @@ fn pick<'a, T: Clone + Send + Sync + 'static>(
     p.menu_style(theme::pick_menu).into()
 }
 
+fn devices(app: &App) -> Vec<(String, String)> {
+    let found = app.data::<Vec<(String, String)>>("devices");
+    let found = found.into_iter().flatten().cloned();
+    std::iter::once((String::new(), "System default".into()))
+        .chain(found)
+        .collect()
+}
+
 fn settings(app: &App) -> El<'_> {
     let st = &app.cfg.settings;
     let opts = |v: &[&str]| v.chunks(2).map(|p| (p[0].into(), p[1].into())).collect();
@@ -1195,10 +1203,6 @@ fn settings(app: &App) -> El<'_> {
         let label = txt(label, 14.0).color(SUB).width(Fill);
         row![label, c].align_y(Center).height(48).into()
     };
-    let devices = app.data::<Vec<(String, String)>>("devices");
-    let default = (String::new(), "System default".to_string());
-    let devices = devices.into_iter().flatten().cloned();
-    let devices = std::iter::once(default).chain(devices).collect();
     let mut rates = [0, 320, 256, 192, 128, 96].map(|b| (b, format!("{b} kbps")));
     rates[0].1 = "No limit".into();
     let zooms = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5].map(|z| (z, format!("{:.0}%", z * 100.0)));
@@ -1206,23 +1210,20 @@ fn settings(app: &App) -> El<'_> {
     let formats = opts(&["", "Original", "mp3", "MP3", "opus", "Opus", "aac", "AAC"]);
     let (tf, br) = (st.transcode_format.as_str(), st.transcode_max_bitrate);
     let (x, secs) = (st.crossfade_secs, format!("{:.0} s", st.crossfade_secs));
-    let device = pick(devices, st.device.as_str(), |s, v| s.device = v);
+    let device = pick(devices(app), st.device.as_str(), |s, v| s.device = v);
     let gain = pick(gains, st.replaygain.as_str(), |s, v| s.replaygain = v);
     let preamp = db(st.preamp_db, |s, v| s.preamp_db = v);
     let fallback = db(st.fallback_db, |s, v| s.fallback_db = v);
     let fade = num(x, 0.0..=12.0, |s, v| s.crossfade_secs = v, secs);
-    let clip = tog(st.rg_clip, |s, b| s.rg_clip = b);
     let (pct, step) = (st.scrobble_pct, st.seek_secs);
-    let (lag, size) = (st.lyrics_offset, st.lyrics_size);
-    let (l1, l2) = (format!("{pct:.0}%"), format!("{step:.0} s"));
-    let secs = st.scrobble_secs;
+    let (lag, size, secs) = (st.lyrics_offset, st.lyrics_size, st.scrobble_secs);
+    let (l1, l2, l3) = (
+        format!("{pct:.0}%"),
+        format!("{step:.0} s"),
+        format!("{secs:.0} s"),
+    );
     let pct = match st.scrobble_by_time {
-        true => num(
-            secs,
-            10.0..=600.0,
-            |s, v| s.scrobble_secs = v,
-            format!("{secs:.0} s"),
-        ),
+        true => num(secs, 10.0..=600.0, |s, v| s.scrobble_secs = v, l3),
         false => num(pct, 10.0..=100.0, |s, v| s.scrobble_pct = v, l1),
     };
     let by = [
@@ -1240,8 +1241,6 @@ fn settings(app: &App) -> El<'_> {
     ];
     let modes = modes.map(|(m, l)| (m, l.to_string())).into();
     let mode = pick(modes, st.play_mode, |s, v| s.play_mode = v);
-    let ratings = tog(st.ratings, |s, b| s.ratings = b);
-    let confirm = tog(st.confirm_queue, |s, b| s.confirm_queue = b);
     let skip = text_input("live, remix, intro", &st.queue_skip);
     let skip = skip
         .on_input(|v| set(|s, v| s.queue_skip = v, v))
@@ -1252,29 +1251,25 @@ fn settings(app: &App) -> El<'_> {
         .padding([8, 12])
         .size(14)
         .into();
-    let follow = tog(st.lyrics_follow, |s, b| s.lyrics_follow = b);
-    let start_min = tog(st.start_min, |s, b| s.start_min = b);
-    let min_tray = tog(st.min_tray, |s, b| s.min_tray = b);
     let step = num(step, 1.0..=30.0, |s, v| s.seek_secs = v, l2);
     let (l1, l2) = (format!("{lag:+.1} s"), format!("{size:.0} px"));
     let lag = num(lag, -5.0..=5.0, |s, v| s.lyrics_offset = v, l1);
     let size = num(size, 20.0..=48.0, |s, v| s.lyrics_size = v, l2);
     let format = pick(formats, tf, |s, v| s.transcode_format = v);
     let rate = pick(rates.into(), br, |s, v| s.transcode_max_bitrate = v);
-    let sync = tog(st.queue_sync, |s, b| s.queue_sync = b);
-    let scrobble = tog(st.scrobble, |s, b| s.scrobble = b);
-    let banners = tog(st.banners, |s, b| s.banners = b);
     let banners_label =
         "Show artist banners from TheAudioDB (this sends artist names to TheAudioDB)";
     let zoom = pick(zooms.into(), st.zoom, |s, v| s.zoom = v);
-    let frame = tog(st.system_frame, |s, b| s.system_frame = b);
     let frame_label = "Use the system title bar on Wayland desktops that do not draw one";
     let frame_label = format!("{frame_label} (restart to apply)");
-    let frame = cfg!(target_os = "linux").then(|| line(&frame_label, frame));
     let tray_label = "Keep Navify in the system tray when you close the window";
     let none = [" (no system tray found)", ""][usize::from(app.tray.is_some())];
     let tray_label = format!("{tray_label}{none}");
-    let tray = line(&tray_label, tog(st.tray, |s, b| s.tray = b));
+    macro_rules! on {
+        ($label:expr, $f:ident) => {
+            line($label, tog(st.$f, |s, b| s.$f = b))
+        };
+    }
     let server = |s: &Server| -> El<'_> {
         let active = app.cfg.active.as_ref() == Some(&s.id);
         let who = sub(format!("{}{DOT}{}", s.user, s.url), 14.0);
@@ -1297,43 +1292,36 @@ fn settings(app: &App) -> El<'_> {
         line("ReplayGain", gain),
         line("Preamp", preamp),
         line("Gain for tracks without ReplayGain", fallback),
-        line("Limit the gain to stop clipping", clip),
+        on!("Limit the gain to stop clipping", rg_clip),
         line("Crossfade", fade),
         line("Seek step for keys and media controls", step),
         line("Action of the play buttons and double-click", mode),
         head("Queue"),
-        line("Ask before you replace the queue", confirm),
-        line(
-            "Do not add songs with these words (separate with commas)",
-            skip
-        ),
+        on!("Ask before you replace the queue", confirm_queue),
+        line("Do not add songs with these words (use commas)", skip),
         head("Streaming"),
         line("Transcode format", format),
         line("Maximum bitrate", rate),
         head("Library"),
-        line("Sync the play queue with the server", sync),
-        line("Send played tracks to the server (scrobble)", scrobble),
+        on!("Sync the play queue with the server", queue_sync),
+        on!("Send played tracks to the server (scrobble)", scrobble),
         line("Scrobble by", by),
         line("Scrobble after", pct),
         head("Display"),
         line("Zoom", zoom),
-        line(banners_label, banners),
-        line("Show the rating column", ratings),
-        line("Scroll the lyrics with the track", follow),
+        on!(banners_label, banners),
+        on!("Show the rating column", ratings),
+        on!("Scroll the lyrics with the track", lyrics_follow),
         line("Lyrics offset (positive shows the lines later)", lag),
         line("Lyrics text size", size),
+        cfg!(target_os = "linux").then(|| on!(&frame_label, system_frame)),
+        on!(&tray_label, tray),
+        on!("Start minimized", start_min),
+        on!("Show a notification when a new track starts", notify),
+        on!("Keep the computer awake while music plays", awake),
+        on!("Hide in the tray when you minimize the window", min_tray),
+        head("Keyboard shortcuts"),
     ];
-    let col = col.push(frame).push(tray);
-    let col = col.push(line("Start minimized", start_min));
-    let notify = tog(st.notify, |s, b| s.notify = b);
-    let col = col.push(line("Show a notification when a new track starts", notify));
-    let awake = tog(st.awake, |s, b| s.awake = b);
-    let col = col.push(line("Keep the computer awake while music plays", awake));
-    let col = col.push(line(
-        "Hide Navify in the tray when you minimize the window",
-        min_tray,
-    ));
-    let col = col.push(head("Keyboard shortcuts"));
     let col = col.extend(crate::app::KEYS.iter().map(|k| {
         let on = app.recording == Some(k.0);
         let label = match crate::app::key_label(app.binding(k.0)) {
@@ -1389,7 +1377,7 @@ fn settings(app: &App) -> El<'_> {
     let paste = theme::pill_btn("Paste", paste);
     let io = row![copy, paste].spacing(8).into();
     let col = col.push(line(
-        "Copy the settings to the clipboard, or paste them from it",
+        "Copy the settings to the clipboard, or paste them",
         io,
     ));
     let col = col.push(head("About"));
@@ -1548,11 +1536,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let mine = |p: &Playlist| user.is_some_and(|s| s.user == p.owner);
     let star = |id: &str, server: bool, yes: &str, no: &str| {
         let k = usize::from(app.is_starred(id, server));
-        it(
-            [i::SAVE, i::SAVED][k],
-            [no, yes][k],
-            Message::Star(vec![id.into()], k == 0),
-        )
+        let m = Message::Star(vec![id.into()], k == 0);
+        it([i::SAVE, i::SAVED][k], [no, yes][k], m)
     };
     let ctx = |kind: &str, id: &str| {
         let r = format!("{kind}:{id}");
@@ -1578,18 +1563,9 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             return boxed(Row::with_children(stars).into(), 192.0, 48.0, 6);
         }
         MenuKind::Device => {
-            head = Some(
-                container(bold("Select an output device", 14.0))
-                    .padding([0, 12])
-                    .center_y(40)
-                    .into(),
-            );
-            let found = app
-                .data::<Vec<(String, String)>>("devices")
-                .into_iter()
-                .flatten();
-            let all =
-                std::iter::once((String::new(), "System default".into())).chain(found.cloned());
+            let t = bold("Select an output device", 14.0);
+            head = Some(container(t).padding([0, 12]).center_y(40).into());
+            let all = devices(app).into_iter();
             all.map(|(id, name)| {
                 let c = [i::DEVICE, i::CHECK][usize::from(id == app.cfg.settings.device)];
                 it(c, &name, set(|s, v| s.device = v, id))
