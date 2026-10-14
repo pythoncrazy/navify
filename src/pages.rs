@@ -7,8 +7,8 @@ use iced::widget::{
 };
 use iced::{Center, Color, Fill, Padding, Right, color, padding};
 
-use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Server, Song};
-use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, act, set, task};
+use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Server, Song, Trio};
+use crate::app::{App, Home, Lib, Menu, MenuKind, Message, act, set, task};
 use crate::config::Settings;
 use crate::theme::{
     self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
@@ -423,7 +423,14 @@ fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
     };
     let arrow = i(if app.disc_old { i::UP } else { i::DOWN }, 16.0);
     let order = row![txt("Release date", 14.0), arrow].spacing(4);
-    let order = link_btn(order.align_y(Center), SUB, Message::DiscOrder);
+    let order = link_btn(
+        order.align_y(Center),
+        SUB,
+        task(|a| {
+            a.disc_old = !a.disc_old;
+            a.disc_load()
+        }),
+    );
     let chips = Row::with_children(chips).spacing(8);
     let r = row![chips, Space::new().width(Fill), order, tool(i::LIST, false)];
     let r = r.push(tool(i::GRID, true)).spacing(16);
@@ -495,7 +502,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
 
 fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
     if let Some(e) = app.data::<String>(key) {
-        let retry = theme::pill_btn("Try again", Message::Retry);
+        let retry = theme::pill_btn("Try again", task(App::retry));
         let col = column![bold("Could not load this page.", 24.0), sub(e, 14.0), retry];
         let col = container(col.spacing(16).align_x(Center));
         return Some(col.center_x(Fill).padding(80).into());
@@ -759,11 +766,12 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         return Some((page, songs, cols(app, true, true, songs.len())));
     }
     let liked = key == "liked";
-    let p = app.data::<Pager<Song>>(key);
-    let p = p.filter(|_| liked || key.split(':').next() == Some("songs"))?;
+    let (items, total) = app
+        .data::<(Vec<Song>, usize)>(key)
+        .filter(|_| liked || key.split(':').next() == Some("songs"))?;
     let server = app.session.as_ref().map(|s| &s.server);
     let (user, native) = server.map_or(("", false), |s| (s.user.as_str(), s.native));
-    let n = p.total.max(p.items.len());
+    let n = (*total).max(items.len());
     let count = (liked || native).then(|| format!("{DOT}{} songs", fmt_n(n)));
     const SORTS: [(&str, &str); 8] = [
         ("name", "Title"),
@@ -803,7 +811,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         extra,
         banner: None,
     };
-    Some((page, &p.items, cols(app, true, true, n)))
+    Some((page, items, cols(app, true, true, n)))
 }
 
 pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
@@ -848,7 +856,9 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     };
     if app.route == "lyrics" && app.lyric.1.is_none() {
         let t = bold("Show the current line", 14.0);
-        let b = button(t).padding([10, 20]).on_press(Message::Follow);
+        let b = button(t)
+            .padding([10, 20])
+            .on_press(act(|a| a.lyric = (usize::MAX, Some(0.0))));
         let b = b.style(theme::btn([TEXT; 3], [BG; 3], 500.0));
         let b = container(b).center_x(Fill).align_bottom(Fill);
         return Some(b.padding(24).into());
@@ -904,7 +914,10 @@ fn artist(app: &App) -> Option<El<'_>> {
     let chips = GROUPS.iter().enumerate();
     let chips = chips.filter(|(n, (g, _))| *n == 0 || has(g));
     let chips = chips.map(|(n, (_, l))| {
-        let m = Message::DiscChip(n as u8);
+        let m = task(move |a| {
+            a.disc_chip = n as u8;
+            a.covers_now()
+        });
         theme::chip_btn(l, app.disc_chip as usize == n, m)
     });
     let latest = |n: usize, x: &Album| match (n, app.disc_chip) {
@@ -974,8 +987,8 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         let title = title.padding(Padding::new(PAD).bottom(4));
         return Some(column![title, grid(app, gs.len(), cols, th + 24.0, 64.0, tile)].into());
     }
-    let r = app.data::<SearchRes>(&app.route)?;
-    if r.artists.is_empty() && r.albums.is_empty() && r.songs.is_empty() {
+    let (artists_res, albums_res, songs_res) = app.data::<Trio>(&app.route)?;
+    if artists_res.is_empty() && albums_res.is_empty() && songs_res.is_empty() {
         let title = bold(format!("No results found for \u{201c}{q}\u{201d}"), 24.0);
         let hint = "Check the spelling, or use fewer or different keywords.";
         let hint = sub(hint, 16.0);
@@ -999,16 +1012,15 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         (&x.cover, &x.name, s, go("album", &x.id), false)
     };
     let starts = |n: &str| n.to_lowercase().starts_with(&ql);
-    let exact = r.artists.iter().find(|a| a.name.to_lowercase() == ql);
-    let exact = exact.or_else(|| r.artists.iter().find(|a| starts(&a.name)));
-    let albums = r
-        .albums
+    let exact = artists_res.iter().find(|a| a.name.to_lowercase() == ql);
+    let exact = exact.or_else(|| artists_res.iter().find(|a| starts(&a.name)));
+    let albums = albums_res
         .iter()
         .find(|a| starts(&a.name))
-        .or(r.albums.first());
+        .or(albums_res.first());
     let best = exact.map(art).or_else(|| albums.map(album));
-    let best = best.or_else(|| r.artists.first().map(art)).or_else(|| {
-        let s = r.songs.first()?;
+    let best = best.or_else(|| artists_res.first().map(art)).or_else(|| {
+        let s = songs_res.first()?;
         let sub = format!("Song{DOT}{}", s.artist);
         Some((&s.cover, &s.title, sub, go("album", &s.album_id), false))
     });
@@ -1023,20 +1035,20 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let sw = w - lw;
     let sc = (sw - 200.0, 0.0, 0.0, 16.0);
     let k = app.grid().0;
-    let songs = r.songs.iter().take(4).enumerate();
+    let songs = songs_res.iter().take(4).enumerate();
     let songs = songs.map(|(n, s)| track(app, s, n, &app.route, sc));
     let songs = column![bold("Songs", 24.0)].extend(songs);
     let songs = songs.spacing(8).width(sw);
     let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
     let pls = pls.iter().filter(|p| p.name.to_lowercase().contains(&ql));
     let pls = pls.take(k);
-    let albums = r.albums.iter().take(k);
+    let albums = albums_res.iter().take(k);
     let by = |a: &Album| match a.year {
         0 => a.artist.clone(),
         y => format!("{y}{DOT}{}", a.artist),
     };
     let albums = albums.map(|a| album_card(app, a, by(a)));
-    let artists = r.artists.iter().take(k).map(|a| artist_card(app, a));
+    let artists = artists_res.iter().take(k).map(|a| artist_card(app, a));
     let best = container(row![top, songs].spacing(PAD)).padding([0.0, PAD]);
     let col = column![
         best,
@@ -1067,9 +1079,9 @@ fn library<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
     };
     let (cols, cw) = app.grid();
     let g = |n, f: &dyn Fn(usize) -> El<'a>| grid(app, n, cols, cw + 52.0, GRID_Y, f);
-    let artists = app.data::<Pager<Artist>>(&app.route).map(|p| &p.items);
+    let artists = app.data::<(Vec<Artist>, usize)>(&app.route).map(|(v, _)| v);
     let artists = artists.map(|v| g(v.len(), &|n| artist_card(app, &v[n])));
-    let albums = app.data::<Pager<Album>>(&app.route).map(|p| &p.items);
+    let albums = app.data::<(Vec<Album>, usize)>(&app.route).map(|(v, _)| v);
     let albums = albums.map(|v| g(v.len(), &|n| album_card(app, &v[n], v[n].artist.clone())));
     column![grid_head(title, chips), artists.or(albums)].into()
 }
@@ -1337,7 +1349,8 @@ fn settings(app: &App) -> El<'_> {
         let b = b.style(theme::solid(bg, [TEXT, BG][usize::from(on)]));
         line(
             k.1,
-            b.on_press(Message::Record((!on).then_some(k.0))).into(),
+            b.on_press(act(move |a| a.recording = (!on).then_some(k.0)))
+                .into(),
         )
     }));
     let reset = theme::pill_btn("Reset", set(|s, ()| s.keys.clear(), ()));
@@ -1465,7 +1478,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let from = [&from, "Next up"][usize::from(app.source.is_empty())].to_string();
     let now = app.current_song().map(|s| queue_row(app, s, app.index, w));
     let now = now.map(|r| column![title("Now playing".into()), r]);
-    let clear = link_btn(bold("Clear queue", 14.0), SUB, Message::QClear);
+    let clear = link_btn(bold("Clear queue", 14.0), SUB, task(App::q_clear));
     let from = row![ell(&from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
     let from = container(from).padding(Padding::new(8.0).top(16));
     let list = column![now, (!next.is_empty()).then_some(from)].extend(next);
@@ -1533,7 +1546,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         Some((c, l.to_string(), m, true))
     };
     let user = app.session.as_ref().map(|s| &s.server);
-    let mine = |p: &Playlist| user.is_some_and(|s| s.user == p.owner);
+    let mine = |p: &Playlist| app.owns(p);
     let star = |id: &str, server: bool, yes: &str, no: &str| {
         let k = usize::from(app.is_starred(id, server));
         let m = Message::Star(vec![id.into()], k == 0);
@@ -1587,13 +1600,14 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             others.chain([settings, None, out]).collect()
         }
         MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
-            let lib = app.data::<Lib>("lib");
-            let n = lib.map_or(0, |l| l.playlists.len()) + 1;
             let name = match &s[..] {
                 [x] => x.title.clone(),
-                _ => format!("My Playlist #{n}"),
+                _ => String::new(),
             };
-            let pls = lib.into_iter().flat_map(|l| l.playlists.iter());
+            let pls = app
+                .data::<Lib>("lib")
+                .into_iter()
+                .flat_map(|l| l.playlists.iter());
             let pls = pls.filter(|p| mine(p));
             let add = |p: &Playlist| it(i::MUSIC, &p.name, Message::PlAdd(p.id.clone(), ids(s)));
             let new = it(i::PLUS, "New playlist", Message::PlNew(name, ids(s)));

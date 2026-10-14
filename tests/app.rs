@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use navify::api::{Album, Song, parse};
-use navify::app::{AnyData, App, Message, Pager, act};
+use navify::app::{AnyData, App, Message, act};
 use serde_json::json;
 
 fn app() -> App {
@@ -31,14 +31,14 @@ fn album_reopen_in_stale_time_sends_no_request() {
     let _ = app.update(Message::Nav(key.clone()));
     assert!(app.route == key && !app.pending.contains(pend));
     for (offset, n) in [(0, 100), (100, 50)] {
-        let items = items((offset..offset + n).map(|i| i.to_string()));
-        let mut page = Pager::<Album>::default();
-        (page.items, page.total, page.offset) = (items, 150, offset);
-        let page: AnyData = Arc::new(page);
+        let items: Vec<Album> = items((offset..offset + n).map(|i| i.to_string()));
+        let page: AnyData = Arc::new((items, 150usize));
         let _ = app.update(Message::Loaded("albums".into(), Ok(page)));
     }
-    let p = app.data::<Pager<Album>>("albums").expect("merged page");
-    assert!(p.items.len() == 150 && p.offset == 0 && p.items[120].id == "120");
+    let p = app
+        .data::<(Vec<Album>, usize)>("albums")
+        .expect("merged page");
+    assert!(p.0.len() == 150 && p.0[120].id == "120");
     let _ = app.update(Message::Nav("search:long".into()));
     assert_eq!(app.search_q, "long");
     let _ = app.update(Message::Back);
@@ -157,6 +157,23 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     assert!(app.modal.is_none() && cur(&app) == "a");
     app.sel = Some(("album:gone".into(), 3));
     let _ = app.update(Message::Arrow(false));
+    let _ = app.update(Message::Queue(Vec::new(), false));
+    assert!(app.toast.is_none());
+    let dir: Vec<Song> = [json!({"id": "d1", "isDir": true}), json!({"id": "s1"})]
+        .map(|v| parse(v).expect("entry"))
+        .into();
+    let fkey = "folder:f1".to_string();
+    let _ = app.update(Message::Loaded(
+        fkey.clone(),
+        Ok(Arc::new(("F".to_string(), dir))),
+    ));
+    app.sel = Some((fkey.clone(), 1));
+    let _ = app.update(Message::Arrow(true));
+    assert_eq!(app.sel.as_ref().map(|s| s.1), Some(1));
+    let _ = app.update(Message::PlayAt(fkey, 0));
+    assert!(app.toast.is_none() && cur(&app) == "a");
+    let _ = app.update(Message::Seek(99.0));
+    assert_eq!(app.position, 0.0);
 }
 
 #[tokio::test]
@@ -164,7 +181,7 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     let mut app = app();
     let _ = app.update(Message::Key("C+S".into()));
     assert!(app.shuffle.is_some());
-    let _ = app.update(Message::Record(Some("shuffle")));
+    let _ = app.update(act(|a| a.recording = Some("shuffle")));
     let _ = app.update(Message::Key("C+R".into()));
     assert!(app.binding("shuffle") == "C+R" && app.binding("repeat").is_empty());
     let _ = app.update(Message::Key("C+R".into()));
@@ -177,7 +194,7 @@ fn cover_cache_drops_large_covers_over_the_limit() {
     for k in 0..4 {
         let h = iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]);
         let d = (iced::Color::BLACK, h, 3 << 20);
-        let _ = app.update(Message::Cover(format!("c{k}"), 640, Ok(d)));
+        app.covers.insert(format!("c{k}"), 640, d);
     }
     assert!(app.covers.bytes <= 8 << 20 && app.covers.get("c3", 640).is_some());
 }
