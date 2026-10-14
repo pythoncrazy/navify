@@ -647,6 +647,23 @@ impl App {
         });
     }
 
+    fn pl_send(
+        &mut self,
+        pid: String,
+        verb: &str,
+        add: Vec<String>,
+        rm: Vec<usize>,
+    ) -> Task<Message> {
+        self.menu = None;
+        let done = format!("{verb} {}.", self.playlist(&pid).map_or("", |p| &p.name));
+        let undo = reload(&pid);
+        let f = |s: Session| async move { s.playlist_update(&pid, None, None, &add, &rm).await };
+        Task::batch([
+            self.send(f, "Could not change the playlist.", undo),
+            self.toast(&done),
+        ])
+    }
+
     fn find_song(&self, id: &str) -> Option<Song> {
         let mut lists = self.cache.values().filter_map(|(_, v)| song_list(v));
         let s = lists.find_map(|(l, _)| l.iter().find(|s| s.id == id));
@@ -1596,18 +1613,13 @@ impl App {
                 return self.update(m);
             }
             Message::PlAdd(pid, ids) => {
-                self.menu = None;
                 let songs: Vec<Song> = ids.iter().filter_map(|id| self.find_song(id)).collect();
                 let more = (songs.len() as u32, songs.iter().map(|s| s.duration).sum());
+                if songs.len() < ids.len() {
+                    self.cache.remove(&format!("playlist:{pid}"));
+                }
                 self.recount(&pid, more, |s| s.extend(songs));
-                let done = format!("Added to {}.", self.playlist(&pid).map_or("", |p| &p.name));
-                let done = self.toast(&done);
-                let undo = reload(&pid);
-                let add = |s: Session| async move {
-                    s.playlist_update(&pid, None, None, &ids, &[]).await
-                };
-                let add = self.send(add, "Could not add the song to the playlist.", undo);
-                return Task::batch([add, done]);
+                return self.pl_send(pid, "Added to", ids, Vec::new());
             }
             Message::PlNew(name, ids) => {
                 self.menu = None;
@@ -1636,7 +1648,6 @@ impl App {
                 return Task::batch([back, self.send(del, "Could not delete the playlist.", undo)]);
             }
             Message::PlRemove(idx) => {
-                self.menu = None;
                 let Some(pid) = self.route.strip_prefix("playlist:").map(str::to_string) else {
                     return Task::none();
                 };
@@ -1645,17 +1656,7 @@ impl App {
                     let mut n = 0;
                     s.retain(|_| (!idx.contains(&n), n += 1).0);
                 });
-                let done = format!(
-                    "Removed from {}.",
-                    self.playlist(&pid).map_or("", |p| &p.name)
-                );
-                let done = self.toast(&done);
-                let undo = reload(&pid);
-                let rm = |s: Session| async move {
-                    s.playlist_update(&pid, None, None, &[], &idx).await
-                };
-                let rm = self.send(rm, "Could not remove the songs from the playlist.", undo);
-                return Task::batch([rm, done]);
+                return self.pl_send(pid, "Removed from", Vec::new(), idx);
             }
             Message::Radio(id) => {
                 self.menu = None;
