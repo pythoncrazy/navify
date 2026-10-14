@@ -126,7 +126,8 @@ fn shelf<'a>(title: &str, all: Option<String>, cards: impl Iterator<Item = El<'a
     column![heading(title, all), row].spacing(8).into()
 }
 
-fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, round: bool) -> El<'a> {
+fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, k: MenuKind) -> El<'a> {
+    let round = matches!(k, MenuKind::Artist(_));
     let cw = app.grid().1;
     let img = cw - 24.0;
     let art = cover(app, cid, img, round);
@@ -139,22 +140,39 @@ fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, round
     let style = theme::btn([theme::CLEAR, ELEVATED, BG], [TEXT; 3], 6.0);
     let b = button(column![art, lines].spacing(8)).padding(12);
     let b = b.style(style).width(cw).height(cw + 52.0);
-    b.on_press(Message::Nav(route)).into()
+    let b = b.on_press(Message::Nav(route));
+    mouse_area(b)
+        .on_right_press(Message::Menu(Box::new(k)))
+        .into()
 }
 
 fn album_card<'a>(app: &App, a: &Album, sub: String) -> El<'a> {
     let r = format!("album:{}", a.id);
-    card(app, &a.cover, &a.name, sub, r, false)
+    card(
+        app,
+        &a.cover,
+        &a.name,
+        sub,
+        r,
+        MenuKind::Album(Box::new(a.clone())),
+    )
 }
 
 fn artist_card<'a>(app: &App, a: &Artist) -> El<'a> {
     let r = format!("artist:{}", a.id);
-    card(app, &a.cover, &a.name, "Artist".into(), r, true)
+    card(
+        app,
+        &a.cover,
+        &a.name,
+        "Artist".into(),
+        r,
+        MenuKind::Artist(a.clone()),
+    )
 }
 
 fn playlist_card<'a>(app: &App, p: &Playlist) -> El<'a> {
     let (by, r) = (format!("By {}", p.owner), format!("playlist:{}", p.id));
-    card(app, &p.cover, &p.name, by, r, false)
+    card(app, &p.cover, &p.name, by, r, MenuKind::Playlist(p.clone()))
 }
 
 fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
