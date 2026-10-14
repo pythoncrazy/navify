@@ -1228,6 +1228,17 @@ fn settings(app: &App) -> El<'_> {
     let modes = modes.map(|(m, l)| (m, l.to_string())).into();
     let mode = pick(modes, st.play_mode, |s, v| s.play_mode = v);
     let ratings = tog(st.ratings, |s, b| s.ratings = b);
+    let confirm = tog(st.confirm_queue, |s, b| s.confirm_queue = b);
+    let skip = text_input("live, remix, intro", &st.queue_skip);
+    let skip = skip
+        .on_input(|v| set(|s, v| s.queue_skip = v, v))
+        .width(268);
+    let skip = skip.style(theme::input([ELEVATED; 2], [GREY; 2], [0.0, 1.0], 4.0));
+    let skip = skip
+        .font(theme::fw(Normal))
+        .padding([8, 12])
+        .size(14)
+        .into();
     let follow = tog(st.lyrics_follow, |s, b| s.lyrics_follow = b);
     let start_min = tog(st.start_min, |s, b| s.start_min = b);
     let min_tray = tog(st.min_tray, |s, b| s.min_tray = b);
@@ -1277,6 +1288,12 @@ fn settings(app: &App) -> El<'_> {
         line("Crossfade", fade),
         line("Seek step for keys and media controls", step),
         line("Action of the play buttons and double-click", mode),
+        head("Queue"),
+        line("Ask before you replace the queue", confirm),
+        line(
+            "Do not add songs with these words (separate with commas)",
+            skip
+        ),
         head("Streaming"),
         line("Transcode format", format),
         line("Maximum bitrate", rate),

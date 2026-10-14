@@ -49,6 +49,8 @@ pub struct Settings {
     pub ratings: bool,
     pub start_min: bool,
     pub min_tray: bool,
+    pub queue_skip: String,
+    pub confirm_queue: bool,
 }
 
 impl Default for Settings {
@@ -87,6 +89,8 @@ impl Default for Settings {
             ratings: false,
             start_min: false,
             min_tray: false,
+            queue_skip: String::new(),
+            confirm_queue: false,
         }
     }
 }

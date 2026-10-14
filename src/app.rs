@@ -195,6 +195,7 @@ pub enum Message {
     CloseWindow,
     Win(iced::window::Id),
     Full(bool),
+    Confirm,
 }
 
 #[derive(Debug, Default)]
@@ -300,6 +301,7 @@ pub struct App {
     pub login: Login,
     pub hidden: bool,
     pub modal: Option<(String, u8)>,
+    held: Option<Message>,
     pub new_pl_desc: String,
     pub shot: Option<String>,
     pub new_pl: String,
@@ -777,7 +779,24 @@ impl App {
         (i + 1 < len).then_some(i + 1).or(wrap)
     }
 
+    fn kept(&self) -> impl Fn(&Song) -> bool + use<> {
+        let words = self.cfg.settings.queue_skip.to_lowercase();
+        let words: Vec<String> = words.split(',').map(|w| w.trim().to_string()).collect();
+        let words: Vec<String> = words.into_iter().filter(|w| !w.is_empty()).collect();
+        move |s| {
+            let hay = [&s.title, &s.artist, &s.album, &s.genre].map(|f| f.to_lowercase());
+            !words.iter().any(|w| hay.iter().any(|h| h.contains(w)))
+        }
+    }
+
     fn start(&mut self, i: usize, shuffled: bool) -> Task<Message> {
+        let keep = self.kept();
+        let i = self.queue.iter().take(i).filter(|s| keep(s)).count();
+        self.queue.retain(|s| keep(s));
+        if self.queue.is_empty() {
+            let t = self.toast("The queue filter removed all the songs.");
+            return Task::batch([self.halt(), t]);
+        }
         self.shuffle = shuffled.then(|| shuffle(0..self.queue.len(), i));
         self.play_index(if shuffled { 0 } else { i }, 0.0)
     }
@@ -1101,7 +1120,24 @@ impl App {
     }
 
     fn handle(&mut self, m: Message) -> Task<Message> {
+        let st = &self.cfg.settings;
+        let replaces = match &m {
+            Message::Play(..) => true,
+            Message::PlayAt(k, _) | Message::PlayCtx(k, 0) => st.play_mode < 2 && *k != self.ctx,
+            Message::PlayCtx(k, 1) => *k != self.ctx,
+            _ => false,
+        };
+        if replaces && st.confirm_queue && self.modal.is_none() && !self.queue.is_empty() {
+            (self.menu, self.modal, self.held) = (None, Some((String::new(), 4)), Some(m));
+            return Task::none();
+        }
         match m {
+            Message::Confirm => {
+                let held = self.held.take().expect("the dialog holds a play action");
+                let t = self.update(held);
+                self.modal = None;
+                return t;
+            }
             Message::Loaded(key, Err(e)) => {
                 self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
                 if self.shot.is_some() {
@@ -1244,6 +1280,10 @@ impl App {
                 return self.send(rate, "Could not set the rating.");
             }
             Message::Queue(songs, next) => {
+                let songs: Vec<Song> = songs.into_iter().filter(self.kept()).collect();
+                if songs.is_empty() {
+                    return self.toast("The queue filter removed all the songs.");
+                }
                 let (n, at) = (songs.len(), if next { self.index + 1 } else { usize::MAX });
                 if let Some(o) = &mut self.shuffle {
                     let base = self.queue.len();
@@ -1627,11 +1667,10 @@ impl App {
                         let one = list.into_iter().nth(n).into_iter().collect();
                         return self.play_songs(one, src, m);
                     }
-                    1 => {
+                    m => {
                         (self.queue, self.source) = (list, src);
-                        self.start(n, true)
+                        self.start(n, m == 1 || self.shuffle.is_some())
                     }
-                    _ => self.update(Message::Play(list, n, src)),
                 };
                 self.ctx = key;
                 return t;

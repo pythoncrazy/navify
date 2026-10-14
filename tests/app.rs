@@ -109,3 +109,21 @@ async fn playlist_search_and_sort_keep_the_server_order() {
         .iter();
     assert_eq!(left.map(|s| s.id.as_str()).collect::<String>(), "ca");
 }
+
+#[tokio::test]
+async fn queue_filter_skips_songs_and_replace_asks_first() {
+    let mut app = app();
+    let songs: Vec<Song> = ["a", "b (Live)", "c"]
+        .map(|t| parse(json!({"id": t, "title": t})).expect("song"))
+        .into();
+    let cur = |app: &App| app.current_song().expect("a song plays").id.clone();
+    app.cfg.settings.queue_skip = " live ,".into();
+    let _ = app.update(Message::Play(songs.clone(), 2, "t".into()));
+    assert_eq!(app.queue.len(), 2);
+    assert_eq!(cur(&app), "c");
+    app.cfg.settings.confirm_queue = true;
+    let _ = app.update(Message::Play(songs, 0, "u".into()));
+    assert!(app.modal.as_ref().is_some_and(|m| m.1 == 4) && cur(&app) == "c");
+    let _ = app.update(Message::Confirm);
+    assert!(app.modal.is_none() && cur(&app) == "a");
+}
