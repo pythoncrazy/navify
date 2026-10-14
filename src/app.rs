@@ -1730,6 +1730,7 @@ impl App {
         let (mut huge, mut head): (Vec<&String>, Vec<&String>) = Default::default();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
+            big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
             small.push(a.artists.first().map_or(&a.artist_id, |x| &x.id));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             head.push(&p.cover);
