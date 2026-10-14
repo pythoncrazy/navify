@@ -337,17 +337,17 @@ fn lib_panel(app: &App) -> El<'_> {
         b.on_press(Message::Nav(route)).into()
     };
     let head: El = if mini {
-        let b = icon_btn(i::LIBRARY, 20.0, Message::LibCollapse);
+        let b = icon_btn(i::LIBRARY, 20.0, task(App::lib_collapse));
         let b = tip(b, "Expand Your Library", Right);
         container(b).center_x(Fill).into()
     } else {
         let title = bold("Your Library", 16.0);
-        let title = theme::link_btn(title, TEXT, Message::LibCollapse);
+        let title = theme::link_btn(title, TEXT, task(App::lib_collapse));
         let plus = row![i(i::PLUS, 16.0), bold("Create", 14.0)].spacing(8);
         let plus = button(container(plus.align_y(Center)).center_y(32)).padding([0, 16]);
         let plus = plus
             .style(theme::round(CHIP))
-            .on_press(Message::NewPlaylist);
+            .on_press(Message::PlNew(String::new(), Vec::new()));
         let plus = tip(plus, "Create playlist", Bottom);
         let title = tip(title, "Collapse Your Library", Bottom);
         let r = row![title, Space::new().width(Fill), plus];
@@ -441,7 +441,11 @@ fn player_bar(app: &App) -> El<'_> {
     let total = total.style(theme::link(SUB));
     let total = total.on_press(set(|s, b| s.remaining = b, !rest));
     let seek = slider(0.0..=dur, pos, |v| act(move |a| a.seek_preview = Some(v)));
-    let seek = seek.on_release(Message::SeekRelease).style(theme::seek);
+    let seek = seek
+        .on_release(task(|a| {
+            iced::Task::batch(a.seek_preview.take().map(|v| a.update(Message::Seek(v))))
+        }))
+        .style(theme::seek);
     let at = sub(fmt_dur(pos), 12.0).width(48).align_x(iced::Right);
     let progress: El = match song {
         None => {
@@ -469,7 +473,7 @@ fn player_bar(app: &App) -> El<'_> {
         side(fi(theme::fill::PREV), false, "Previous", Message::Prev),
         play,
         side(fi(theme::fill::NEXT), false, "Next", Message::Next(true)),
-        side(repeat_icon, rep > 0, repeat, Message::Repeat),
+        side(repeat_icon, rep > 0, repeat, act(App::repeat)),
     ];
     let center = column![controls.spacing(8).align_y(Center), progress];
     let center = center.spacing(4).align_x(Center).max_width(722);
@@ -502,14 +506,17 @@ fn player_bar(app: &App) -> El<'_> {
             "Connect to a device",
             Message::Menu(Box::new(MenuKind::Device))
         ),
-        side(vol_icon, false, mute, Message::Mute),
+        side(vol_icon, false, mute, act(|a| a.muted = !a.muted)),
         volume,
-        (app.full || app.current_song().is_some()).then(|| side(
-            ic([i::FULL, i::WINDOW][usize::from(app.full)]),
-            false,
-            ["Full screen", "Exit full screen"][usize::from(app.full)],
-            Message::Full(!app.full),
-        )),
+        (app.full || app.current_song().is_some()).then(|| {
+            let full = app.full;
+            side(
+                ic([i::FULL, i::WINDOW][usize::from(full)]),
+                false,
+                ["Full screen", "Exit full screen"][usize::from(full)],
+                task(move |a| a.set_full(!full)),
+            )
+        }),
     ];
     let right = container(right.spacing(4).align_y(Center)).align_right(FillPortion(3));
     let left = container(left).width(FillPortion(3));

@@ -47,11 +47,13 @@ fn main() {
         if Instant::now() >= next {
             let Some(step) = steps.next() else { break };
             match step {
-                "tab" | "shift-tab" => emu.update(&app, Message::FocusMove(step == "shift-tab")),
-                "up" | "down" => emu.update(&app, Message::Arrow(step == "up")),
-                "enter" => emu.update(&app, Message::Enter),
+                "tab" => emu.update(&app, Message::Key("Tab".into())),
+                "shift-tab" => emu.update(&app, Message::Key("Shift+Tab".into())),
+                "up" => emu.update(&app, Message::Key("ArrowUp".into())),
+                "down" => emu.update(&app, Message::Key("ArrowDown".into())),
+                "enter" => emu.update(&app, Message::Key("Enter".into())),
                 "escape" => emu.update(&app, Message::MenuClose),
-                "select-all" => emu.update(&app, Message::SelectAll),
+                "select-all" => emu.update(&app, Message::Key("C+A".into())),
                 _ => {
                     let nums = step.split(['(', ',', ')']).map(str::trim);
                     if let [x, y] = nums.filter_map(|t| t.parse().ok()).collect::<Vec<f32>>()[..] {

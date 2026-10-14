@@ -165,7 +165,7 @@ pub struct Lyrics {
     pub lines: Vec<(Option<u64>, String)>,
 }
 
-type Trio = (Vec<Artist>, Vec<Album>, Vec<Song>);
+pub type Trio = (Vec<Artist>, Vec<Album>, Vec<Song>);
 type Paged<T> = Result<(Vec<T>, usize)>;
 type Q<'a> = [(&'a str, &'a str)];
 
