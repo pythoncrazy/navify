@@ -1435,13 +1435,18 @@ impl App {
                 (self.position, self.save_seq) = (self.pos(), self.save_seq + 1);
                 return Task::batch([l, self.save_queue()]);
             }
-            Message::Prev if self.pos() > 3.0 => return self.update(Message::Seek(0.0)),
-            Message::Prev if self.index > 0 => return self.play_index(self.index - 1, 0.0),
-            Message::Prev => {}
+            Message::Prev if self.pos() > 3.0 || self.index == 0 => {
+                return self.update(Message::Seek(0.0));
+            }
+            Message::Prev => return self.play_index(self.index - 1, 0.0),
             Message::Next(manual) => {
                 return match self.next_index(manual) {
                     Some(n) => self.play_index(n, 0.0),
-                    None => self.halt(),
+                    None => {
+                        let done = self.halt();
+                        (self.index, self.position) = (0, 0.0);
+                        done
+                    }
                 };
             }
             Message::Seek(pos) => {
@@ -2070,7 +2075,7 @@ impl App {
             Message::Audio(navify_audio::Event::Ended) => return self.update(Message::Next(false)),
             Message::Audio(navify_audio::Event::Error(e)) => {
                 let done = self.listen(false);
-                (self.playing, self.loaded) = (false, false);
+                (self.position, self.playing, self.loaded) = (self.pos(), false, false);
                 return Task::batch([done, self.toast(&format!("Playback failed. {e}"))]);
             }
         }
