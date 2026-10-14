@@ -166,11 +166,9 @@ pub fn live<'a>(
             self.0.as_widget().size()
         }
         fn layout(&mut self, t: &mut Tree, r: &R, l: &layout::Limits) -> layout::Node {
-            let n = self.0.as_widget_mut().layout(&mut t.children[0], r, l);
-            layout::Node::with_children(n.size(), vec![n])
+            self.0.as_widget_mut().layout(&mut t.children[0], r, l)
         }
         fn draw(&self, t: &Tree, r: &mut R, th: &T, s: &Style, l: Layout, c: Cursor, v: &Rect) {
-            let l = l.children().next().expect("a child layout");
             self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
         }
         fn children(&self) -> Vec<Tree> {
@@ -180,7 +178,6 @@ pub fn live<'a>(
             t.diff_children(std::slice::from_ref(&self.0));
         }
         fn operate(&mut self, t: &mut Tree, l: Layout, r: &R, op: &mut dyn Operation) {
-            let l = l.children().next().expect("a child layout");
             self.0.as_widget_mut().operate(&mut t.children[0], l, r, op);
         }
         fn update(
@@ -208,7 +205,6 @@ pub fn live<'a>(
                 let wait = p.floor() + 1.15 - p;
                 sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
             }
-            let l = l.children().next().expect("a child layout");
             self.0
                 .as_widget_mut()
                 .update(&mut t.children[0], e, l, c, r, cb, sh, v);
@@ -221,7 +217,6 @@ pub fn live<'a>(
             v: &Rect,
             r: &R,
         ) -> Interaction {
-            let l = l.children().next().expect("a child layout");
             self.0
                 .as_widget()
                 .mouse_interaction(&t.children[0], l, c, v, r)
