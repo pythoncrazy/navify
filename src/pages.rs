@@ -339,12 +339,6 @@ fn grid<'a>(
     container(col).padding(p).into()
 }
 
-fn grid_head<'a>(title: &'a str, chips: Option<El<'a>>) -> El<'a> {
-    let col = column![bold(title, 32.0)].push(chips).spacing(16);
-    let p = Padding::new(PAD).bottom(0);
-    container(col).padding(p).height(GRID_Y).into()
-}
-
 fn kind(a: &Album) -> (&'static str, &'static str) {
     let t = |k: &str| a.release_types.iter().any(|x| x.eq_ignore_ascii_case(k));
     match () {
@@ -947,7 +941,9 @@ fn artist(app: &App) -> Option<El<'_>> {
     let appears = appears.into_iter().flatten().take(k);
     let appears = appears.map(|x| album_card(app, x, year_kind(x)));
     let about = info.filter(|i| !i.biography.is_empty()).map(|info| {
-        let bio = txt(strip_html(&info.biography), 16.0).color(SUB);
+        let bio = info.biography.split('<').enumerate();
+        let bio = bio.map(|(n, p)| [p, p.split_once('>').map_or("", |x| x.1)][usize::from(n > 0)]);
+        let bio = txt(bio.collect::<String>().trim().to_string(), 16.0).color(SUB);
         let bio = container(bio).padding(PAD).max_width(672);
         let bio = container(bio.style(fill(ELEVATED, 8.0))).padding([0.0, PAD]);
         column![heading("About", None), bio].spacing(8)
@@ -971,13 +967,6 @@ fn artist(app: &App) -> Option<El<'_>> {
         banner,
     };
     Some(page(app, p, body.into()))
-}
-
-fn strip_html(s: &str) -> String {
-    let mut parts = s.split('<');
-    let head = parts.next().unwrap_or("").to_string();
-    let rest = parts.map(|p| p.split_once('>').map_or("", |x| x.1));
-    (head + &rest.collect::<String>()).trim().to_string()
 }
 
 fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
@@ -1082,7 +1071,7 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
     ];
     let cur = if arg.is_empty() { "newest" } else { arg };
     let chips = SORTS.map(|(k, name)| theme::chip_btn(name, cur == k, go("albums", k)));
-    let chips = (kind == "albums").then(|| Row::with_children(chips).spacing(8).into());
+    let chips = (kind == "albums").then(|| Row::with_children(chips).spacing(8));
     let title = match kind {
         "genre" => arg,
         "artists" => "Artists",
@@ -1094,7 +1083,11 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
     let artists = artists.map(|v| g(v.len(), &|n| artist_card(app, &v[n])));
     let albums = app.data::<(Vec<Album>, usize)>(&app.route).map(|(v, _)| v);
     let albums = albums.map(|v| g(v.len(), &|n| album_card(app, &v[n], v[n].artist.clone())));
-    column![grid_head(title, chips), artists.or(albums)].into()
+    let head = column![bold(title, 32.0)].push(chips).spacing(16);
+    let head = container(head)
+        .padding(Padding::new(PAD).bottom(0))
+        .height(GRID_Y);
+    column![head, artists.or(albums)].into()
 }
 
 fn folders<'a>(app: &'a App) -> El<'a> {

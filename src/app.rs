@@ -40,9 +40,9 @@ type Run = dyn Fn(&mut App) -> Task<Message> + Send + Sync;
 
 macro_rules! pager {
     ($v:expr, $p:ident => $e:expr) => {
-        ($v.downcast_ref::<Page<Album>>().map(|$p| $e))
-            .or_else(|| $v.downcast_ref::<Page<Artist>>().map(|$p| $e))
-            .or_else(|| $v.downcast_ref::<Page<Song>>().map(|$p| $e))
+        ($v.downcast_ref::<Page<Album>>().and_then(|$p| $e))
+            .or_else(|| $v.downcast_ref::<Page<Artist>>().and_then(|$p| $e))
+            .or_else(|| $v.downcast_ref::<Page<Song>>().and_then(|$p| $e))
     };
 }
 
@@ -1364,8 +1364,16 @@ impl App {
             Message::Loaded(key, off, Ok(v)) => {
                 self.pending.remove(&format!("{key}#{off}"));
                 self.seeds.remove(&key);
-                let Some(v) = self.merge(&key, off, v) else {
-                    return Task::none();
+                let old = self.cache.get(&key).map(|c| &c.1).filter(|_| off > 0);
+                let join = |old: &AnyData| {
+                    pager!(v, b => old.downcast_ref::<Page<_>>().filter(|a| a.0.len() == off).map(|a| {
+                        Arc::new(([&a.0[..], &b.0[..]].concat(), b.1)) as AnyData
+                    }))
+                };
+                let v = match old.and_then(join) {
+                    None if off == 0 => v,
+                    Some(v) => v,
+                    _ => return Task::none(),
                 };
                 let banner = key.starts_with("artist:") && self.cfg.settings.banners;
                 let banner = banner
@@ -1395,9 +1403,9 @@ impl App {
                 if key == "lyrics" && self.lyric.1.is_some_and(|y| (y.min(max) - off).abs() > 2.0) {
                     self.lyric.1 = None;
                 }
-                let more = self
-                    .page_len(&key)
-                    .filter(|_| content > 0.0 && off + view * 3.0 >= content);
+                let v = self.cache.get(&key).map(|c| &c.1);
+                let more = v.and_then(|v| pager!(v, p => (p.0.len() < p.1).then_some(p.0.len())));
+                let more = more.filter(|_| content > 0.0 && off + view * 3.0 >= content);
                 let more = Task::batch(more.map(|n| self.request(&key, n)));
                 return Task::batch([more, self.disc_load()]);
             }
@@ -2087,22 +2095,6 @@ impl App {
         }
         (self.queue, self.source) = (songs, src);
         self.start(0, mode == 1)
-    }
-
-    fn merge(&self, key: &str, off: usize, v: AnyData) -> Option<AnyData> {
-        if off == 0 {
-            return Some(v);
-        }
-        let old = &self.cache.get(key)?.1;
-        pager!(v, b => old.downcast_ref::<Page<_>>().filter(|a| a.0.len() == off).map(|a| {
-            Arc::new(([&a.0[..], &b.0[..]].concat(), b.1)) as AnyData
-        }))
-        .flatten()
-    }
-
-    fn page_len(&self, key: &str) -> Option<usize> {
-        let v = &self.cache.get(key)?.1;
-        pager!(v, p => (p.0.len() < p.1).then_some(p.0.len())).flatten()
     }
 
     fn visible_covers(&self) -> Vec<(String, u32)> {
