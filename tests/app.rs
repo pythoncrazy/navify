@@ -108,7 +108,7 @@ async fn playlist_search_and_sort_keep_the_server_order() {
     let key = "playlist:p1".to_string();
     let _ = app.update(Message::Nav(key.clone()));
     let songs: Vec<Song> = ["c", "a", "b"]
-        .map(|t| json!({"id": t, "title": t}))
+        .map(|t| json!({"id": t, "title": t, "duration": 60}))
         .to_vec()
         .into_iter()
         .map(|v| parse(v).expect("song"))
@@ -126,12 +126,11 @@ async fn playlist_search_and_sort_keep_the_server_order() {
     let _ = app.update(act(|a| a.pl_find = Some("B".into())));
     let _ = app.update(Message::SelectAll);
     let _ = app.update(Message::DeleteSel);
-    let left = app
+    let (p, left) = app
         .data::<(navify::api::Playlist, Vec<Song>)>(&key)
-        .expect("playlist")
-        .1
-        .iter();
-    assert_eq!(left.map(|s| s.id.as_str()).collect::<String>(), "ca");
+        .expect("playlist");
+    assert_eq!(left.iter().map(|s| s.id.as_str()).collect::<String>(), "ca");
+    assert_eq!((p.song_count, p.duration), (2, 120.0));
 }
 
 #[tokio::test]
