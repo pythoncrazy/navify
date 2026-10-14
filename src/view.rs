@@ -146,6 +146,90 @@ pub fn focusable<'a>(
     Element::new(Focus(c.into(), msg, radius, id.map(Id::from)))
 }
 
+pub fn live<'a>(
+    clock: Box<dyn Fn() -> f32>,
+    run: bool,
+    build: impl Fn(f32) -> El<'a> + 'a,
+) -> El<'a> {
+    use iced::advanced::renderer::Style;
+    use iced::advanced::widget::{Operation, Tree, Widget};
+    use iced::advanced::{Clipboard, Layout, Shell, layout};
+    use iced::window::Event::RedrawRequested;
+    use iced::{Event, Length, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction};
+    type R = iced::Renderer;
+    type T = iced::Theme;
+    type Build<'a> = Box<dyn Fn(f32) -> El<'a> + 'a>;
+    struct Live<'a>(El<'a>, Box<dyn Fn() -> f32>, Build<'a>, bool, f32);
+    impl Widget<Message, T, R> for Live<'_> {
+        fn size(&self) -> Size<Length> {
+            self.0.as_widget().size()
+        }
+        fn layout(&mut self, t: &mut Tree, r: &R, l: &layout::Limits) -> layout::Node {
+            let n = self.0.as_widget_mut().layout(&mut t.children[0], r, l);
+            layout::Node::with_children(n.size(), vec![n])
+        }
+        fn draw(&self, t: &Tree, r: &mut R, th: &T, s: &Style, l: Layout, c: Cursor, v: &Rect) {
+            let l = l.children().next().expect("a child layout");
+            self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
+        }
+        fn children(&self) -> Vec<Tree> {
+            vec![Tree::new(&self.0)]
+        }
+        fn diff(&self, t: &mut Tree) {
+            t.diff_children(std::slice::from_ref(&self.0));
+        }
+        fn operate(&mut self, t: &mut Tree, l: Layout, r: &R, op: &mut dyn Operation) {
+            let l = l.children().next().expect("a child layout");
+            self.0.as_widget_mut().operate(&mut t.children[0], l, r, op);
+        }
+        fn update(
+            &mut self,
+            t: &mut Tree,
+            e: &Event,
+            l: Layout,
+            c: Cursor,
+            r: &R,
+            cb: &mut dyn Clipboard,
+            sh: &mut Shell<Message>,
+            v: &Rect,
+        ) {
+            if let (Event::Window(RedrawRequested(now)), true) = (e, self.3) {
+                let p = (self.1)();
+                if p.floor() != self.4.floor() {
+                    (self.0, self.4) = ((self.2)(p), p);
+                    t.diff_children(std::slice::from_ref(&self.0));
+                    let size = l.bounds().size();
+                    let limits = layout::Limits::new(size, size);
+                    self.0
+                        .as_widget_mut()
+                        .layout(&mut t.children[0], r, &limits);
+                }
+                let wait = p.floor() + 1.15 - p;
+                sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
+            }
+            let l = l.children().next().expect("a child layout");
+            self.0
+                .as_widget_mut()
+                .update(&mut t.children[0], e, l, c, r, cb, sh, v);
+        }
+        fn mouse_interaction(
+            &self,
+            t: &Tree,
+            l: Layout,
+            c: Cursor,
+            v: &Rect,
+            r: &R,
+        ) -> Interaction {
+            let l = l.children().next().expect("a child layout");
+            self.0
+                .as_widget()
+                .mouse_interaction(&t.children[0], l, c, v, r)
+        }
+    }
+    let p = clock();
+    Element::new(Live(build(p), clock, Box::new(build), run, p))
+}
+
 pub fn art<'a>(px: f32, glyph: Txt<'a>, bg: impl Into<Background>) -> El<'a> {
     let r = if px < 100.0 { 4.0 } else { 6.0 };
     let g = container(glyph.size(px * 0.38).center()).center(px);
@@ -433,20 +517,27 @@ fn player_bar(app: &App) -> El<'_> {
         row![art, lines, heart].spacing(12).align_y(Center)
     });
     let dur = song.map_or(0.0, |s| s.duration).max(1.0);
-    let pos = app.seek_preview.unwrap_or(app.position.min(dur));
     let rest = app.cfg.settings.remaining;
-    let left_dur = format!("-{}", fmt_dur(dur - pos));
-    let total = if rest { left_dur } else { fmt_dur(dur) };
-    let total = button(txt(total, 12.0)).width(48).padding(0);
-    let total = total.style(theme::link(SUB));
-    let total = total.on_press(set(|s, b| s.remaining = b, !rest));
-    let seek = slider(0.0..=dur, pos, |v| act(move |a| a.seek_preview = Some(v)));
-    let seek = seek
-        .on_release(task(|a| {
-            iced::Task::batch(a.seek_preview.take().map(|v| a.update(Message::Seek(v))))
-        }))
-        .style(theme::seek);
-    let at = sub(fmt_dur(pos), 12.0).width(48).align_x(iced::Right);
+    let bar = move |pos: f32| -> El<'_> {
+        let pos = pos.min(dur);
+        let total = if rest {
+            format!("-{}", fmt_dur(dur - pos))
+        } else {
+            fmt_dur(dur)
+        };
+        let total = button(txt(total, 12.0)).width(48).padding(0);
+        let total = total.style(theme::link(SUB));
+        let total = total.on_press(set(|s, b| s.remaining = b, !rest));
+        let seek = slider(0.0..=dur, pos, |v| act(move |a| a.seek_preview = Some(v)));
+        let seek = seek
+            .on_release(task(|a| {
+                iced::Task::batch(a.seek_preview.take().map(|v| a.update(Message::Seek(v))))
+            }))
+            .style(theme::seek);
+        let at = sub(fmt_dur(pos), 12.0).width(48).align_x(iced::Right);
+        row![at, seek, total].spacing(8).align_y(Center).into()
+    };
+    let run = app.playing && !app.hidden && app.seek_preview.is_none();
     let progress: El = match song {
         None => {
             let rail = Space::new().width(Fill).height(4);
@@ -455,7 +546,7 @@ fn player_bar(app: &App) -> El<'_> {
             let row = row![none().align_x(iced::Right), rail, none()].spacing(8);
             container(row.align_y(Center)).center_y(16).into()
         }
-        Some(_) => row![at, seek, total].spacing(8).align_y(Center).into(),
+        Some(_) => live(app.clock(), run, bar),
     };
     let playing = usize::from(app.playing);
     let glyph = theme::filled([theme::fill::PLAY, theme::fill::PAUSE][playing], 16.0);

@@ -86,10 +86,27 @@ struct Shared {
     broken: AtomicBool,
     read: AtomicU64,
     flush: AtomicU64,
+    base: AtomicU64,
+    rate: AtomicU32,
 }
 
 fn get(a: &AtomicU32) -> f32 {
     f32::from_bits(a.load(Relaxed))
+}
+
+impl Shared {
+    fn now(&self) -> f32 {
+        let ahead = self
+            .read
+            .load(Relaxed)
+            .saturating_sub(self.base.load(Relaxed));
+        get(&self.pos) + ahead as f32 / 2.0 / self.rate.load(Relaxed).max(1) as f32
+    }
+
+    fn set_pos(&self, secs: f32, base: u64) {
+        self.base.store(base, Relaxed);
+        self.pos.store(secs.to_bits(), Relaxed);
+    }
 }
 
 pub struct Player {
@@ -117,7 +134,7 @@ impl Player {
 
     pub fn play(&self, track: Track, at: f32) {
         self.sh.paused.store(false, Relaxed);
-        self.sh.pos.store(at.max(0.0).to_bits(), Relaxed);
+        self.sh.set_pos(at.max(0.0), u64::MAX);
         self.send(Cmd::Play(track, at.max(0.0)));
     }
 
@@ -131,7 +148,7 @@ impl Player {
     }
 
     pub fn seek(&self, secs: f32) {
-        self.sh.pos.store(secs.max(0.0).to_bits(), Relaxed);
+        self.sh.set_pos(secs.max(0.0), u64::MAX);
         self.send(Cmd::Seek(secs.max(0.0)));
     }
 
@@ -156,7 +173,12 @@ impl Player {
     }
 
     pub fn position(&self) -> f32 {
-        get(&self.sh.pos)
+        self.sh.now()
+    }
+
+    pub fn clock(&self) -> impl Fn() -> f32 + use<> {
+        let sh = self.sh.clone();
+        move || sh.now()
     }
 }
 
@@ -733,6 +755,7 @@ fn open(
         .map(|c| c.with_sample_rate(want))
         .map_or_else(|| dev.default_output_config(), Ok)?;
     let rate = sup.sample_rate();
+    sh.rate.store(rate, Relaxed);
     let buffer_size = match *sup.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
             cpal::BufferSize::Fixed((rate / 20).clamp(min, max))
@@ -828,7 +851,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 Cmd::Seek(s) => mix.seek(&io, s).unwrap_or_else(fail),
                 Cmd::Stop => {
                     (mix.cur, mix.inc) = (None, None);
-                    sh.pos.store(0, Relaxed);
+                    sh.set_pos(0.0, u64::MAX);
                 }
             }
         }
@@ -891,9 +914,9 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         }
         let read = sh.read.load(Relaxed);
         while marks.front().is_some_and(|m| m.0 <= read) {
-            let (_, p, e) = marks.pop_front().expect("a mark");
+            let (at, p, e) = marks.pop_front().expect("a mark");
             if let Some(p) = p {
-                sh.pos.store(p.to_bits(), Relaxed);
+                sh.set_pos(p, at);
             }
             if let Some(e) = e {
                 let _ = tx.send(e);
