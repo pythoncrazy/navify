@@ -808,15 +808,18 @@ impl App {
 
     fn disk(&self, covers: Option<u64>) -> Task<Message> {
         let dir = crate::api::cache_dir("");
-        let scan = tokio::task::spawn_blocking(move || {
+        let scan = move || {
             covers.inspect(|&c| crate::api::prune(&dir.join("covers"), c));
             let files = crate::api::cache_files(&dir);
             files.iter().map(|f| f.2).sum::<u64>()
-        });
-        Task::perform(scan, |n| {
-            let n: AnyData = Arc::new(n.expect("cache scan"));
-            Message::Loaded("disk".into(), Ok(n))
-        })
+        };
+        Task::perform(
+            async move { tokio::task::spawn_blocking(scan).await },
+            |n| {
+                let n: AnyData = Arc::new(n.expect("cache scan"));
+                Message::Loaded("disk".into(), Ok(n))
+            },
+        )
     }
 
     fn next_index(&self, manual: bool) -> Option<usize> {
@@ -915,14 +918,17 @@ impl App {
             #[cfg(not(all(unix, not(target_os = "macos"))))]
             n.show().map(drop).map_err(|e| e.to_string())
         };
-        let note = Task::perform(tokio::task::spawn_blocking(show), |r| {
-            match r.expect("the notification task ends") {
-                Ok(()) => Message::Noop,
-                Err(e) => task(move |a| a.toast(&format!("Could not show a notification. {e}"))),
-            }
+        let note = self.cfg.settings.notify.then(|| {
+            Task::perform(tokio::task::spawn_blocking(show), |r| {
+                match r.expect("the notification task ends") {
+                    Ok(()) => Message::Noop,
+                    Err(e) => {
+                        task(move |a| a.toast(&format!("Could not show a notification. {e}")))
+                    }
+                }
+            })
         });
-        let note = Task::batch(self.cfg.settings.notify.then_some(note));
-        Task::batch([lyr, now, note, self.save_later()])
+        Task::batch([lyr, now, Task::batch(note), self.save_later()])
     }
 
     fn pos(&self) -> f32 {
