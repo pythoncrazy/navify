@@ -109,8 +109,13 @@ async fn bad_json_from_the_server_gives_errors() {
     std::thread::spawn(move || {
         for (b, c) in bodies.iter().cycle().zip(srv.incoming()) {
             let mut c = c.expect("connection");
-            let _ = std::io::Read::read(&mut c, &mut [0; 4096]);
-            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", b.len());
+            let mut r = std::io::BufReader::new(&c);
+            let lines = std::io::BufRead::lines(&mut r).map_while(Result::ok);
+            lines.take_while(|l| !l.is_empty()).for_each(drop);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                b.len()
+            );
             let _ = std::io::Write::write_all(&mut c, (head + b).as_bytes());
         }
     });
