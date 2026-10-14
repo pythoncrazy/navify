@@ -2312,7 +2312,8 @@ fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
     if wide {
         img = img.crop_imm(0, (img.height() - h) * 3 / 10, img.width(), h);
     }
-    if img.width() > size || img.height() > size {
+    let big = img.width() > size || img.height() > size;
+    if big {
         img = img.thumbnail(size, size);
     }
     let small = img.resize_exact(24, 24, FilterType::Triangle).to_rgb8();
@@ -2340,7 +2341,7 @@ fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
         true => Color::from_rgb(l, l, l),
         false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
     };
-    if !wide {
+    if !wide && !big {
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
     let (w, h, px) = (img.width(), img.height(), img.into_rgba8().into_raw());
