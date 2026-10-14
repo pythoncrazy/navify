@@ -627,7 +627,8 @@ pub fn view(app: &App) -> El<'_> {
     let scrim = |c: Color| {
         let s = container(Space::new()).width(Fill).height(Fill);
         let s = mouse_area(s.style(fill(c, 0.0))).on_press(Message::MenuClose);
-        s.on_right_press(Message::MenuClose)
+        let s = s.on_right_press(Message::MenuClose);
+        s.interaction(iced::mouse::Interaction::Idle)
     };
     let modal = app.modal.as_ref().map(|(id, kind)| {
         let card = container(modal(app, id, *kind)).center(Fill);
