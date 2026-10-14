@@ -35,7 +35,7 @@ const GROUPS: [(&str, &str); 4] = [
 ];
 
 fn head_color(app: &App, id: &str) -> Color {
-    app.covers.color.get(id).copied().unwrap_or(GREY)
+    app.covers.color(id).unwrap_or(GREY)
 }
 
 pub fn art_px(app: &App) -> f32 {

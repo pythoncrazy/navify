@@ -118,6 +118,20 @@ fn say(text: String) -> Message {
     task(move |a| a.toast(&text))
 }
 
+fn reload(pid: &str) -> impl Fn(&mut App) -> Task<Message> + Clone + Send + Sync + 'static {
+    let key = format!("playlist:{pid}");
+    move |a| {
+        let shown = a.cache.remove(&key).is_some() && a.route == key;
+        a.cache.remove("lib");
+        let page = Task::batch(shown.then(|| a.request(&key, 0)));
+        Task::batch([a.request("lib", 0), page])
+    }
+}
+
+fn bare(id: &str) -> &str {
+    id.split_once('#').map_or(id, |x| x.0)
+}
+
 fn later(secs: f32, m: Message) -> Task<Message> {
     Task::future(tokio::time::sleep(Duration::from_secs_f32(secs))).map(move |()| m.clone())
 }
@@ -206,7 +220,7 @@ pub struct Covers {
     map: HashMap<String, [Slot; 4]>,
     pub bytes: usize,
     tick: u64,
-    pub color: HashMap<String, Color>,
+    color: HashMap<String, Color>,
     want: HashSet<(String, u32)>,
 }
 
@@ -217,12 +231,16 @@ fn slot(size: u32) -> usize {
 
 impl Covers {
     pub fn get(&self, id: &str, size: u32) -> Option<image::Handle> {
-        let (e, mut near) = (self.map.get(id)?, [0, 1, 2, 3]);
+        let (e, mut near) = (self.map.get(bare(id))?, [0, 1, 2, 3]);
         near.sort_unstable_by_key(|&j| SIZES[j].abs_diff(size));
         near.iter().find_map(|&j| Some(e[j].as_ref()?.1.clone()))
     }
 
+    pub fn color(&self, id: &str) -> Option<Color> {
+        self.color.get(bare(id)).copied()
+    }
     fn insert(&mut self, id: String, size: u32, (c, h, n): Decoded) {
+        let id = bare(&id).to_string();
         self.tick += 1;
         self.color.insert(id.clone(), c);
         let e = &mut self.map.entry(id).or_default()[slot(size)];
@@ -232,7 +250,7 @@ impl Covers {
             let all = self
                 .map
                 .iter()
-                .flat_map(|(id, e)| (0..3).map(move |j| (&e[j], id, j)));
+                .flat_map(|(id, e)| e.iter().enumerate().map(move |(j, s)| (s, id, j)));
             let all = all.filter_map(|(s, id, j)| Some((s.as_ref()?.0, id, j)));
             let (_, id, j) = all.min().expect("the counted bytes belong to covers");
             let id = id.clone();
@@ -719,7 +737,7 @@ impl App {
         let cur = self.current_song().map_or(String::new(), |x| x.id.clone());
         let pos = (self.pos() * 1000.0) as u64;
         let save = |s: Session| async move { s.save_play_queue(&ids, &cur, pos).await };
-        self.send(save, "Could not save the play queue.")
+        self.send(save, "Could not save the play queue.", |_| Task::none())
     }
 
     fn persist(&self) -> Task<Message> {
@@ -847,7 +865,11 @@ impl App {
         self.recent.truncate(50);
         let lyr = self.request(&format!("lyrics:{}", song.id), 0);
         let now = |s: Session| async move { s.scrobble(&song.id, false).await };
-        let now = self.send(now, "Could not send the playing track to the server.");
+        let now = self.send(
+            now,
+            "Could not send the playing track to the server.",
+            |_| Task::none(),
+        );
         let now = Task::batch(self.cfg.settings.scrobble.then_some(now));
         #[cfg(all(unix, not(target_os = "macos")))]
         let files = self
@@ -909,7 +931,11 @@ impl App {
         if left <= 0.0 {
             self.scrobbled = true;
             let done = |s: Session| async move { s.scrobble(&id, true).await };
-            return self.send(done, "Could not send the played track to the server.");
+            return self.send(
+                done,
+                "Could not send the played track to the server.",
+                |_| Task::none(),
+            );
         }
         let n = self.listen_seq;
         let heard =
@@ -945,9 +971,9 @@ impl App {
         };
         let mut tasks = Vec::new();
         for (id, size) in ids {
-            let e = self.covers.map.get(&id);
+            let e = self.covers.map.get(bare(&id));
             let have = e.is_some_and(|e| e[slot(size)].is_some());
-            if id.is_empty() || have || !self.covers.want.insert((id.clone(), size)) {
+            if id.is_empty() || have || !self.covers.want.insert((bare(&id).into(), size)) {
                 continue;
             }
             let (s, k) = (s.clone(), id.clone());
@@ -984,36 +1010,20 @@ impl App {
         })
     }
 
-    fn send<F>(&self, f: impl FnOnce(Session) -> F, fail: &'static str) -> Task<Message>
+    fn send<F, U>(&self, f: impl FnOnce(Session) -> F, fail: &str, undo: U) -> Task<Message>
     where
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
-    {
-        self.call(f, fail, |()| Message::Noop)
-    }
-
-    fn pl_send<F>(
-        &self,
-        pid: String,
-        f: impl FnOnce(Session, String) -> F,
-        fail: &str,
-    ) -> Task<Message>
-    where
-        F: Future<Output = anyhow::Result<()>> + Send + 'static,
+        U: Fn(&mut App) -> Task<Message> + Clone + Send + Sync + 'static,
     {
         let Some(s) = self.session.clone() else {
             return Task::none();
         };
-        let (key, fail) = (format!("playlist:{pid}"), fail.to_string());
-        Task::perform(f(s, pid), move |r| match r {
+        let fail = fail.to_string();
+        Task::perform(f(s), move |r| match r {
             Ok(()) => Message::Noop,
             Err(e) => {
-                let (key, text) = (key.clone(), format!("{fail} {e}"));
-                task(move |a| {
-                    let shown = a.cache.remove(&key).is_some() && a.route == key;
-                    a.cache.remove("lib");
-                    let page = Task::batch(shown.then(|| a.request(&key, 0)));
-                    Task::batch([a.toast(&text), a.request("lib", 0), page])
-                })
+                let (undo, text) = (undo.clone(), format!("{fail} {e}"));
+                task(move |a| Task::batch([undo(a), a.toast(&text)]))
             }
         })
     }
@@ -1182,7 +1192,8 @@ impl App {
         }
         let follow = self.lyric.1.is_some() && self.route == "lyrics";
         let follow = follow && self.cfg.settings.lyrics_follow;
-        let line = crate::pages::lyric_scroll(self).filter(|l| follow && l.0 != self.lyric.0);
+        let line = follow.then(|| crate::pages::lyric_scroll(self)).flatten();
+        let line = line.filter(|l| l.0 != self.lyric.0);
         if let Some((n, y)) = line {
             self.lyric = (n, Some(y));
             t = Task::batch([t, self.scroll_to(y)]);
@@ -1329,7 +1340,7 @@ impl App {
                 return Task::batch([self.disc_load(), setup, banner]);
             }
             Message::Cover(id, size, r) => {
-                self.covers.want.remove(&(id.clone(), size));
+                self.covers.want.remove(&(bare(&id).into(), size));
                 match r {
                     Ok(d) => self.covers.insert(id, size, d),
                     Err(e) => return self.toast(&format!("Could not load a cover. {e}")),
@@ -1425,34 +1436,24 @@ impl App {
             Message::Star(ids, on) => {
                 (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
                 self.star(&ids, on);
-                let Some(s) = self.session.clone() else {
-                    return Task::none();
-                };
-                let call = async move { (s.star(&ids, on).await.map_err(|e| e.to_string()), ids) };
-                return Task::perform(call, move |(r, ids)| match r {
-                    Ok(()) => Message::Noop,
-                    Err(e) => task(move |a| {
-                        a.star(&ids, !on);
-                        a.toast(&format!("Could not update Your Library. {e}"))
-                    }),
+                let back = ids.clone();
+                let star = |s: Session| async move { s.star(&ids, on).await };
+                return self.send(star, "Could not update Your Library.", move |a| {
+                    a.star(&back, !on);
+                    Task::none()
                 });
             }
             Message::Rate(id, n) => {
                 let old = self.ratings.insert(id.clone(), n);
                 self.menu = None;
-                let Some(s) = self.session.clone() else {
-                    return Task::none();
-                };
-                let call = async move { s.rate(&id, n).await.map_err(|e| (e.to_string(), id)) };
-                return Task::perform(call, move |r| match r {
-                    Ok(()) => Message::Noop,
-                    Err((e, id)) => task(move |a| {
-                        match old {
-                            Some(v) => a.ratings.insert(id.clone(), v),
-                            None => a.ratings.remove(&id),
-                        };
-                        a.toast(&format!("Could not set the rating. {e}"))
-                    }),
+                let back = id.clone();
+                let rate = |s: Session| async move { s.rate(&id, n).await };
+                return self.send(rate, "Could not set the rating.", move |a| {
+                    match old {
+                        Some(v) => a.ratings.insert(back.clone(), v),
+                        None => a.ratings.remove(&back),
+                    };
+                    Task::none()
                 });
             }
             Message::Queue(songs, next) => {
@@ -1560,11 +1561,11 @@ impl App {
                 self.edit_pl(&pid, |p| p.song_count += n);
                 let done = format!("Added to {}.", self.playlist(&pid).map_or("", |p| &p.name));
                 let done = self.toast(&done);
-                let add = |s: Session, pid: String| async move {
+                let undo = reload(&pid);
+                let add = |s: Session| async move {
                     s.playlist_update(&pid, None, None, &ids, &[]).await
                 };
-                let fail = "Could not add the song to the playlist.";
-                let add = self.pl_send(pid, add, fail);
+                let add = self.send(add, "Could not add the song to the playlist.", undo);
                 return Task::batch([add, done]);
             }
             Message::PlNew(name, ids) => {
@@ -1583,11 +1584,9 @@ impl App {
                 self.edit::<Lib>("lib", |l| l.playlists.retain(|p| p.id != id));
                 self.cache.remove(&r);
                 let back = Task::batch((self.route == r).then(|| self.nav("home".into())));
-                let del = |s: Session, id: String| async move { s.playlist_delete(&id).await };
-                return Task::batch([
-                    back,
-                    self.pl_send(id, del, "Could not delete the playlist."),
-                ]);
+                let undo = reload(&id);
+                let del = |s: Session| async move { s.playlist_delete(&id).await };
+                return Task::batch([back, self.send(del, "Could not delete the playlist.", undo)]);
             }
             Message::PlRemove(idx) => {
                 self.menu = None;
@@ -1601,11 +1600,11 @@ impl App {
                 });
                 let k = idx.len() as u32;
                 self.edit_pl(&pid, |p| p.song_count = p.song_count.saturating_sub(k));
-                let rm = |s: Session, pid: String| async move {
+                let undo = reload(&pid);
+                let rm = |s: Session| async move {
                     s.playlist_update(&pid, None, None, &[], &idx).await
                 };
-                let fail = "Could not remove the songs from the playlist.";
-                return self.pl_send(pid, rm, fail);
+                return self.send(rm, "Could not remove the songs from the playlist.", undo);
             }
             Message::Radio(id) => {
                 self.menu = None;
@@ -1893,9 +1892,11 @@ impl App {
                 let Some((key, n)) = self.sel.clone() else {
                     return Task::none();
                 };
-                let list = self.songs_of(&key).expect("a selected row has its list").0;
-                let last = list.len().saturating_sub(1);
-                let n = if up { n.max(1) - 1 } else { (n + 1).min(last) };
+                let Some(list) = self.songs_of(&key).map(|x| x.0).filter(|l| !l.is_empty()) else {
+                    return Task::none();
+                };
+                let last = list.len() - 1;
+                let n = if up { n.max(1) - 1 } else { n + 1 }.min(last);
                 let multi = list.iter().any(|s| s.disc != list[0].disc);
                 let pairs = list[..=n].windows(2);
                 let discs = pairs.filter(|w| w[0].disc != w[1].disc).count();
@@ -1970,11 +1971,12 @@ impl App {
                 let set = |p: &mut Playlist| (p.name, p.comment) = (name.clone(), comment.clone());
                 self.edit_pl(&id, set);
                 self.edit::<(Playlist, Vec<Song>)>(&format!("playlist:{id}"), |(p, _)| set(p));
-                let edit = |s: Session, id: String| async move {
+                let undo = reload(&id);
+                let edit = |s: Session| async move {
                     let (n, c) = (Some(name.as_str()), Some(comment.as_str()));
                     s.playlist_update(&id, n, c, &[], &[]).await
                 };
-                return self.pl_send(id, edit, "Could not change the playlist.");
+                return self.send(edit, "Could not change the playlist.", undo);
             }
             Message::MediaInit(hwnd) => {
                 let (tx, h) = (CH.0.clone(), hwnd as *mut std::ffi::c_void);

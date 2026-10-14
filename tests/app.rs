@@ -146,6 +146,8 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     assert!(app.modal.as_ref().is_some_and(|m| m.1 == 4) && cur(&app) == "c");
     let _ = app.update(Message::Confirm);
     assert!(app.modal.is_none() && cur(&app) == "a");
+    app.sel = Some(("album:gone".into(), 3));
+    let _ = app.update(Message::Arrow(false));
 }
 
 #[tokio::test]
@@ -158,4 +160,15 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     assert!(app.binding("shuffle") == "C+R" && app.binding("repeat").is_empty());
     let _ = app.update(Message::Key("C+R".into()));
     assert!(app.shuffle.is_none() && app.repeat == 0);
+}
+
+#[test]
+fn cover_cache_drops_large_covers_over_the_limit() {
+    let mut app = app();
+    for k in 0..4 {
+        let h = iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]);
+        let d = (iced::Color::BLACK, h, 3 << 20);
+        let _ = app.update(Message::Cover(format!("c{k}"), 640, Ok(d)));
+    }
+    assert!(app.covers.bytes <= 8 << 20 && app.covers.get("c3", 640).is_some());
 }

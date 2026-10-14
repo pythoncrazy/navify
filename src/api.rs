@@ -222,15 +222,19 @@ fn normalize(v: &mut Value) {
                     *l = json!([l["start"], l["value"].as_str().unwrap_or_default()]);
                 }
             }
-            if let Some(id) = m.remove("mediaFileId") {
-                m.insert("id".into(), id);
-            }
             let has = m.get("hasCoverArt") != Some(&false.into());
             let id = m.get(["albumId", "id"][usize::from(has)]).cloned();
             let (id, hash) = (id.filter(Value::is_string), m.remove("imageHash"));
+            let id = id.filter(|_| !m.contains_key("cover"));
             if let Some(c) = m.remove("coverArt").filter(|c| c != "").or(id) {
+                let nd = |c: &str| {
+                    let (k, rest) = c.split_once('-')?;
+                    let (id, h) = rest.rsplit_once('_')?;
+                    matches!(k, "al" | "ar" | "mf" | "pl").then(|| format!("{id}#{h}").into())
+                };
                 let c = match (c.as_str(), hash.as_ref().and_then(Value::as_str)) {
                     (Some(c), Some(h)) => format!("{c}#{h}").into(),
+                    (Some(c), None) => nd(c).unwrap_or(c.into()),
                     _ => c,
                 };
                 m.insert("cover".into(), c);
@@ -425,14 +429,7 @@ impl Session {
         kind: &str,
         id: &str,
         key: &str,
-        list: &str,
-        q: impl Into<Value>,
     ) -> Result<(T, Vec<U>)> {
-        if self.server.native {
-            let item = format!("{kind}/{id}");
-            let (a, b) = tokio::try_join!(self.nd(&item, ()), self.nd(list, q))?;
-            return Ok((a.0, b.0));
-        }
         let method = format!("get{}{}", kind[..1].to_uppercase(), &kind[1..]);
         let ptr = format!("/{kind}");
         let mut v: Value = self.get(&method, json!({"id": id}), &ptr).await?;
@@ -511,8 +508,7 @@ impl Session {
     }
 
     pub async fn album(&self, id: &str) -> Result<(Album, Vec<Song>)> {
-        let q = json!({"album_id": id});
-        let (album, mut songs) = self.detail("album", id, "song", "song", q).await?;
+        let (album, mut songs) = self.detail("album", id, "song").await?;
         songs.sort_by_key(|s: &Song| (s.disc, s.track));
         Ok((album, songs))
     }
@@ -526,8 +522,9 @@ impl Session {
     }
 
     pub async fn artist(&self, id: &str) -> Result<(Artist, Vec<Album>)> {
-        let q = json!({"role_albumartist_id": id});
-        self.detail("artist", id, "album", "album", q).await
+        let (mut a, albums): (Artist, Vec<Album>) = self.detail("artist", id, "album").await?;
+        a.song_count = albums.iter().map(|x| x.song_count).sum();
+        Ok((a, albums))
     }
 
     pub async fn appears(&self, id: &str) -> Result<Vec<Album>> {
@@ -590,8 +587,7 @@ impl Session {
     }
 
     pub async fn playlist(&self, id: &str) -> Result<(Playlist, Vec<Song>)> {
-        let tracks = format!("playlist/{id}/tracks");
-        self.detail("playlist", id, "entry", &tracks, ()).await
+        self.detail("playlist", id, "entry").await
     }
 
     pub async fn songs(&self, sort: &str, off: usize, n: usize) -> Paged<Song> {

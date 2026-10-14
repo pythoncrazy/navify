@@ -48,7 +48,7 @@ async fn read_suite(s: &Session) -> Result<()> {
 #[test]
 fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     let native = json!({
-        "id": "row1", "mediaFileId": "n1", "title": "T", "albumId": "al1", "trackNumber": 3,
+        "id": "n1", "title": "T", "albumId": "al1", "trackNumber": 3,
         "discNumber": 2, "starred": true, "rating": 4, "rgTrackGain": -7.5, "rgAlbumPeak": 1.2,
         "participants": {"artist": [{"id": "ar1", "name": "Ar"}]}, "hasCoverArt": true
     });
@@ -67,6 +67,8 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     }
     let bare = json!({"id": "s", "albumId": "al1", "hasCoverArt": false, "imageHash": "h"});
     assert_eq!(api::parse::<Song>(bare)?.cover, "al1#h");
+    let sub = api::parse::<serde_json::Value>(json!({"id": "s", "coverArt": "al-al1_h"}))?;
+    assert_eq!(api::parse::<Song>(sub)?.cover, "al1#h");
     assert!(api::parse::<Song>(json!({"title": 5})).is_err());
     assert!(api::parse::<Vec<Song>>(serde_json::Value::Null)?.is_empty());
     let native = json!({"id": "al1", "maxYear": 2015, "tags": {"recordlabel": ["L"], "releasetype": ["ep"]}});
