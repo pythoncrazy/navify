@@ -1354,9 +1354,11 @@ fn settings(app: &App) -> El<'_> {
     });
     let paste = task(|_| {
         iced::clipboard::read().map(|t| {
-            task(
-                move |a| match serde_json::from_str(t.as_deref().unwrap_or_default()) {
-                    Ok(new) => {
+            task(move |a| {
+                match serde_json::from_str::<Settings>(t.as_deref().unwrap_or_default()) {
+                    Ok(mut new) => {
+                        let s = &a.cfg.settings;
+                        (new.window, new.device) = (s.window, s.device.clone());
                         let old = std::mem::replace(&mut a.cfg.settings, new);
                         iced::Task::batch([
                             a.settings(old),
@@ -1366,8 +1368,8 @@ fn settings(app: &App) -> El<'_> {
                     Err(e) => a.toast(&format!(
                         "The clipboard does not contain Navify settings. {e}"
                     )),
-                },
-            )
+                }
+            })
         })
     });
     let copy = theme::pill_btn("Copy", copy);
@@ -1640,7 +1642,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             let mut v = ctx("album", &a.id);
             let save = ["Remove from Your Library", "Save to Your Library"];
             v.push(star(&a.id, a.starred, save[0], save[1]));
-            v.push(it(i::USER, "Go to artist", go("artist", &a.artist_id)));
+            let artist = it(i::USER, "Go to artist", go("artist", &a.artist_id));
+            v.extend((!a.artist_id.is_empty()).then_some(artist));
             v
         }
         MenuKind::Artist(a) => {
