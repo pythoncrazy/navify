@@ -592,10 +592,11 @@ fn player_bar(app: &App) -> El<'_> {
     let vol_icon = ic([i::MUTE, i::VOL1, i::VOL2][level]);
     let lyrics = app.route == "lyrics";
     let volume = slider(0.0..=1.0, vol, Message::Vol).step(0.01f32).width(93);
+    let k = app.cfg.settings.vol_step / 100.0;
     let volume = mouse_area(volume.style(theme::seek)).on_scroll(move |d| {
         let step = match d {
-            iced::mouse::ScrollDelta::Lines { y, .. } => y.clamp(-1.0, 1.0) / 10.0,
-            iced::mouse::ScrollDelta::Pixels { y, .. } => y.clamp(-120.0, 120.0) / 1200.0,
+            iced::mouse::ScrollDelta::Lines { y, .. } => y.clamp(-1.0, 1.0) * k,
+            iced::mouse::ScrollDelta::Pixels { y, .. } => y.clamp(-120.0, 120.0) / 120.0 * k,
         };
         Message::Vol((vol + step).clamp(0.0, 1.0))
     });

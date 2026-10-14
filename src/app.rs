@@ -2311,10 +2311,18 @@ pub const KEYS: [KeyAction; 23] = [
         task(|a| a.update(Message::Seek((a.pos() - a.cfg.settings.seek_secs).max(0.0))))
     }),
     ("vol_up", "Volume up", "C+ArrowUp", || {
-        task(|a| a.update(Message::Vol((a.volume + 0.1).min(1.0))))
+        task(|a| {
+            a.update(Message::Vol(
+                (a.volume + a.cfg.settings.vol_step / 100.0).min(1.0),
+            ))
+        })
     }),
     ("vol_down", "Volume down", "C+ArrowDown", || {
-        task(|a| a.update(Message::Vol((a.volume - 0.1).max(0.0))))
+        task(|a| {
+            a.update(Message::Vol(
+                (a.volume - a.cfg.settings.vol_step / 100.0).max(0.0),
+            ))
+        })
     }),
     ("shuffle", "Shuffle", "C+S", || Message::Shuffle),
     ("repeat", "Repeat", "C+R", || act(App::repeat)),
