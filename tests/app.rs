@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use navify::api::{Album, Song, parse};
-use navify::app::{AnyData, App, Message, Pager};
+use navify::app::{AnyData, App, Message, Pager, act};
 use serde_json::json;
 
 fn app() -> App {
@@ -76,4 +76,32 @@ fn gain_follows_the_replaygain_settings() {
     assert!((db(&app) - 4.0).abs() < 0.01);
     app.cfg.settings.replaygain = "off".into();
     assert_eq!(app.gain(&song), 1.0);
+}
+
+#[tokio::test]
+async fn playlist_search_and_sort_keep_the_server_order() {
+    let mut app = app();
+    let key = "playlist:p1".to_string();
+    let _ = app.update(Message::Nav(key.clone()));
+    let songs: Vec<Song> = ["c", "a", "b"]
+        .map(|t| json!({"id": t, "title": t}))
+        .to_vec()
+        .into_iter()
+        .map(|v| parse(v).expect("song"))
+        .collect();
+    let pl: navify::api::Playlist = parse(json!({"id": "p1", "name": "P"})).expect("playlist");
+    let _ = app.update(Message::Loaded(key.clone(), Ok(Arc::new((pl, songs)))));
+    let _ = app.update(act(|a| a.pl_sort = 1));
+    let _ = app.update(Message::PlayAt(key.clone(), 0));
+    let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, "abc");
+    let _ = app.update(act(|a| a.pl_find = Some("B".into())));
+    let _ = app.update(Message::SelectAll);
+    let _ = app.update(Message::DeleteSel);
+    let left = app
+        .data::<(navify::api::Playlist, Vec<Song>)>(&key)
+        .expect("playlist")
+        .1
+        .iter();
+    assert_eq!(left.map(|s| s.id.as_str()).collect::<String>(), "ca");
 }
