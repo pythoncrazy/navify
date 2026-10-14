@@ -110,9 +110,9 @@ xattr -dr com.apple.quarantine /Applications/Navify.app
 ## Build
 
 1. Install Rust 1.90 or newer with [rustup](https://rustup.rs).
-2. On Linux, install the system libraries:
-   `sudo apt-get install libasound2-dev libdbus-1-dev pkg-config`
-   (Arch Linux: `sudo pacman -S alsa-lib dbus pkgconf`).
+2. On Linux, install the system libraries and the mold linker:
+   `sudo apt-get install libasound2-dev libdbus-1-dev pkg-config mold`
+   (Arch Linux: `sudo pacman -S alsa-lib dbus pkgconf mold`).
 3. Install sccache. Cargo uses it to keep compiled crates between builds:
 
    ```sh
@@ -129,9 +129,8 @@ xattr -dr com.apple.quarantine /Applications/Navify.app
 
 Use `cargo run` for fast development builds, and `cargo run --release` to run the release build.
 The release profile uses full LTO and one codegen unit, so a release build takes some minutes.
-`.cargo/config.toml` sets sccache, and the bundled `rust-lld` linker on Windows.
-Rust uses `rust-lld` on x86_64 Linux by default. The development profile optimizes the
-dependencies, so the debug build plays audio at full speed.
+`.cargo/config.toml` sets sccache, mold on Linux, and the bundled `rust-lld` linker on Windows.
+The development profile optimizes the dependencies, so the debug build plays audio at full speed.
 
 To make packages, install cargo-packager and run it after the release build:
 

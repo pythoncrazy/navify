@@ -2,7 +2,7 @@
 rustc-wrapper = "sccache"
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))']
-rustflags = ["-C", "link-arg=-Wl,-z,pack-relative-relocs"]
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-z,pack-relative-relocs"]
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
