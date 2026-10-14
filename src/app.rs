@@ -195,6 +195,8 @@ pub enum Message {
     CloseWindow,
     Win(iced::window::Id),
     Full(bool),
+    Key(String),
+    Record(Option<&'static str>),
     Confirm,
 }
 
@@ -302,6 +304,7 @@ pub struct App {
     pub hidden: bool,
     pub modal: Option<(String, u8)>,
     held: Option<Message>,
+    pub recording: Option<&'static str>,
     pub new_pl_desc: String,
     pub shot: Option<String>,
     pub new_pl: String,
@@ -777,6 +780,15 @@ impl App {
         }
         let wrap = (self.repeat == 1 && len > 0).then_some(0);
         (i + 1 < len).then_some(i + 1).or(wrap)
+    }
+
+    pub fn binding(&self, id: &str) -> &str {
+        let default = KEYS.iter().find(|k| k.0 == id).expect("a known action").2;
+        self.cfg
+            .settings
+            .keys
+            .get(id)
+            .map_or(default, |s| s.as_str())
     }
 
     fn kept(&self) -> impl Fn(&Song) -> bool + use<> {
@@ -1346,7 +1358,34 @@ impl App {
                 if self.menu.is_none() && self.modal.is_none() {
                     (self.sel, self.picked) = (None, BTreeSet::new());
                 }
-                (self.menu, self.modal) = (None, None);
+                (self.menu, self.modal, self.recording) = (None, None, None);
+            }
+            Message::Record(id) => self.recording = id,
+            Message::Key(c) if self.recording.is_some() => {
+                let id = self.recording.take().expect("a recording");
+                let used: Vec<&str> = KEYS
+                    .iter()
+                    .map(|k| k.0)
+                    .filter(|k| self.binding(k) == c)
+                    .collect();
+                let keys = &mut self.cfg.settings.keys;
+                keys.extend(used.into_iter().map(|k| (k.to_string(), String::new())));
+                keys.insert(id.to_string(), c);
+                return self.persist();
+            }
+            Message::Key(c) => {
+                let hit = KEYS.iter().find(|k| self.binding(k.0) == c);
+                let base = c.rsplit('+').next().filter(|_| !c.starts_with("C+"));
+                let m = match (hit, base.unwrap_or_default()) {
+                    (Some(k), _) => (k.3)(),
+                    (_, "Tab") => Message::FocusMove(c.contains("Shift+")),
+                    (_, "ArrowUp") => Message::Arrow(true),
+                    (_, "ArrowDown") => Message::Arrow(false),
+                    (_, "Enter") => Message::Enter,
+                    (_, "Delete" | "Backspace") => Message::DeleteSel,
+                    _ => return Task::none(),
+                };
+                return self.update(m);
             }
             Message::PlAdd(pid, ids) => {
                 self.menu = None;
@@ -2001,60 +2040,86 @@ impl App {
 }
 
 fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message> {
+    use iced::keyboard::key::Named::{Alt, Control, Meta, Shift, Super};
     let k = match key {
+        Key::Named(Shift | Control | Alt | Super | Meta) | Key::Unidentified => return None,
         Key::Named(n) => format!("{n:?}"),
-        Key::Character(c) => c.to_lowercase(),
-        Key::Unidentified => return None,
+        Key::Character(c) => c.to_uppercase(),
     };
-    let vol = |d: f32| task(move |a| a.update(Message::Vol((a.volume + d).clamp(0.0, 1.0))));
-    let seek = |d: f32| {
-        let to = move |a: &App| (a.pos() + d * a.cfg.settings.seek_secs).max(0.0);
-        task(move |a| a.update(Message::Seek(to(a))))
-    };
-    let like = |a: &mut App| {
-        let s = a
-            .current_song()
-            .map(|s| (s.id.clone(), !a.is_starred(&s.id, s.starred)));
-        Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
-    };
-    Some(match ((m.command(), m.alt(), m.shift()), k.as_str()) {
-        (_, "Escape") => Message::MenuClose,
-        _ if status == iced::event::Status::Captured => return None,
-        ((true, ..), "k" | "l") => task(|_| op::focus("search")),
-        ((true, ..), "s") => Message::Shuffle,
-        ((true, ..), "r") => Message::Repeat,
-        ((true, ..), "a") => Message::SelectAll,
-        ((true, ..), ",") => Message::Nav("settings".into()),
-        ((true, ..), "/") => task(|a| {
-            a.modal = Some((String::new(), 3));
-            Task::none()
-        }),
-        ((true, ..), "q") => Message::Close,
-        ((true, ..), "w") => Message::Window(false),
-        ((true, ..), "ArrowLeft") => Message::Prev,
-        ((true, ..), "ArrowRight") => Message::Next(true),
-        ((true, ..), "ArrowUp") => vol(0.1),
-        ((true, ..), "ArrowDown") => vol(-0.1),
-        ((true, ..), _) => return None,
-        ((_, _, shift), "Tab") => Message::FocusMove(shift),
-        (_, "Space") => Message::Toggle,
-        ((_, true, _), "ArrowLeft") => Message::Back,
-        ((_, true, _), "ArrowRight") => Message::Fwd,
-        ((_, _, true), "ArrowLeft") => seek(-1.0),
-        ((_, _, true), "ArrowRight") => seek(1.0),
-        ((_, true, true), "h") => Message::Nav("home".into()),
-        ((_, true, true), "s") => Message::Nav("liked".into()),
-        ((_, true, true), "j") => Message::Panel(1),
-        ((_, true, true), "q") => Message::Panel(2),
-        ((_, true, true), "l") => Message::LibCollapse,
-        ((_, true, true), "b") => task(like),
-        (_, "ArrowUp") => Message::Arrow(true),
-        (_, "ArrowDown") => Message::Arrow(false),
-        (_, "Enter") => Message::Enter,
-        (_, "Delete" | "Backspace") => Message::DeleteSel,
-        _ => return None,
-    })
+    let on = |b: bool, s: &'static str| if b { s } else { "" };
+    let c = format!(
+        "{}{}{}{k}",
+        on(m.command(), "C+"),
+        on(m.alt(), "Alt+"),
+        on(m.shift(), "Shift+")
+    );
+    match (c.as_str(), status) {
+        ("Escape", _) => Some(Message::MenuClose),
+        (_, iced::event::Status::Captured) => None,
+        _ => Some(Message::Key(c)),
+    }
 }
+
+pub fn key_label(c: &str) -> String {
+    let cmd = ["Ctrl+", "Cmd+"][usize::from(cfg!(target_os = "macos"))];
+    c.replace("C+", cmd).replace("Arrow", "")
+}
+
+pub type KeyAction = (&'static str, &'static str, &'static str, fn() -> Message);
+
+pub const KEYS: [KeyAction; 23] = [
+    ("toggle", "Play or pause", "Space", || Message::Toggle),
+    ("next", "Next track", "C+ArrowRight", || Message::Next(true)),
+    ("prev", "Previous track", "C+ArrowLeft", || Message::Prev),
+    ("seek_fwd", "Seek forward", "Shift+ArrowRight", || {
+        task(|a| a.update(Message::Seek(a.pos() + a.cfg.settings.seek_secs)))
+    }),
+    ("seek_back", "Seek backward", "Shift+ArrowLeft", || {
+        task(|a| a.update(Message::Seek((a.pos() - a.cfg.settings.seek_secs).max(0.0))))
+    }),
+    ("vol_up", "Volume up", "C+ArrowUp", || {
+        task(|a| a.update(Message::Vol((a.volume + 0.1).min(1.0))))
+    }),
+    ("vol_down", "Volume down", "C+ArrowDown", || {
+        task(|a| a.update(Message::Vol((a.volume - 0.1).max(0.0))))
+    }),
+    ("shuffle", "Shuffle", "C+S", || Message::Shuffle),
+    ("repeat", "Repeat", "C+R", || Message::Repeat),
+    ("like", "Like the current song", "Alt+Shift+B", || {
+        task(|a| {
+            let s = a.current_song();
+            let s = s.map(|s| (s.id.clone(), !a.is_starred(&s.id, s.starred)));
+            Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
+        })
+    }),
+    ("search", "Search", "C+K", || task(|_| op::focus("search"))),
+    ("select_all", "Select all", "C+A", || Message::SelectAll),
+    ("back", "Go back", "Alt+ArrowLeft", || Message::Back),
+    ("forward", "Go forward", "Alt+ArrowRight", || Message::Fwd),
+    ("home", "Home", "Alt+Shift+H", || {
+        Message::Nav("home".into())
+    }),
+    ("liked", "Liked Songs", "Alt+Shift+S", || {
+        Message::Nav("liked".into())
+    }),
+    ("now_playing", "Now playing view", "Alt+Shift+J", || {
+        Message::Panel(1)
+    }),
+    ("queue", "Queue", "Alt+Shift+Q", || Message::Panel(2)),
+    ("library", "Collapse Your Library", "Alt+Shift+L", || {
+        Message::LibCollapse
+    }),
+    ("settings", "Settings", "C+,", || {
+        Message::Nav("settings".into())
+    }),
+    ("shortcuts", "Keyboard shortcuts", "C+/", || {
+        act(|a| a.modal = Some((String::new(), 3)))
+    }),
+    ("close", "Close the window", "C+W", || {
+        Message::Window(false)
+    }),
+    ("quit", "Quit", "C+Q", || Message::Close),
+];
 
 fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
     use ::image::imageops::FilterType;

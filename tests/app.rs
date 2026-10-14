@@ -127,3 +127,15 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     let _ = app.update(Message::Confirm);
     assert!(app.modal.is_none() && cur(&app) == "a");
 }
+
+#[tokio::test]
+async fn recorded_shortcut_replaces_the_old_binding() {
+    let mut app = app();
+    let _ = app.update(Message::Key("C+S".into()));
+    assert!(app.shuffle.is_some());
+    let _ = app.update(Message::Record(Some("shuffle")));
+    let _ = app.update(Message::Key("C+R".into()));
+    assert!(app.binding("shuffle") == "C+R" && app.binding("repeat").is_empty());
+    let _ = app.update(Message::Key("C+R".into()));
+    assert!(app.shuffle.is_none() && app.repeat == 0);
+}

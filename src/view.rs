@@ -524,50 +524,27 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
     let close = focusable(x, Some(Message::MenuClose), 16.0, Some("layer"));
     let style = |t: &iced::Theme| theme::menu(t).border(iced::border::rounded(8));
     if kind == 3 {
-        let c = ["Ctrl+", "Cmd+"][usize::from(cfg!(target_os = "macos"))];
-        let keys = [
-            ("Play or pause", "Space"),
-            ("Next track", "C+Right"),
-            ("Previous track", "C+Left"),
-            ("Seek forward", "Shift+Right"),
-            ("Seek backward", "Shift+Left"),
-            ("Volume up", "C+Up"),
-            ("Volume down", "C+Down"),
-            ("Shuffle", "C+S"),
-            ("Repeat", "C+R"),
-            ("Like the current song", "Alt+Shift+B"),
-            ("Search", "C+K"),
-            ("Select all", "C+A"),
-            ("Go back", "Alt+Left"),
-            ("Go forward", "Alt+Right"),
-            ("Home", "Alt+Shift+H"),
-            ("Liked Songs", "Alt+Shift+S"),
-            ("Now playing view", "Alt+Shift+J"),
-            ("Queue", "Alt+Shift+Q"),
-            ("Collapse Your Library", "Alt+Shift+L"),
-            ("Settings", "C+,"),
-            ("Keyboard shortcuts", "C+/"),
-            ("Close the window", "C+W"),
-            ("Quit", "C+Q"),
-        ];
         let chip = |k: &str| {
             let k = container(bold(k.to_string(), 12.0)).padding([4, 8]);
             k.style(fill(ELEVATED, 4.0)).into()
         };
-        let line = |(what, k): (&'static str, &str)| {
-            let chips = Row::with_children(k.replace("C+", c).split('+').map(chip));
-            let what = txt(what, 14.0).color(SUB).width(Fill);
+        let line = |k: &crate::app::KeyAction| {
+            let c = crate::app::key_label(app.binding(k.0));
+            let c = if c.is_empty() { "Not set".into() } else { c };
+            let chips = Row::with_children(c.split('+').map(chip));
+            let what = txt(k.1, 14.0).color(SUB).width(Fill);
             row![what, chips.spacing(4)]
                 .align_y(Center)
                 .height(40)
                 .into()
         };
-        let list = iced::widget::Column::with_children(keys.map(line));
+        let list = iced::widget::Column::with_children(crate::app::KEYS.iter().map(line));
         let list = scrollable(list.padding(padding::right(16)))
             .height(440)
             .style(theme::scroll);
         let head = row![bold("Keyboard shortcuts", 24.0).width(Fill), close];
-        let body = column![head.align_y(Center), list].spacing(16);
+        let hint = sub("You can change the shortcuts in Settings.", 14.0);
+        let body = column![head.align_y(Center), hint, list].spacing(16);
         return container(body.width(480).padding(24)).style(style).into();
     }
     if kind == 2 || kind == 4 {

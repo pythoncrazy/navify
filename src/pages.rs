@@ -1316,6 +1316,27 @@ fn settings(app: &App) -> El<'_> {
         "Hide Navify in the tray when you minimize the window",
         min_tray,
     ));
+    let col = col.push(head("Keyboard shortcuts"));
+    let col = col.extend(crate::app::KEYS.iter().map(|k| {
+        let on = app.recording == Some(k.0);
+        let label = match crate::app::key_label(app.binding(k.0)) {
+            _ if on => "Press a key".to_string(),
+            c if c.is_empty() => "Not set".to_string(),
+            c => c,
+        };
+        let bg = [
+            [ELEVATED, theme::MENU_HOVER, theme::MENU_HOVER],
+            [ACCENT; 3],
+        ][usize::from(on)];
+        let b = button(bold(label, 12.0)).padding([6, 12]);
+        let b = b.style(theme::solid(bg, [TEXT, BG][usize::from(on)]));
+        line(
+            k.1,
+            b.on_press(Message::Record((!on).then_some(k.0))).into(),
+        )
+    }));
+    let reset = theme::pill_btn("Reset", set(|s, ()| s.keys.clear(), ()));
+    let col = col.push(line("Use the default shortcuts", reset.into()));
     let col = col.push(head("Servers"));
     let col = col.extend(app.cfg.servers.iter().map(server));
     let col = col.push(head("Storage"));

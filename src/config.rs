@@ -51,6 +51,7 @@ pub struct Settings {
     pub min_tray: bool,
     pub queue_skip: String,
     pub confirm_queue: bool,
+    pub keys: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -91,6 +92,7 @@ impl Default for Settings {
             min_tray: false,
             queue_skip: String::new(),
             confirm_queue: false,
+            keys: Default::default(),
         }
     }
 }
