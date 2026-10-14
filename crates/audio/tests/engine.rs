@@ -48,12 +48,15 @@ fn render_gives_exact_length_and_gain() {
         ("One", None, 1.0, 0.0, 2.0, 0.005),
         ("Three", None, 1.0, 0.0, 2.0, 0.03),
         ("Four", None, 1.0, 0.0, 1.0, 0.03),
+        ("One", None, 9.0, 0.0, 0.0, 0.03),
+        ("Three", None, 9.0, 0.0, 0.0, 0.03),
+        ("Four", None, 9.0, 0.0, 0.0, 0.03),
         ("One", Some("mp3"), 1.0, 0.0, 2.0, 0.08),
     ] {
         let (io, t) = setup(titles, format);
-        let pcm = render(io, t, RATE, seek, fade).expect("render");
-        let got = pcm.len() as f32 / 2.0 / RATE as f32;
         let case = format!("{titles} {format:?} seek {seek} fade {fade}");
+        let pcm = render(io, t, RATE, seek, fade).unwrap_or_else(|e| panic!("{case}: {e}"));
+        let got = pcm.len() as f32 / 2.0 / RATE as f32;
         assert!(
             (got - want).abs() <= tol,
             "{case}: {got:.4} s, not {want:.4} s"
