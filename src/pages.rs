@@ -82,10 +82,9 @@ fn play_btn<'a>(app: &App, px: f32, ctx: &str) -> El<'a> {
     let on = app.ctx == ctx && app.current_song().is_some();
     let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(on && app.playing)];
     let b = theme::sq(theme::filled(g, px * 0.4).color(BG).center(), px);
-    let m = if on {
-        Message::Toggle
-    } else {
-        Message::PlayCtx(ctx.into(), 0)
+    let m = match on {
+        true => Message::Toggle,
+        false => Message::PlayCtx(ctx.into(), 0),
     };
     b.style(theme::accent).on_press(m).into()
 }
@@ -783,10 +782,11 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     let sort = sort.text_size(14).font(theme::fw(Normal)).padding([8, 12]);
     let sort = sort.style(theme::pick(true)).menu_style(theme::pick_menu);
     let sort = (!liked && native).then_some(sort);
-    let (kind, title, color) = match liked {
-        true => ("Playlist", "Liked Songs", color!(0x5038a0)),
-        false => ("Library", "Songs", color!(0x1e6b52)),
-    };
+    let heads = [
+        ("Library", "Songs", color!(0x1e6b52)),
+        ("Playlist", "Liked Songs", color!(0x5038a0)),
+    ];
+    let (kind, title, color) = heads[usize::from(liked)];
     let art = match liked {
         true => liked_art(px),
         false => art(px, i(i::MUSIC, 0.0).color(ACCENT), SONGS_BG),
