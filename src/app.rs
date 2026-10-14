@@ -1590,7 +1590,13 @@ impl App {
                 let make = |s: Session| async move { s.playlist_create(&name, &ids).await };
                 return self.call(make, "Could not make the playlist.", |p: Playlist| {
                     task(move |a| {
-                        a.edit::<Lib>("lib", |l| l.playlists.insert(0, p.clone()));
+                        let name = p.name.to_lowercase();
+                        a.edit::<Lib>("lib", |l| {
+                            let at = l
+                                .playlists
+                                .partition_point(|x| x.name.to_lowercase() < name);
+                            l.playlists.insert(at, p.clone())
+                        });
                         a.nav(format!("playlist:{}", p.id))
                     })
                 });
