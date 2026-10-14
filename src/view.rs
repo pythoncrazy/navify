@@ -56,7 +56,7 @@ pub fn focusable<'a>(
     id: Option<&'static str>,
 ) -> El<'a> {
     let id = id.map(iced::advanced::widget::Id::from);
-    Element::new(wrap::Wrap(c.into(), Some((msg, radius, id)), None))
+    Element::new(wrap::Wrap(c.into(), Some((msg, radius, id)), None, false))
 }
 
 pub fn live<'a>(
@@ -69,7 +69,12 @@ pub fn live<'a>(
         build(p),
         None,
         Some((clock, Box::new(build), run, p)),
+        false,
     ))
+}
+
+pub fn smooth(c: El<'_>, on: bool) -> El<'_> {
+    Element::new(wrap::Wrap(c, None, None, on))
 }
 
 mod wrap {
@@ -77,9 +82,12 @@ mod wrap {
     use iced::advanced::renderer::{Quad, Style};
     use iced::advanced::widget::{Id, Operation, Tree, Widget, operation::Focusable, tree};
     use iced::advanced::{Clipboard, Layout, Renderer, Shell, layout};
-    use iced::keyboard::{Event::KeyPressed, Key, key::Named};
+    use iced::keyboard::{Event::KeyPressed, Event::ModifiersChanged, Key, key::Named};
+    use iced::mouse::{Event::WheelScrolled, ScrollDelta};
     use iced::window::Event::RedrawRequested;
-    use iced::{Color, Event, Length, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction};
+    use iced::{
+        Color, Event, Length, Point, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction,
+    };
     type R = iced::Renderer;
     type T = iced::Theme;
     type Live<'a> = (
@@ -89,9 +97,14 @@ mod wrap {
         f32,
     );
     type Focus = (Option<Message>, f32, Option<Id>);
-    pub struct Wrap<'a>(pub El<'a>, pub Option<Focus>, pub Option<Live<'a>>);
+    pub struct Wrap<'a>(
+        pub El<'a>,
+        pub Option<Focus>,
+        pub Option<Live<'a>>,
+        pub bool,
+    );
     #[derive(Default)]
-    struct Ring(bool);
+    struct Ring(bool, f32, Option<std::time::Instant>, Point, bool);
     impl Focusable for Ring {
         fn is_focused(&self) -> bool {
             self.0
@@ -166,10 +179,45 @@ mod wrap {
                 let wait = p.floor() + 1.15 - p;
                 sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
             }
+            let ring = t.state.downcast_mut::<Ring>();
+            match e {
+                Event::Keyboard(ModifiersChanged(m)) => ring.4 = m.shift(),
+                Event::Mouse(WheelScrolled {
+                    delta: ScrollDelta::Lines { x, y },
+                }) if self.3 && *x == 0.0 && !ring.4 => {
+                    ring.3 = c.position().unwrap_or(ring.3);
+                    if ring.1 * y < 0.0 {
+                        ring.1 = 0.0;
+                    }
+                    ring.1 += y * 60.0;
+                    ring.2 = None;
+                    sh.capture_event();
+                    sh.request_redraw();
+                    return;
+                }
+                _ => {}
+            }
             let w = self.0.as_widget_mut();
             w.update(&mut t.children[0], e, l, c, r, cb, sh, v);
+            if let (Event::Window(RedrawRequested(now)), true) = (e, ring.1 != 0.0) {
+                let dt = ring.2.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
+                let step = match ring.1.abs() < 1.5 {
+                    true => ring.1,
+                    false => ring.1 * (1.0 - (-dt / 0.05).exp()),
+                };
+                (ring.1, ring.2) = (ring.1 - step, Some(*now));
+                let free = !sh.is_event_captured();
+                let delta = ScrollDelta::Pixels { x: 0.0, y: step };
+                let wheel = Event::Mouse(WheelScrolled { delta });
+                let at = Cursor::Available(ring.3);
+                w.update(&mut t.children[0], &wheel, l, at, r, cb, sh, v);
+                match free && !sh.is_event_captured() {
+                    true => ring.1 = 0.0,
+                    false if ring.1 != 0.0 => sh.request_redraw(),
+                    false => {}
+                }
+            }
             let Some((msg, _, _)) = &self.1 else { return };
-            let ring = t.state.downcast_mut::<Ring>();
             let key = |k| matches!(e, Event::Keyboard(KeyPressed { key, .. }) if *key == k);
             let go = key(Key::Named(Named::Enter)) || key(Key::Named(Named::Space));
             match e {
@@ -185,6 +233,18 @@ mod wrap {
                 sh.capture_event();
             }
             sh.request_redraw();
+        }
+        fn overlay<'b>(
+            &'b mut self,
+            t: &'b mut Tree,
+            l: Layout<'b>,
+            r: &R,
+            v: &Rect,
+            tr: iced::Vector,
+        ) -> Option<iced::advanced::overlay::Element<'b, Message, T, R>> {
+            self.0
+                .as_widget_mut()
+                .overlay(&mut t.children[0], l, r, v, tr)
         }
         fn mouse_interaction(
             &self,
@@ -559,7 +619,7 @@ fn player_bar(app: &App) -> El<'_> {
     let volume = mouse_area(volume.style(theme::seek)).on_scroll(|d| match d {
         iced::mouse::ScrollDelta::Lines { y, .. } => Message::Step(true, y.clamp(-1.0, 1.0)),
         iced::mouse::ScrollDelta::Pixels { y, .. } => {
-            Message::Step(true, y.clamp(-120.0, 120.0) / 120.0)
+            Message::Step(true, y.clamp(-60.0, 60.0) / 60.0)
         }
     });
     let words = [Message::Nav("lyrics".into()), Message::Back];

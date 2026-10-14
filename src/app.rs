@@ -2189,7 +2189,7 @@ impl App {
     }
 
     pub fn view(&self) -> iced::Element<'_, Message> {
-        crate::view::view(self)
+        crate::view::smooth(crate::view::view(self), self.cfg.settings.smooth)
     }
 
     pub fn title(&self) -> String {

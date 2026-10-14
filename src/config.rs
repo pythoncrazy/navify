@@ -56,6 +56,7 @@ pub struct Settings {
     pub awake: bool,
     pub vol_step: f32,
     pub lyrics_align: u8,
+    pub smooth: bool,
 }
 
 impl Default for Settings {
@@ -90,6 +91,7 @@ impl Default for Settings {
             scrobble_by_time: false,
             scrobble_secs: 240.0,
             lyrics_follow: true,
+            smooth: true,
             play_mode: 0,
             ratings: false,
             start_min: false,
