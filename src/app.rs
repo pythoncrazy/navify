@@ -1182,7 +1182,8 @@ impl App {
         }
         let follow = self.lyric.1.is_some() && self.route == "lyrics";
         let follow = follow && self.cfg.settings.lyrics_follow;
-        let line = crate::pages::lyric_scroll(self).filter(|l| follow && l.0 != self.lyric.0);
+        let line = follow.then(|| crate::pages::lyric_scroll(self)).flatten();
+        let line = line.filter(|l| l.0 != self.lyric.0);
         if let Some((n, y)) = line {
             self.lyric = (n, Some(y));
             t = Task::batch([t, self.scroll_to(y)]);
