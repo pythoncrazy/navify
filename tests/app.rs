@@ -161,3 +161,14 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     let _ = app.update(Message::Key("C+R".into()));
     assert!(app.shuffle.is_none() && app.repeat == 0);
 }
+
+#[test]
+fn cover_cache_drops_large_covers_over_the_limit() {
+    let mut app = app();
+    for k in 0..4 {
+        let h = iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]);
+        let d = (iced::Color::BLACK, h, 3 << 20);
+        let _ = app.update(Message::Cover(format!("c{k}"), 640, Ok(d)));
+    }
+    assert!(app.covers.bytes <= 8 << 20 && app.covers.get("c3", 640).is_some());
+}
