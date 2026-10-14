@@ -664,11 +664,12 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         if names.is_empty() {
             names.push((&a.artist_id, &a.artist));
         }
+        let face = a.artists.first().map_or(&a.artist_id, |x| &x.cover);
         let links = names.iter().enumerate().map(|(n, (id, name))| {
             let name = format!("{}{name}", if n > 0 { ", " } else { "" });
             link_btn(bold(name, 14.0), TEXT, go("artist", id)).into()
         });
-        let face = cover(app, names[0].0, 24.0, true);
+        let face = cover(app, face, 24.0, true);
         let lead = row![face, Row::with_children(links)].spacing(8);
         let year = (a.year > 0).then(|| format!("{DOT}{}", a.year));
         let (year, len) = (year.unwrap_or_default(), fmt_long(a.duration));
@@ -997,8 +998,15 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         let s = format!("Album{DOT}{}", x.artist);
         (&x.cover, &x.name, s, go("album", &x.id), false)
     };
+    let starts = |n: &str| n.to_lowercase().starts_with(&ql);
     let exact = r.artists.iter().find(|a| a.name.to_lowercase() == ql);
-    let best = exact.map(art).or_else(|| r.albums.first().map(album));
+    let exact = exact.or_else(|| r.artists.iter().find(|a| starts(&a.name)));
+    let albums = r
+        .albums
+        .iter()
+        .find(|a| starts(&a.name))
+        .or(r.albums.first());
+    let best = exact.map(art).or_else(|| albums.map(album));
     let best = best.or_else(|| r.artists.first().map(art)).or_else(|| {
         let s = r.songs.first()?;
         let sub = format!("Song{DOT}{}", s.artist);

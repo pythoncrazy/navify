@@ -63,6 +63,7 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
         let s: Song = api::parse(v)?;
         let names = (&*s.id, &*s.cover, &*s.album_id, &*s.artists[0].name);
         assert_eq!(names, ("n1", "n1", "al1", "Ar"));
+        assert_eq!(s.artists[0].cover, "o:ar1");
         assert_eq!((s.track, s.disc, s.starred, s.user_rating), (3, 2, true, 4));
         assert_eq!((s.rg.track_gain, s.rg.album_peak), (Some(-7.5), Some(1.2)));
     }

@@ -58,12 +58,18 @@ pub struct Genre {
 pub struct Artist {
     pub id: String,
     pub name: String,
+    #[serde(deserialize_with = "round")]
     pub cover: String,
     pub album_count: u32,
     pub song_count: u32,
     pub starred: bool,
     #[serde(alias = "mbzArtistId")]
     pub music_brainz_id: String,
+}
+
+fn round<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = String::deserialize(d)?;
+    Ok(if s.is_empty() { s } else { format!("o:{s}") })
 }
 
 impl Artist {
@@ -470,7 +476,7 @@ impl Session {
         let url = match id.starts_with("https://") {
             true => id.to_string(),
             false => {
-                let id = id.split('#').next();
+                let id = id.trim_start_matches("o:").split('#').next();
                 self.url("getCoverArt", &json!({"id": id, "size": size}))
             }
         };
