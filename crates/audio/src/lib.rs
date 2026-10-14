@@ -467,19 +467,31 @@ impl Source {
         let have = usize::from(st.start == 0 && st.end() >= need);
         drop(st);
         let mode = [SeekMode::Coarse, SeekMode::Accurate][have];
-        let ts = self.tb.calc_timestamp(time).ok_or("invalid seek")?;
-        let track_id = self.tid;
-        let to = self
-            .demux
-            .seek(mode, SeekTo::Timestamp { ts, track_id })?
-            .actual_ts;
-        let at = self.tb.calc_time_saturating(to).as_secs_f64();
-        self.skip = ((target - at) * self.rate).max(0.0) as usize;
+        let (track_id, past) = (self.tid, secs as f64 >= self.dur);
+        let t = self.demux.tracks().iter().find(|t| t.id == track_id);
+        let start = t.ok_or("invalid track")?.start_ts;
+        if !past {
+            let ts = self
+                .tb
+                .calc_timestamp(time)
+                .ok_or("invalid seek")?
+                .max(start);
+            let to = self.demux.seek(mode, SeekTo::Timestamp { ts, track_id })?;
+            let at = self.tb.calc_time_saturating(to.actual_ts).as_secs_f64();
+            self.skip = ((target - at) * self.rate).max(0.0) as usize;
+        }
         (self.dec)(None, &mut self.pcm)?;
-        (self.rs, self.off, self.base, self.done, self.eof) = (None, 0, secs as f64, 0, false);
+        (self.rs, self.off, self.base, self.done, self.eof) = (None, 0, secs as f64, 0, past);
         self.pcm.clear();
         self.out.clear();
         Ok(())
+    }
+
+    fn moved(mut self, io: &Io, rate: u32, secs: f32) -> Result<Source, String> {
+        match self.track.transcoded || self.seek(secs).is_err() {
+            true => Source::open(self.track, io, rate, secs),
+            false => Ok(self),
+        }
     }
 
     fn pos(&self) -> f32 {
@@ -594,11 +606,8 @@ impl Mixer {
     }
 
     fn seek(&mut self, io: &Io, secs: f32) -> Result<(), String> {
-        self.cur = match self.inc.take().or(self.cur.take()) {
-            Some(c) if c.track.transcoded => Some(Source::open(c.track, io, self.rate, secs)?),
-            Some(mut c) => Some(c.seek(secs).map(|()| c).map_err(|e| e.to_string())?),
-            None => None,
-        };
+        let c = self.inc.take().or(self.cur.take());
+        self.cur = c.map(|c| c.moved(io, self.rate, secs)).transpose()?;
         Ok(())
     }
 
@@ -817,10 +826,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         }
         if let Some((t, at, pre, hit)) = play {
             let s = match (hit, pre) {
-                (Some(mut s), _) => {
-                    s.track = t;
-                    s.seek(at).map(|()| s).map_err(|e| e.to_string())
-                }
+                (Some(s), _) => Source { track: t, ..s }.moved(&io, mix.rate, at),
                 (None, Some(h)) => h
                     .join()
                     .expect("open thread")
