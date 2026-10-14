@@ -45,15 +45,12 @@ minimum-system-version = "11.0"
 [dependencies]
 anyhow = "1.0.104"
 bytes = "1.12.1"
-dirs = "7.0.0"
 keyring-core = "1.0.0"
-md-5 = "0.11.0"
+md-5 = "0.10.6"
 reqwest = { version = "0.13.5", default-features = false, features = [
     "rustls-no-provider",
-    "query",
     "json",
     "gzip",
-    "stream",
 ] }
 rustls = { version = "0.23.45", default-features = false, features = [
     "ring",
@@ -74,7 +71,6 @@ iced = { version = "0.14.0", default-features = false, features = [
     "x11",
     "wayland",
     "web-colors",
-    "thread-pool",
     "crisp",
 ] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
@@ -120,7 +116,6 @@ default-features = false
 winresource = "0.1.31"
 
 [dev-dependencies]
-dotenvy = "0.15.7"
 iced_test = "0.14.0"
 tiny-skia = { version = "0.11.4", default-features = false, features = ["std", "simd"] }
 

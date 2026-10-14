@@ -29,7 +29,7 @@ mod linux {
     }
 
     pub fn install() -> std::io::Result<()> {
-        let data = dirs::data_dir().ok_or(std::io::ErrorKind::NotFound)?;
+        let data = navify::config::dir("data");
         let exe = std::env::var_os("APPIMAGE").map_or_else(std::env::current_exe, |p| Ok(p.into()));
         let exe = format!("Exec=\"{}\"", exe?.display());
         let desktop = include_str!("../assets/navify.desktop").replace("Exec=navify", &exe);
