@@ -92,6 +92,8 @@ pub mod icon {
     pub const SAVED: char = '\u{e226}';
     pub const HOME: char = '\u{e0f5}';
     pub const SEARCH: char = '\u{e151}';
+    pub const FULL: char = '\u{e112}';
+    pub const WINDOW: char = '\u{e11a}';
     pub const LIBRARY: char = '\u{e100}';
     pub const QUEUE: char = '\u{e2e0}';
     pub const EQ: char = '\u{e55a}';

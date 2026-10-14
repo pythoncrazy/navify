@@ -183,6 +183,7 @@ pub enum Message {
     Window(bool),
     CloseWindow,
     Win(iced::window::Id),
+    Full(bool),
 }
 
 #[derive(Debug, Default)]
@@ -301,6 +302,7 @@ pub struct App {
     pub seek_preview: Option<f32>,
     pub recent: Vec<Song>,
     pub recent_tab: bool,
+    pub full: bool,
 }
 
 fn shot_key(shot: Option<&str>) -> Option<String> {
@@ -1220,6 +1222,16 @@ impl App {
                     sub: 0,
                 });
             }
+            Message::MenuClose if self.full && self.menu.is_none() && self.modal.is_none() => {
+                return self.update(Message::Full(false));
+            }
+            Message::Full(on) => {
+                use iced::window::{Mode, set_mode};
+                self.full = on;
+                let mode = [Mode::Windowed, Mode::Fullscreen][usize::from(on)];
+                let mode = self.win.map(|id| set_mode(id, mode));
+                return Task::batch([Task::batch(mode), self.covers_now()]);
+            }
             Message::MenuClose => {
                 if self.menu.is_none() && self.modal.is_none() {
                     (self.sel, self.picked) = (None, BTreeSet::new());
@@ -1763,8 +1775,9 @@ impl App {
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
         let (_, rows, span) = crate::view::lib_rows(self);
         small.extend(rows[span].iter().map(|r| r.0));
-        let now = Vec::from_iter(now.filter(|_| self.panel == 1));
-        let (art, side) = (crate::pages::art_px(self), self.right_w() - 32.0);
+        let now = Vec::from_iter(now.filter(|_| self.panel == 1 || self.full));
+        let side = [self.right_w() - 32.0, 300.0][usize::from(self.full)];
+        let art = crate::pages::art_px(self);
         let lists = [(big, cw - 24.0), (head, art), (now, side), (small, 56.0)];
         let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
         let all = lists.chain([(huge, 640)]);

@@ -1,4 +1,4 @@
-use iced::font::Weight::{Medium, Normal};
+use iced::font::Weight::{Black, Medium, Normal};
 use iced::widget::tooltip::Position::{Bottom, Right, Top};
 use iced::widget::{
     Row, Space, button, column, container, image, mouse_area, row, scrollable, slider, stack, text,
@@ -416,7 +416,7 @@ fn player_bar(app: &App) -> El<'_> {
         let b = b.style(theme::link(if on { ACCENT } else { SUB }));
         tip(b.on_press(m), label, Top)
     };
-    let left = song.map(|s| {
+    let left = song.filter(|_| !app.full).map(|s| {
         let on = app.is_starred(&s.id, s.starred);
         let title = theme::ell(&s.title, 200.0, 14.0, Normal);
         let title = btn(title, Message::Nav(format!("album:{}", s.album_id)));
@@ -484,12 +484,21 @@ fn player_bar(app: &App) -> El<'_> {
     let words = words[usize::from(lyrics)].clone();
     let mute = if app.muted { "Unmute" } else { "Mute" };
     let np = Message::Panel(1);
-    let right = row![
+    let panels = row![
         side(ic(i::PR), app.panel == 1, "Now playing view", np),
         side(ic(i::LYRICS), lyrics, "Lyrics", words),
         side(ic(i::QUEUE), app.panel == 2, "Queue", Message::Panel(2)),
+    ];
+    let right = row![
+        (!app.full).then(|| panels.spacing(4)),
         side(vol_icon, false, mute, Message::Mute),
         volume,
+        side(
+            ic([i::FULL, i::WINDOW][usize::from(app.full)]),
+            false,
+            ["Full screen", "Exit full screen"][usize::from(app.full)],
+            Message::Full(!app.full),
+        ),
     ];
     let right = container(right.spacing(4).align_y(Center)).align_right(FillPortion(3));
     let left = container(left).width(FillPortion(3));
@@ -605,6 +614,23 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
 pub fn view(app: &App) -> El<'_> {
     if app.session.is_none() {
         return pages::login(app);
+    }
+    if app.full {
+        let s = app.current_song();
+        let top = s.and_then(|s| app.covers.color.get(&s.cover).copied());
+        let w = app.view_size().0 - 428.0;
+        let info = s.map(|s| {
+            let lines = column![theme::ell(&s.title, w, 64.0, Black)];
+            let lines = lines.push(artists_line(&s.artists, 24.0, w)).spacing(8);
+            row![cover(app, &s.cover, 300.0, false), lines]
+                .spacing(32)
+                .align_y(iced::Bottom)
+        });
+        let from = column![sub("Playing from", 12.0), bold(app.source.clone(), 14.0)];
+        let body = column![from.spacing(4), Space::new().height(Fill)].push(info);
+        let body = column![body.padding(48).height(Fill), player_bar(app)];
+        let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];
+        return container(body).style(theme::down(&bg)).into();
     }
     let scrim = |c: Color| {
         let s = container(Space::new()).width(Fill).height(Fill);
