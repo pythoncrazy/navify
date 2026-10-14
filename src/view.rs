@@ -217,7 +217,7 @@ pub fn fmt_long(s: f32) -> String {
 
 pub fn tip<'a>(c: impl Into<El<'a>>, label: impl ToString, at: tooltip::Position) -> El<'a> {
     let body = container(txt(label, 14.0)).padding([4, 8]);
-    let body = body.style(theme::menu);
+    let body = body.style(fill(theme::MENU, 4.0));
     let delay = std::time::Duration::from_millis(200);
     tooltip(c, body, at).gap(8).delay(delay).into()
 }
@@ -522,7 +522,7 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
     };
     let x = icon_btn(i::X, 16.0, Message::MenuClose);
     let close = focusable(x, Some(Message::MenuClose), 16.0, Some("layer"));
-    let style = |t: &iced::Theme| theme::menu(t).border(iced::border::rounded(8));
+    let style = fill(theme::MENU, 8.0);
     if kind == 3 {
         let chip = |k: &str| {
             let k = container(bold(k.to_string(), 12.0)).padding([4, 8]);

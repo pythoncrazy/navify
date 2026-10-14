@@ -623,11 +623,6 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
         ell(p.title, tw, size, Black).line_height(1.1)
     };
-    let mut shadow = theme::SHADOW;
-    (shadow.blur_radius, shadow.offset) = (60.0, iced::Vector::new(0.0, 4.0));
-    let r = [4.0, px / 2.0][usize::from(app.route.starts_with("artist:"))];
-    let st = container::Style::default().shadow(shadow);
-    let art = container(p.art).style(move |_| st.border(iced::border::rounded(r)));
     let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
     let hero: El = if let Some(url) = p.banner {
         let bh = app.main_w() / 3.0;
@@ -645,7 +640,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     } else {
         let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
         let info = column![kind, title(app.main_w() - 3.0 * PAD - px), p.meta].spacing(8);
-        let hero = row![art, info].spacing(PAD).align_y(iced::Bottom);
+        let hero = row![p.art, info].spacing(PAD).align_y(iced::Bottom);
         let hero = container(hero).padding(PAD).width(Fill);
         hero.height(px + 2.0 * PAD).style(bg).into()
     };
@@ -1540,7 +1535,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     };
     let boxed = |el: El<'a>, w: f32, h: f32, pad: u16| {
         let c = container(el).padding(pad).width(w).height(h);
-        (c.style(theme::menu).into(), w, h)
+        (c.style(fill(theme::MENU, 4.0)).into(), w, h)
     };
     let it = |c: char, l: &str, m: Message| Some((c, l.to_string(), m, false));
     let open = |n: u8, c: char, l: &str| {
