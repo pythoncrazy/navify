@@ -372,7 +372,8 @@ struct Source {
 }
 
 impl Source {
-    fn open(mut track: Track, (rt, http): &Io, rate: u32, offset: f32) -> Result<Source, String> {
+    fn open(mut track: Track, io: &Io, rate: u32, offset: f32) -> Result<Source, String> {
+        let (rt, http) = io;
         let mut url = track.url.clone();
         if track.transcoded && offset >= 1.0 {
             url += &format!("&timeOffset={}", offset as u32);
@@ -403,8 +404,7 @@ impl Source {
             if !track.transcoded && net.st().len.is_none() {
                 track.transcoded = true;
                 if offset >= 1.0 {
-                    let io = (rt.clone(), http.clone());
-                    return Ok(Source::open(track.clone(), &io, rate, offset)?);
+                    return Ok(Source::open(track, io, rate, offset)?);
                 }
             }
             let mut task = JoinSet::new();
@@ -528,18 +528,14 @@ impl Source {
 
     fn moved(mut self, io: &Io, rate: u32, secs: f32) -> Result<Source, String> {
         let seq = self.track.transcoded || self.net.st().len.is_none();
-        match seq || self.seek(secs).is_err() {
-            true => Source::open(
-                Track {
-                    transcoded: seq,
-                    ..self.track
-                },
-                io,
-                rate,
-                secs,
-            ),
-            false => Ok(self),
+        if !seq && self.seek(secs).is_ok() {
+            return Ok(self);
         }
+        let t = Track {
+            transcoded: seq,
+            ..self.track
+        };
+        Source::open(t, io, rate, secs)
     }
 
     fn pos(&self) -> f32 {

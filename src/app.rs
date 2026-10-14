@@ -115,6 +115,18 @@ fn say(text: String) -> Message {
     task(move |a| a.toast(&text))
 }
 
+fn blocking<E: std::fmt::Display + Send + 'static>(
+    fail: &'static str,
+    f: impl FnOnce() -> Result<(), E> + Send + 'static,
+) -> Task<Message> {
+    Task::perform(tokio::task::spawn_blocking(f), move |r| {
+        match r.expect("the blocking task ends") {
+            Ok(()) => Message::Noop,
+            Err(e) => say(format!("{fail}{e}")),
+        }
+    })
+}
+
 fn reload(pid: &str) -> impl Fn(&mut App) -> Task<Message> + Clone + Send + Sync + 'static {
     let key = format!("playlist:{pid}");
     move |a| {
@@ -151,6 +163,7 @@ pub enum Message {
     Seek(f32),
     Shuffle,
     Vol(f32),
+    Step(bool, f32),
     Star(Vec<String>, bool),
     Rate(String, u8),
     Queue(Vec<Song>, bool),
@@ -743,15 +756,6 @@ impl App {
         later(3.0, clear)
     }
 
-    fn keyring(f: impl FnOnce() -> anyhow::Result<()> + Send + 'static) -> Task<Message> {
-        Task::perform(tokio::task::spawn_blocking(f), |r| {
-            match r.expect("keyring task") {
-                Ok(()) => Message::Noop,
-                Err(e) => say(e.to_string()),
-            }
-        })
-    }
-
     fn save_later(&mut self) -> Task<Message> {
         if !self.cfg.settings.queue_sync {
             return Task::none();
@@ -791,12 +795,7 @@ impl App {
             *last = n;
             c.save()
         };
-        Task::perform(tokio::task::spawn_blocking(save), |r| {
-            match r.expect("save task") {
-                Ok(()) => Message::Noop,
-                Err(e) => say(format!("Could not save the settings. {e}")),
-            }
-        })
+        blocking("Could not save the settings. ", save)
     }
 
     pub fn gain(&self, song: &Song) -> f32 {
@@ -840,13 +839,10 @@ impl App {
             let files = crate::api::cache_files(&dir);
             files.iter().map(|f| f.2).sum::<u64>()
         };
-        Task::perform(
-            async move { tokio::task::spawn_blocking(scan).await },
-            |n| {
-                let n: AnyData = Arc::new(n.expect("cache scan"));
-                Message::Loaded("disk".into(), 0, Ok(n))
-            },
-        )
+        Task::perform(tokio::task::spawn_blocking(scan), |n| {
+            let n: AnyData = Arc::new(n.expect("cache scan"));
+            Message::Loaded("disk".into(), 0, Ok(n))
+        })
     }
 
     fn next_index(&self, manual: bool) -> Option<usize> {
@@ -952,16 +948,8 @@ impl App {
             #[cfg(not(all(unix, not(target_os = "macos"))))]
             n.show().map(drop).map_err(|e| e.to_string())
         };
-        let note = self.cfg.settings.notify.then(|| {
-            Task::perform(tokio::task::spawn_blocking(show), |r| {
-                match r.expect("the notification task ends") {
-                    Ok(()) => Message::Noop,
-                    Err(e) => {
-                        task(move |a| a.toast(&format!("Could not show a notification. {e}")))
-                    }
-                }
-            })
-        });
+        let note =
+            (self.cfg.settings.notify).then(|| blocking("Could not show a notification. ", show));
         Task::batch([lyr, now, Task::batch(note), self.save_later()])
     }
 
@@ -1495,6 +1483,14 @@ impl App {
                 return self.save_later();
             }
             Message::Vol(v) => (self.volume, self.cfg.settings.volume, self.muted) = (v, v, false),
+            Message::Step(true, d) => {
+                let v = self.volume + d * self.cfg.settings.vol_step / 100.0;
+                return self.update(Message::Vol(v.clamp(0.0, 1.0)));
+            }
+            Message::Step(false, d) => {
+                let to = self.pos() + d * self.cfg.settings.seek_secs;
+                return self.update(Message::Seek(to.max(0.0)));
+            }
             Message::Star(ids, on) => {
                 (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
                 self.star(&ids, on);
@@ -1696,7 +1692,7 @@ impl App {
             Message::LogOut => {
                 let gone = self.cfg.active.take().map(|id| {
                     self.cfg.servers.retain(|s| s.id != id);
-                    Self::keyring(move || config::forget(&id))
+                    blocking("", move || config::forget(&id))
                 });
                 let h = self.reset();
                 self.session = None;
@@ -1715,7 +1711,7 @@ impl App {
             }
             Message::DropServer(id) => {
                 self.cfg.servers.retain(|s| s.id != id);
-                let gone = Self::keyring(move || config::forget(&id));
+                let gone = blocking("", move || config::forget(&id));
                 return Task::batch([self.persist(), gone]);
             }
             Message::Do(Act(f)) => return f(self),
@@ -1889,9 +1885,9 @@ impl App {
                 return self.covers_now();
             }
             Message::LibScrolled(off, view) => {
-                let old = crate::view::lib_rows(self).2;
+                let old = crate::view::lib_rows(self).1;
                 self.lib_scroll = (off, view);
-                if crate::view::lib_rows(self).2 != old {
+                if crate::view::lib_rows(self).1 != old {
                     return self.covers_now();
                 }
             }
@@ -1958,7 +1954,7 @@ impl App {
         let kept = self
             .login
             .remember
-            .then(|| Self::keyring(move || config::remember(&key, &pass)));
+            .then(|| blocking("", move || config::remember(&key, &pass)));
         self.cfg.servers.retain(|x| x.id != id);
         self.cfg.servers.push(s.server.clone());
         (self.cfg.active, self.session, self.login) = (Some(id), Some(s), Login::default());
@@ -2069,19 +2065,15 @@ impl App {
 
     fn media(&mut self, e: souvlaki::MediaControlEvent) -> Task<Message> {
         use souvlaki::{MediaControlEvent as E, SeekDirection as D};
-        let pos = self.pos();
-        let by = |d: D, t: f32| match d {
-            D::Forward => Message::Seek(pos + t),
-            D::Backward => Message::Seek((pos - t).max(0.0)),
-        };
+        let dir = |d: D| [-1.0, 1.0][usize::from(matches!(d, D::Forward))];
         let m = match e {
             E::Toggle => Message::Toggle,
             E::Play if !self.playing => Message::Toggle,
             E::Pause | E::Stop if self.playing => Message::Toggle,
             E::Next => Message::Next(true),
             E::Previous => Message::Prev,
-            E::Seek(d) => by(d, self.cfg.settings.seek_secs),
-            E::SeekBy(d, t) => by(d, t.as_secs_f32()),
+            E::Seek(d) => Message::Step(false, dir(d)),
+            E::SeekBy(d, t) => Message::Seek((self.pos() + dir(d) * t.as_secs_f32()).max(0.0)),
             E::SetPosition(p) => Message::Seek(p.0.as_secs_f32()),
             E::SetVolume(v) => Message::Vol(v.clamp(0.0, 1.0) as f32),
             E::Quit => Message::Close,
@@ -2184,7 +2176,7 @@ impl App {
         let ahead = [0, 1, 100][self.panel as usize];
         let next = (self.index + 1..self.queue.len()).take(ahead);
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
-        let (_, rows, span) = crate::view::lib_rows(self);
+        let (rows, span) = crate::view::lib_rows(self);
         small.extend(rows[span].iter().map(|r| r.0));
         let now = Vec::from_iter(now.filter(|_| self.panel == 1 || self.full));
         let side = [self.right_w() - 32.0, 300.0][usize::from(self.full)];
@@ -2319,24 +2311,16 @@ pub const KEYS: [KeyAction; 23] = [
     ("next", "Next track", "C+ArrowRight", || Message::Next(true)),
     ("prev", "Previous track", "C+ArrowLeft", || Message::Prev),
     ("seek_fwd", "Seek forward", "Shift+ArrowRight", || {
-        task(|a| a.update(Message::Seek(a.pos() + a.cfg.settings.seek_secs)))
+        Message::Step(false, 1.0)
     }),
     ("seek_back", "Seek backward", "Shift+ArrowLeft", || {
-        task(|a| a.update(Message::Seek((a.pos() - a.cfg.settings.seek_secs).max(0.0))))
+        Message::Step(false, -1.0)
     }),
     ("vol_up", "Volume up", "C+ArrowUp", || {
-        task(|a| {
-            a.update(Message::Vol(
-                (a.volume + a.cfg.settings.vol_step / 100.0).min(1.0),
-            ))
-        })
+        Message::Step(true, 1.0)
     }),
     ("vol_down", "Volume down", "C+ArrowDown", || {
-        task(|a| {
-            a.update(Message::Vol(
-                (a.volume - a.cfg.settings.vol_step / 100.0).max(0.0),
-            ))
-        })
+        Message::Step(true, -1.0)
     }),
     ("shuffle", "Shuffle", "C+S", || Message::Shuffle),
     ("repeat", "Repeat", "C+R", || act(App::repeat)),

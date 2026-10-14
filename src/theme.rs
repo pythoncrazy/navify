@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use iced::font::{Family, Weight};
+use iced::font::Weight;
 use iced::widget::button::{Status, Style as BtnStyle};
 use iced::widget::{button, container, pick_list, scrollable, slider, text, text_input, toggler};
 use iced::{Background, Border, Color, Element, Font, Shadow, Theme, color};
@@ -34,11 +34,9 @@ pub fn shade(c: Color, k: f32) -> Color {
 }
 
 pub fn fw(weight: Weight) -> Font {
-    let family = Family::Name("Figtree");
     Font {
-        family,
         weight,
-        ..Font::DEFAULT
+        ..Font::with_name("Figtree")
     }
 }
 
