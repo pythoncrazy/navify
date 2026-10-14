@@ -256,6 +256,11 @@ fn top_bar(app: &App) -> El<'_> {
     let search = search.style(style).icon(glass).width(474).size(16);
     let search = search.font(theme::fw(Normal)).padding([13, 16]);
     let search = search.line_height(text::LineHeight::Absolute(22.0.into()));
+    let browse = match app.route.starts_with("search") {
+        true => Message::Noop,
+        false => Message::Nav("search".into()),
+    };
+    let search = mouse_area(search).on_release(browse);
     let fwd = app.hi + 1 < app.history.len();
     let settings = Message::Nav("settings".into());
     let menu = Message::Menu(Box::new(MenuKind::User));
