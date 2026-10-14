@@ -128,6 +128,10 @@ fn reload(pid: &str) -> impl Fn(&mut App) -> Task<Message> + Clone + Send + Sync
     }
 }
 
+fn bare(id: &str) -> &str {
+    id.split_once('#').map_or(id, |x| x.0)
+}
+
 fn later(secs: f32, m: Message) -> Task<Message> {
     Task::future(tokio::time::sleep(Duration::from_secs_f32(secs))).map(move |()| m.clone())
 }
@@ -216,7 +220,7 @@ pub struct Covers {
     map: HashMap<String, [Slot; 4]>,
     pub bytes: usize,
     tick: u64,
-    pub color: HashMap<String, Color>,
+    color: HashMap<String, Color>,
     want: HashSet<(String, u32)>,
 }
 
@@ -227,12 +231,16 @@ fn slot(size: u32) -> usize {
 
 impl Covers {
     pub fn get(&self, id: &str, size: u32) -> Option<image::Handle> {
-        let (e, mut near) = (self.map.get(id)?, [0, 1, 2, 3]);
+        let (e, mut near) = (self.map.get(bare(id))?, [0, 1, 2, 3]);
         near.sort_unstable_by_key(|&j| SIZES[j].abs_diff(size));
         near.iter().find_map(|&j| Some(e[j].as_ref()?.1.clone()))
     }
 
+    pub fn color(&self, id: &str) -> Option<Color> {
+        self.color.get(bare(id)).copied()
+    }
     fn insert(&mut self, id: String, size: u32, (c, h, n): Decoded) {
+        let id = bare(&id).to_string();
         self.tick += 1;
         self.color.insert(id.clone(), c);
         let e = &mut self.map.entry(id).or_default()[slot(size)];
@@ -242,7 +250,7 @@ impl Covers {
             let all = self
                 .map
                 .iter()
-                .flat_map(|(id, e)| (0..3).map(move |j| (&e[j], id, j)));
+                .flat_map(|(id, e)| e.iter().enumerate().map(move |(j, s)| (s, id, j)));
             let all = all.filter_map(|(s, id, j)| Some((s.as_ref()?.0, id, j)));
             let (_, id, j) = all.min().expect("the counted bytes belong to covers");
             let id = id.clone();
@@ -963,9 +971,9 @@ impl App {
         };
         let mut tasks = Vec::new();
         for (id, size) in ids {
-            let e = self.covers.map.get(&id);
+            let e = self.covers.map.get(bare(&id));
             let have = e.is_some_and(|e| e[slot(size)].is_some());
-            if id.is_empty() || have || !self.covers.want.insert((id.clone(), size)) {
+            if id.is_empty() || have || !self.covers.want.insert((bare(&id).into(), size)) {
                 continue;
             }
             let (s, k) = (s.clone(), id.clone());
@@ -1332,7 +1340,7 @@ impl App {
                 return Task::batch([self.disc_load(), setup, banner]);
             }
             Message::Cover(id, size, r) => {
-                self.covers.want.remove(&(id.clone(), size));
+                self.covers.want.remove(&(bare(&id).into(), size));
                 match r {
                     Ok(d) => self.covers.insert(id, size, d),
                     Err(e) => return self.toast(&format!("Could not load a cover. {e}")),

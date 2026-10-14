@@ -67,6 +67,8 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     }
     let bare = json!({"id": "s", "albumId": "al1", "hasCoverArt": false, "imageHash": "h"});
     assert_eq!(api::parse::<Song>(bare)?.cover, "al1#h");
+    let sub = api::parse::<serde_json::Value>(json!({"id": "s", "coverArt": "al-al1_h"}))?;
+    assert_eq!(api::parse::<Song>(sub)?.cover, "al1#h");
     assert!(api::parse::<Song>(json!({"title": 5})).is_err());
     assert!(api::parse::<Vec<Song>>(serde_json::Value::Null)?.is_empty());
     let native = json!({"id": "al1", "maxYear": 2015, "tags": {"recordlabel": ["L"], "releasetype": ["ep"]}});

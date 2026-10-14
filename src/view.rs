@@ -645,7 +645,7 @@ pub fn view(app: &App) -> El<'_> {
     });
     if app.full {
         let s = app.current_song();
-        let top = s.and_then(|s| app.covers.color.get(&s.cover).copied());
+        let top = s.and_then(|s| app.covers.color(&s.cover));
         let w = app.view_size().0 - 428.0;
         let info = s.map(|s| {
             let lines = column![theme::ell(&s.title, w, 64.0, Black)];

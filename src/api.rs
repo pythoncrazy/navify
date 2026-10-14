@@ -225,9 +225,16 @@ fn normalize(v: &mut Value) {
             let has = m.get("hasCoverArt") != Some(&false.into());
             let id = m.get(["albumId", "id"][usize::from(has)]).cloned();
             let (id, hash) = (id.filter(Value::is_string), m.remove("imageHash"));
+            let id = id.filter(|_| !m.contains_key("cover"));
             if let Some(c) = m.remove("coverArt").filter(|c| c != "").or(id) {
+                let nd = |c: &str| {
+                    let (k, rest) = c.split_once('-')?;
+                    let (id, h) = rest.rsplit_once('_')?;
+                    matches!(k, "al" | "ar" | "mf" | "pl").then(|| format!("{id}#{h}").into())
+                };
                 let c = match (c.as_str(), hash.as_ref().and_then(Value::as_str)) {
                     (Some(c), Some(h)) => format!("{c}#{h}").into(),
+                    (Some(c), None) => nd(c).unwrap_or(c.into()),
                     _ => c,
                 };
                 m.insert("cover".into(), c);
