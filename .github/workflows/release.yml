@@ -32,11 +32,15 @@ jobs:
             formats: dmg
     env:
       APPIMAGE_EXTRACT_AND_RUN: 1
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.18.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
