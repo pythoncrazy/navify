@@ -67,6 +67,12 @@ async fn shuffle_keeps_the_current_song() {
     assert!(app.real_at(99) == 99 && cur(&app) == playing);
     let _ = app.update(Message::Shuffle);
     assert!(cur(&app) == playing && app.shuffle.is_none());
+    let _ = app.update(Message::Play(songs("ab"), 0, "t".into()));
+    let _ = app.update(Message::Prev);
+    assert!(cur(&app) == "a" && app.playing);
+    let _ = app.update(Message::Next(true));
+    let _ = app.update(Message::Next(false));
+    assert!(cur(&app) == "a" && !app.playing && app.position == 0.0);
 }
 
 #[test]

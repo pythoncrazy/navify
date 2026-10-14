@@ -300,7 +300,7 @@ pub struct App {
     media: Option<souvlaki::MediaControls>,
     pub tray: Option<Box<dyn Any>>,
     win: Option<iced::window::Id>,
-    os: (String, bool),
+    os: (String, bool, bool),
     pub queue: Vec<Song>,
     pub index: usize,
     pub shuffle: Option<Vec<usize>>,
@@ -1249,17 +1249,22 @@ impl App {
             p.set_volume(if self.muted { 0.0 } else { self.volume });
             p.set_crossfade(self.cfg.settings.crossfade_secs);
         }
-        let id = self.current_song().map_or("", |s| s.id.as_str());
-        if (id, self.playing) == (self.os.0.as_str(), self.os.1) && !seek {
+        let (song, s) = (self.current_song(), self.session.as_ref());
+        let id = song.map_or("", |s| s.id.as_str());
+        let same = (id, self.playing) == (self.os.0.as_str(), self.os.1) && !seek;
+        if self.media.is_none() || same && self.os.2 {
             return t;
         }
-        self.os = (id.to_string(), self.playing);
-        let (song, pos) = (self.current_song().cloned(), self.pos());
-        let (song, s) = (song.as_ref(), self.session.as_ref());
-        let art = song
+        let file = song
             .zip(s)
             .map(|(s, x)| x.cover_file(&s.cover, self.bucket(56.0)));
-        let art = art.filter(|f| f.exists());
+        let art = file.filter(|f| f.exists());
+        if same && art.is_none() {
+            return t;
+        }
+        self.os = (id.to_string(), self.playing, art.is_some());
+        let (song, pos) = (self.current_song().cloned(), self.pos());
+        let song = song.as_ref();
         let art = art.map(|f| format!("file://{}", f.display()));
         if let Some(m) = &mut self.media {
             let _ = m.set_metadata(souvlaki::MediaMetadata {
@@ -1435,13 +1440,18 @@ impl App {
                 (self.position, self.save_seq) = (self.pos(), self.save_seq + 1);
                 return Task::batch([l, self.save_queue()]);
             }
-            Message::Prev if self.pos() > 3.0 => return self.update(Message::Seek(0.0)),
-            Message::Prev if self.index > 0 => return self.play_index(self.index - 1, 0.0),
-            Message::Prev => {}
+            Message::Prev if self.pos() > 3.0 || self.index == 0 => {
+                return self.update(Message::Seek(0.0));
+            }
+            Message::Prev => return self.play_index(self.index - 1, 0.0),
             Message::Next(manual) => {
                 return match self.next_index(manual) {
                     Some(n) => self.play_index(n, 0.0),
-                    None => self.halt(),
+                    None => {
+                        let done = self.halt();
+                        (self.index, self.position) = (0, 0.0);
+                        done
+                    }
                 };
             }
             Message::Seek(pos) => {
@@ -2070,7 +2080,7 @@ impl App {
             Message::Audio(navify_audio::Event::Ended) => return self.update(Message::Next(false)),
             Message::Audio(navify_audio::Event::Error(e)) => {
                 let done = self.listen(false);
-                (self.playing, self.loaded) = (false, false);
+                (self.position, self.playing, self.loaded) = (self.pos(), false, false);
                 return Task::batch([done, self.toast(&format!("Playback failed. {e}"))]);
             }
         }
