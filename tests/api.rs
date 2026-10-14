@@ -1,5 +1,5 @@
 use anyhow::{Context, Error, Result};
-use navify::api::{self, Session, Song};
+use navify::api::{self, Album, Session, Song};
 use serde_json::json;
 
 async fn session(prefix: &str, keys: [&str; 3]) -> Session {
@@ -46,7 +46,7 @@ async fn read_suite(s: &Session) -> Result<()> {
 }
 
 #[test]
-fn song_parses_from_native_and_subsonic_json() -> Result<()> {
+fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     let native = json!({
         "id": "row1", "mediaFileId": "n1", "title": "T", "albumId": "al1", "trackNumber": 3,
         "discNumber": 2, "starred": true, "rating": 4, "rgTrackGain": -7.5, "rgAlbumPeak": 1.2,
@@ -69,6 +69,18 @@ fn song_parses_from_native_and_subsonic_json() -> Result<()> {
     assert_eq!(api::parse::<Song>(bare)?.cover, "al1#h");
     assert!(api::parse::<Song>(json!({"title": 5})).is_err());
     assert!(api::parse::<Vec<Song>>(serde_json::Value::Null)?.is_empty());
+    let native = json!({"id": "al1", "maxYear": 2015, "tags": {"recordlabel": ["L"], "releasetype": ["ep"]}});
+    let subsonic = json!({
+        "id": "al1", "year": 2015, "recordLabels": [{"name": "L"}], "releaseTypes": ["ep"],
+        "releaseDate": {"year": 2015, "month": 3, "day": 9}
+    });
+    for v in [native, subsonic] {
+        let a: Album = api::parse(v)?;
+        assert_eq!(
+            (a.year, a.labels, a.release_types),
+            (2015, vec!["L".into()], vec!["ep".into()])
+        );
+    }
     Ok(())
 }
 

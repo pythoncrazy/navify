@@ -707,11 +707,36 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     Some((page, &p.items, cols(app, true, true, n)))
 }
 
+pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
+    let key = format!("artist:{}", a.artist_id);
+    let all = app
+        .data::<(Artist, Vec<Album>)>(&key)
+        .map_or(&[][..], |x| &x.1[..]);
+    let mut v = by_date(all.iter().filter(|x| x.id != a.id));
+    v.truncate(app.grid().0);
+    v
+}
+
 fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
     let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
     let body = column![table_head(c), vlist(app, songs, &app.route, c, y0)];
-    Some(page(app, p, body.into()))
+    let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
+        let day = Some(date(&a.release_date)).filter(|d| !d.is_empty());
+        let day = day.or((a.year > 0).then(|| a.year.to_string()));
+        let label =
+            (!a.labels.is_empty()).then(|| format!("\u{2117} {} {}", a.year, a.labels.join(", ")));
+        let notes = column![day.map(|d| sub(d, 14.0)), label.map(|l| sub(l, 11.0))].spacing(4);
+        let more = more_by(app, a)
+            .into_iter()
+            .map(|x| album_card(app, x, year_kind(x)));
+        let all = Some(format!("discography:{}", a.artist_id));
+        let more = shelf(&format!("More by {}", a.artist), all, more);
+        column![container(notes).padding([0.0, PAD]), more]
+            .spacing(48)
+            .padding(padding::bottom(PAD))
+    });
+    Some(page(app, p, body.push(foot).into()))
 }
 
 pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {

@@ -95,6 +95,7 @@ pub struct Album {
     pub compilation: bool,
     pub release_types: Vec<String>,
     pub release_date: String,
+    pub labels: Vec<String>,
     pub artists: Vec<Artist>,
     pub album_artists: Vec<Artist>,
 }
@@ -201,6 +202,12 @@ fn normalize(v: &mut Value) {
             if let Some(t) = tags.or(mbz).filter(|_| !m.contains_key("releaseTypes")) {
                 m.insert("releaseTypes".into(), t);
             }
+            let tags = m.get("tags").and_then(|t| t.get("recordlabel")).cloned();
+            let named = m.remove("recordLabels").and_then(|v| match v {
+                Value::Array(a) => Some(a.iter().filter_map(|l| l.get("name").cloned()).collect()),
+                _ => None,
+            });
+            m.extend(tags.or(named).map(|l| ("labels".to_string(), l)));
             if let Some(Value::Object(d)) = m.get("releaseDate") {
                 let n = |k| d.get(k).and_then(Value::as_u64).unwrap_or_default();
                 let date = format!("{:04}-{:02}-{:02}", n("year"), n("month"), n("day"));
