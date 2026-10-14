@@ -1515,9 +1515,6 @@ impl App {
                     o.splice(at..at, shuffle(base..base + n, usize::MAX));
                 } else {
                     let at = at.min(self.queue.len());
-                    if at <= self.index && !self.queue.is_empty() {
-                        self.index += n;
-                    }
                     self.queue.splice(at..at, songs);
                 }
                 self.queue_next_refresh();
