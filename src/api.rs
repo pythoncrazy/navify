@@ -302,9 +302,13 @@ impl Session {
         static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
         HTTP.get_or_init(|| {
             let _ = rustls::crypto::ring::default_provider().install_default();
-            let builder = reqwest::Client::builder();
-            let agent = concat!("navify/", env!("CARGO_PKG_VERSION"));
-            builder.user_agent(agent).build().expect("HTTP client")
+            let builder = reqwest::Client::builder()
+                .user_agent(concat!("navify/", env!("CARGO_PKG_VERSION")));
+            let builder = builder.connect_timeout(Duration::from_secs(10));
+            builder
+                .read_timeout(Duration::from_secs(30))
+                .build()
+                .expect("HTTP client")
         })
         .clone()
     }
