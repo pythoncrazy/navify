@@ -1,3 +1,5 @@
+use std::ops::RangeInclusive;
+
 use iced::font::Weight::{Black, Bold, Medium, Normal};
 use iced::widget::{
     Column, Row, Space, button, column, container, hover, image, mouse_area, pick_list, row,
@@ -971,14 +973,16 @@ fn lyrics(app: &App) -> El<'_> {
         let t = container(t).center_x(Fill).padding(80);
         return t.height(app.view_size().1 - 160.0).style(bg).into();
     };
-    let at = |t: u64| t as i64 + l.offset;
+    let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
+    let at = |t: u64| t as i64 + l.offset + lag;
     let lines = l.lines.iter().enumerate().map(|(n, (t, line))| -> El<'_> {
         let fg = match n {
             _ if !synced || n == cur => TEXT,
             n if n < cur => theme::tint(0.7),
             _ => BG.scale_alpha(0.8),
         };
-        let words = bold(if line.is_empty() { "\u{266a}" } else { line }, 32.0);
+        let size = app.cfg.settings.lyrics_size;
+        let words = bold(if line.is_empty() { "\u{266a}" } else { line }, size);
         match t {
             Some(t) if synced => {
                 let seek = Message::Seek(at(*t).max(0) as f32 / 1000.0);
@@ -1008,7 +1012,8 @@ fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, usize, bool)> 
     let l = all.iter().find(|l| !l.lines.is_empty())?;
     let ms = (app.position * 1000.0) as i64;
     let end = (song.duration * 1000.0) as i64;
-    let at = |t: u64| t as i64 + l.offset;
+    let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
+    let at = |t: u64| t as i64 + l.offset + lag;
     let fits = l.lines.iter().filter_map(|x| x.0).all(|t| at(t) <= end);
     let synced = l.synced && (end <= 0 || fits);
     let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
@@ -1034,13 +1039,14 @@ fn pick<'a, T: Clone + Send + Sync + 'static>(
 fn settings(app: &App) -> El<'_> {
     let st = &app.cfg.settings;
     let opts = |v: &[&str]| v.chunks(2).map(|p| (p[0].into(), p[1].into())).collect();
-    let num = |v: f32, lo: f32, hi: f32, f: fn(&mut Settings, f32), label: String| -> El<'_> {
-        let s = slider(lo..=hi, v, move |x| set(f, x)).step(0.05f32);
+    let num = |v: f32, r: RangeInclusive<f32>, f: fn(&mut Settings, f32), label: String| {
+        let step = [0.1f32, 1.0][usize::from(*r.start() >= 1.0)];
+        let s = slider(r, v, move |x| set(f, x)).step(step);
         let label = sub(label, 14.0).width(56).align_x(Right);
         let r = row![s.width(200).style(theme::seek), label];
-        r.spacing(12).align_y(Center).into()
+        El::from(r.spacing(12).align_y(Center))
     };
-    let db = |v: f32, f| num(v, -15.0, 15.0, f, format!("{v:+.1} dB"));
+    let db = |v: f32, f| num(v, -15.0..=15.0, f, format!("{v:+.1} dB"));
     let tog = |v: bool, f: fn(&mut Settings, bool)| -> El<'_> {
         let t = toggler(v).on_toggle(move |b| set(f, b));
         t.style(theme::tog).size(20).into()
@@ -1065,7 +1071,16 @@ fn settings(app: &App) -> El<'_> {
     let gain = pick(gains, st.replaygain.as_str(), |s, v| s.replaygain = v);
     let preamp = db(st.preamp_db, |s, v| s.preamp_db = v);
     let fallback = db(st.fallback_db, |s, v| s.fallback_db = v);
-    let fade = num(x, 0.0, 12.0, |s, v| s.crossfade_secs = v, secs);
+    let fade = num(x, 0.0..=12.0, |s, v| s.crossfade_secs = v, secs);
+    let clip = tog(st.rg_clip, |s, b| s.rg_clip = b);
+    let (pct, step) = (st.scrobble_pct, st.seek_secs);
+    let (lag, size) = (st.lyrics_offset, st.lyrics_size);
+    let (l1, l2) = (format!("{pct:.0}%"), format!("{step:.0} s"));
+    let pct = num(pct, 10.0..=100.0, |s, v| s.scrobble_pct = v, l1);
+    let step = num(step, 1.0..=30.0, |s, v| s.seek_secs = v, l2);
+    let (l1, l2) = (format!("{lag:+.1} s"), format!("{size:.0} px"));
+    let lag = num(lag, -5.0..=5.0, |s, v| s.lyrics_offset = v, l1);
+    let size = num(size, 20.0..=48.0, |s, v| s.lyrics_size = v, l2);
     let format = pick(formats, tf, |s, v| s.transcode_format = v);
     let rate = pick(rates.into(), br, |s, v| s.transcode_max_bitrate = v);
     let sync = tog(st.queue_sync, |s, b| s.queue_sync = b);
@@ -1104,16 +1119,21 @@ fn settings(app: &App) -> El<'_> {
         line("ReplayGain", gain),
         line("Preamp", preamp),
         line("Gain for tracks without ReplayGain", fallback),
+        line("Limit the gain to stop clipping", clip),
         line("Crossfade", fade),
+        line("Seek step for keys and media controls", step),
         head("Streaming"),
         line("Transcode format", format),
         line("Maximum bitrate", rate),
         head("Library"),
         line("Sync the play queue with the server", sync),
         line("Send played tracks to the server (scrobble)", scrobble),
+        line("Scrobble after this part of the track", pct),
         head("Display"),
         line("Zoom", zoom),
         line(banners_label, banners),
+        line("Lyrics offset (positive shows the lines later)", lag),
+        line("Lyrics text size", size),
     ];
     let col = col.push(frame).push(tray).push(head("Servers"));
     let col = col.extend(app.cfg.servers.iter().map(server));
