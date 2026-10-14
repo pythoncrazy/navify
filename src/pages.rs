@@ -26,7 +26,7 @@ pub const BAR: f32 = 84.0;
 pub const HEAD: f32 = 53.0;
 const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
 const GREY: Color = color!(0x535353);
-const DOT: &str = " \u{2022} ";
+pub const DOT: &str = " \u{2022} ";
 const GROUPS: [(&str, &str); 4] = [
     ("all", "Popular releases"),
     ("album", "Albums"),
@@ -1312,6 +1312,10 @@ fn settings(app: &App) -> El<'_> {
     ];
     let col = col.push(frame).push(tray);
     let col = col.push(line("Start minimized", start_min));
+    let notify = tog(st.notify, |s, b| s.notify = b);
+    let col = col.push(line("Show a notification when a new track starts", notify));
+    let awake = tog(st.awake, |s, b| s.awake = b);
+    let col = col.push(line("Keep the computer awake while music plays", awake));
     let col = col.push(line(
         "Hide Navify in the tray when you minimize the window",
         min_tray,

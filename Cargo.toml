@@ -79,6 +79,7 @@ iced = { version = "0.14.0", default-features = false, features = [
 ] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 navify-audio = { path = "crates/audio" }
+notify-rust = { version = "4.18.2", default-features = false, features = ["d"] }
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_dbus"] }
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]

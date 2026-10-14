@@ -52,6 +52,8 @@ pub struct Settings {
     pub queue_skip: String,
     pub confirm_queue: bool,
     pub keys: std::collections::BTreeMap<String, String>,
+    pub notify: bool,
+    pub awake: bool,
 }
 
 impl Default for Settings {
@@ -93,6 +95,8 @@ impl Default for Settings {
             queue_skip: String::new(),
             confirm_queue: false,
             keys: Default::default(),
+            notify: false,
+            awake: false,
         }
     }
 }

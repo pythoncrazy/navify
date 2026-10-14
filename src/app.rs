@@ -305,6 +305,7 @@ pub struct App {
     pub modal: Option<(String, u8)>,
     held: Option<Message>,
     pub recording: Option<&'static str>,
+    awake: (bool, Option<std::sync::mpsc::Sender<bool>>),
     pub new_pl_desc: String,
     pub shot: Option<String>,
     pub new_pl: String,
@@ -686,7 +687,7 @@ impl App {
         }
     }
 
-    fn toast(&mut self, text: &str) -> Task<Message> {
+    pub(crate) fn toast(&mut self, text: &str) -> Task<Message> {
         self.toast_seq += 1;
         let n = self.toast_seq;
         self.toast = Some((n, text.to_string()));
@@ -840,7 +841,39 @@ impl App {
         let now = |s: Session| async move { s.scrobble(&song.id, false).await };
         let now = self.send(now, "Could not send the playing track to the server.");
         let now = Task::batch(self.cfg.settings.scrobble.then_some(now));
-        Task::batch([lyr, now, self.save_later()])
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let files = self
+            .session
+            .as_ref()
+            .map(|s| [128, 192, 300, 640].map(|z| s.cover_file(&song.cover, z)));
+        let show = move || {
+            let mut n = notify_rust::Notification::new();
+            let body = format!("{}{}{}", song.artist, crate::pages::DOT, song.album);
+            n.appname("Navify")
+                .summary(&song.title)
+                .body(&body)
+                .icon("navify");
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                static ID: AtomicU32 = AtomicU32::new(0);
+                if let Some(p) = files.iter().flatten().find(|p| p.exists()) {
+                    n.image_path(&p.to_string_lossy());
+                }
+                let h = n.id(ID.load(Relaxed)).show().map_err(|e| e.to_string())?;
+                ID.store(h.id(), Relaxed);
+                Ok::<_, String>(())
+            }
+            #[cfg(not(all(unix, not(target_os = "macos"))))]
+            n.show().map(drop).map_err(|e| e.to_string())
+        };
+        let note = Task::perform(tokio::task::spawn_blocking(show), |r| {
+            match r.expect("the notification task ends") {
+                Ok(()) => Message::Noop,
+                Err(e) => task(move |a| a.toast(&format!("Could not show a notification. {e}"))),
+            }
+        });
+        let note = Task::batch(self.cfg.settings.notify.then_some(note));
+        Task::batch([lyr, now, note, self.save_later()])
     }
 
     fn pos(&self) -> f32 {
@@ -1095,6 +1128,15 @@ impl App {
         if let Some((n, y)) = line {
             self.lyric = (n, Some(y));
             t = Task::batch([t, self.scroll_to(y)]);
+        }
+        let awake = self.playing && self.cfg.settings.awake;
+        if awake != self.awake.0 {
+            let tx = self
+                .awake
+                .1
+                .get_or_insert_with(|| crate::power::spawn(CH.0.clone()));
+            tx.send(awake).expect("the power thread runs");
+            self.awake.0 = awake;
         }
         if let Some(p) = &self.player {
             p.set_volume(if self.muted { 0.0 } else { self.volume });
