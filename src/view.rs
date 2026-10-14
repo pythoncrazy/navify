@@ -322,7 +322,7 @@ pub fn lib_rows(app: &App) -> (usize, Vec<LibRow<'_>>, std::ops::Range<usize>) {
 }
 
 fn lib_panel(app: &App) -> El<'_> {
-    let (w, f, mini) = (app.lib_w(), app.lib_filter, app.cfg.settings.lib_collapsed);
+    let (w, f, mini) = (app.lib_w(), app.lib_filter, app.lib_mini());
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| name.to_lowercase().contains(&q);
     let sort = app.cfg.settings.lib_sort;
@@ -627,7 +627,8 @@ pub fn view(app: &App) -> El<'_> {
     let scrim = |c: Color| {
         let s = container(Space::new()).width(Fill).height(Fill);
         let s = mouse_area(s.style(fill(c, 0.0))).on_press(Message::MenuClose);
-        s.on_right_press(Message::MenuClose)
+        let s = s.on_right_press(Message::MenuClose);
+        s.interaction(iced::mouse::Interaction::Idle)
     };
     let modal = app.modal.as_ref().map(|(id, kind)| {
         let card = container(modal(app, id, *kind)).center(Fill);

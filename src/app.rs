@@ -540,9 +540,22 @@ impl App {
         [56.0, 32.0][usize::from(self.cfg.settings.compact)]
     }
 
-    pub fn lib_w(&self) -> f32 {
+    pub fn lib_mini(&self) -> bool {
         let s = &self.cfg.settings;
-        if s.lib_collapsed { 72.0 } else { s.panels.0 }
+        let right = if self.panel > 0 {
+            s.panels.1 + 8.0
+        } else {
+            0.0
+        };
+        s.lib_collapsed || self.view_size().0 - 24.0 - s.panels.0 - right < 400.0
+    }
+
+    pub fn lib_w(&self) -> f32 {
+        if self.lib_mini() {
+            72.0
+        } else {
+            self.cfg.settings.panels.0
+        }
     }
 
     pub fn right_w(&self) -> f32 {
