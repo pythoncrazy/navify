@@ -1686,10 +1686,11 @@ impl App {
                 let Some(srv) = self.cfg.servers.iter().find(|s| s.id == id).cloned() else {
                     return Task::none();
                 };
+                let q = Task::batch(self.loaded.then(|| self.save_queue()));
                 let h = self.reset();
                 (self.session, self.cfg.active) = (Some(Session::new(srv)), Some(id));
                 let (t, n) = (self.persist(), self.nav("home".into()));
-                return Task::batch([h, t, n, self.restore()]);
+                return Task::batch([q, h, t, n, self.restore()]);
             }
             Message::DropServer(id) => {
                 self.cfg.servers.retain(|s| s.id != id);
