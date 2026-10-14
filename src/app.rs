@@ -1068,6 +1068,10 @@ impl App {
         (self.route, self.pl_find) = (route.clone(), None);
         (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
         (self.popular_all, self.disc_chip) = (false, 0);
+        let q = route.strip_prefix("search:").unwrap_or("");
+        if self.search_q.trim() != q {
+            (self.search_q, self.search_seq) = (q.into(), self.search_seq + 1);
+        }
         let key = self.key_of(&route);
         let id = route.strip_prefix("artist:");
         let parts = id.map(|id| ["top", "info", "appears"].map(|k| format!("{k}:{id}")));
