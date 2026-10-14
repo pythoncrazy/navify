@@ -2257,7 +2257,13 @@ pub const KEYS: [KeyAction; 23] = [
             Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
         })
     }),
-    ("search", "Search", "C+K", || task(|_| op::focus("search"))),
+    ("search", "Search", "C+K", || {
+        task(|a| {
+            let go = !a.route.starts_with("search");
+            let go = go.then(|| a.update(Message::Nav("search".into())));
+            Task::batch(go.into_iter().chain([op::focus("search")]))
+        })
+    }),
     ("select_all", "Select all", "C+A", || Message::SelectAll),
     ("back", "Go back", "Alt+ArrowLeft", || Message::Back),
     ("forward", "Go forward", "Alt+ArrowRight", || Message::Fwd),

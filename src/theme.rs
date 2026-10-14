@@ -21,11 +21,6 @@ pub const ERR: Color = color!(0xf3727f);
 pub const RED: Color = color!(0xed2c3f);
 pub const CLEAR: Color = Color::TRANSPARENT;
 pub const LUCIDE: Font = Font::with_name("lucide");
-pub const SHADOW: Shadow = Shadow {
-    color: Color { a: 0.5, ..BG },
-    offset: iced::Vector::ZERO,
-    blur_radius: 24.0,
-};
 
 pub type Txt<'a> = text::Text<'a, Theme, iced::Renderer>;
 pub type Btn<'a, M> = button::Button<'a, M, Theme, iced::Renderer>;
@@ -227,10 +222,6 @@ pub fn fill(c: impl Into<Background>, r: f32) -> impl Fn(&Theme) -> container::S
     move |_| s.border(Border::default().rounded(r))
 }
 
-pub fn menu(t: &Theme) -> container::Style {
-    fill(MENU, 4.0)(t).shadow(SHADOW)
-}
-
 pub fn down(stops: &[(f32, Color)]) -> impl Fn(&Theme) -> container::Style + use<> {
     let g = iced::gradient::Linear::new(std::f32::consts::PI);
     fill(stops.iter().fold(g, |g, s| g.add_stop(s.0, s.1)), 0.0)
@@ -297,7 +288,7 @@ pub fn pick(flat: bool) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Styl
 
 pub fn pick_menu(t: &Theme) -> iced::overlay::menu::Style {
     let mut st = iced::overlay::menu::default(t);
-    (st.background, st.border, st.shadow) = (MENU.into(), Border::default().rounded(4), SHADOW);
+    (st.background, st.border) = (MENU.into(), Border::default().rounded(4));
     (st.text_color, st.selected_text_color) = (TEXT, TEXT);
     st.selected_background = MENU_HOVER.into();
     st

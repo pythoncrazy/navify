@@ -623,11 +623,6 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
         ell(p.title, tw, size, Black).line_height(1.1)
     };
-    let mut shadow = theme::SHADOW;
-    (shadow.blur_radius, shadow.offset) = (60.0, iced::Vector::new(0.0, 4.0));
-    let r = [4.0, px / 2.0][usize::from(app.route.starts_with("artist:"))];
-    let st = container::Style::default().shadow(shadow);
-    let art = container(p.art).style(move |_| st.border(iced::border::rounded(r)));
     let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
     let hero: El = if let Some(url) = p.banner {
         let bh = app.main_w() / 3.0;
@@ -645,7 +640,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     } else {
         let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
         let info = column![kind, title(app.main_w() - 3.0 * PAD - px), p.meta].spacing(8);
-        let hero = row![art, info].spacing(PAD).align_y(iced::Bottom);
+        let hero = row![p.art, info].spacing(PAD).align_y(iced::Bottom);
         let hero = container(hero).padding(PAD).width(Fill);
         hero.height(px + 2.0 * PAD).style(bg).into()
     };
@@ -688,7 +683,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         let lead = row![face, Row::with_children(links)].spacing(8);
         let year = (a.year > 0).then(|| format!("{DOT}{}", a.year));
         let (year, len) = (year.unwrap_or_default(), fmt_long(a.duration));
-        let rest = format!("{year}{DOT}{} songs, {len}", a.song_count);
+        let rest = format!("{year}{DOT}{}, {len}", plural(a.song_count, "song"));
         let heart = heart_btn(&a.id, app.is_starred(&a.id, a.starred), 32.0);
         let p = Page {
             art: cover(app, &a.cover, px, false),
@@ -707,7 +702,10 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     }
     if let Some((p, songs)) = app.data::<(Playlist, Vec<Song>)>(key) {
         let len = fmt_long(p.duration);
-        let rest = format!("{DOT}{} songs, {len}", p.song_count);
+        let rest = match p.song_count {
+            0 => String::new(),
+            n => format!("{DOT}{}, {len}", plural(n, "song")),
+        };
         const ORDER: [&str; 6] = [
             "Custom order",
             "Title",
@@ -832,6 +830,8 @@ fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
     let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
     let body = column![table_head(app, c), vlist(app, songs, &app.route, c, y0)];
+    let none = container(sub("There are no songs to show.", 16.0)).padding(PAD);
+    let body = body.push(songs.is_empty().then_some(none));
     let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
         let day = Some(date(&a.release_date)).filter(|d| !d.is_empty());
         let day = day.or((a.year > 0).then(|| a.year.to_string()));
@@ -1540,7 +1540,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     };
     let boxed = |el: El<'a>, w: f32, h: f32, pad: u16| {
         let c = container(el).padding(pad).width(w).height(h);
-        (c.style(theme::menu).into(), w, h)
+        (c.style(fill(theme::MENU, 4.0)).into(), w, h)
     };
     let it = |c: char, l: &str, m: Message| Some((c, l.to_string(), m, false));
     let open = |n: u8, c: char, l: &str| {
