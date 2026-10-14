@@ -2101,7 +2101,7 @@ impl App {
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if let Some(s) = self.data::<Pager<Song>>(key).map(|p| &p.items) {
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
-        } else if let Some(s) = self.data::<Vec<Song>>(key) {
+        } else if let Some((_, s)) = self.data::<(String, Vec<Song>)>(key) {
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if key.starts_with("discography:") {
             big.extend(crate::pages::disc_view(self).iter().map(|a| &a.cover));
@@ -2464,12 +2464,17 @@ fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
     };
     let page = || v.downcast_ref::<Pager<Song>>().map(|p| (&p.items, "Songs"));
     let search = || v.downcast_ref::<SearchRes>().map(|r| (&r.songs, "Search"));
-    let folder = || v.downcast_ref::<Vec<Song>>().map(|s| (s, "Folder"));
+    let folder = || {
+        v.downcast_ref::<(String, Vec<Song>)>()
+            .map(|(n, s)| (s, n.as_str()))
+    };
+    let top = || v.downcast_ref::<Vec<Song>>().map(|s| (s, "Popular"));
     let l = album
         .or_else(pl)
         .or_else(page)
         .or_else(search)
-        .or_else(folder);
+        .or_else(folder)
+        .or_else(top);
     l.map(|(s, n)| (&s[..], n))
 }
 

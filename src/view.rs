@@ -234,7 +234,7 @@ fn top_bar(app: &App) -> El<'_> {
     };
     let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
     let first = user.chars().next().map_or('?', |c| c.to_ascii_uppercase());
-    let ring = fill(theme::color_of(&first.to_string()), 500.0);
+    let ring = fill(theme::hue(first as usize), 500.0);
     let avatar = container(bold(first, 14.0).color(BG).center()).center(32);
     let avatar = button(avatar.style(ring)).padding(8);
     let avatar = avatar.style(theme::round(ELEVATED));

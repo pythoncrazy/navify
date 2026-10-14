@@ -627,9 +627,12 @@ impl Session {
         self.index("getIndexes", "/indexes/index").await
     }
 
-    pub async fn directory(&self, id: &str) -> Result<Vec<Song>> {
-        let ptr = "/directory/child";
-        self.get("getMusicDirectory", json!({"id": id}), ptr).await
+    pub async fn directory(&self, id: &str) -> Result<(String, Vec<Song>)> {
+        let mut d: Value = self
+            .get("getMusicDirectory", json!({"id": id}), "/directory")
+            .await?;
+        let name = d["name"].as_str().unwrap_or_default().to_string();
+        Ok((name, parse(d["child"].take())?))
     }
 
     pub async fn similar_songs(&self, id: &str, n: usize) -> Result<Vec<Song>> {

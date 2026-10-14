@@ -227,14 +227,12 @@ pub fn down(stops: &[(f32, Color)]) -> impl Fn(&Theme) -> container::Style + use
     fill(stops.iter().fold(g, |g, s| g.add_stop(s.0, s.1)), 0.0)
 }
 
-pub fn color_of(s: &str) -> Color {
+pub fn hue(n: usize) -> Color {
     const P: [u32; 12] = [
         0xdc148c, 0x006450, 0x8400e7, 0x1e3264, 0xe8115b, 0x27856a, 0x477d95, 0xe13300, 0xba5d07,
         0x8d67ab, 0x509bf5, 0x148a08,
     ];
-    let hash = |h: usize, b| h.wrapping_mul(31).wrapping_add(usize::from(b));
-    let h = s.bytes().fold(7, hash);
-    let [_, r, g, b] = P[h % P.len()].to_be_bytes();
+    let [_, r, g, b] = P[n % P.len()].to_be_bytes();
     Color::from_rgb8(r, g, b)
 }
 
