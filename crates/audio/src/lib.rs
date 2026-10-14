@@ -36,6 +36,7 @@ const BACK: u64 = 1 << 20;
 
 type Io = (Handle, Client);
 type Res<T> = Result<T, Box<dyn Error>>;
+type Opening = JoinHandle<Result<Source, String>>;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Track {
@@ -585,7 +586,7 @@ struct Mixer {
     inc: Option<Source>,
     old: Option<Source>,
     fade: (usize, usize),
-    pre: Option<(Track, JoinHandle<Result<Source, String>>)>,
+    pre: Option<(Track, Opening)>,
     b: Vec<f32>,
 }
 
@@ -594,6 +595,12 @@ impl Mixer {
         let (io, r) = (io.clone(), self.rate);
         let open = move |t: Track| thread::spawn(move || Source::open(t, &io, r, 0.0));
         self.pre = t.map(|t| (t.clone(), open(t)));
+    }
+
+    fn take_pre(pre: &mut Option<(Track, Opening)>) -> Option<Result<Source, String>> {
+        let (t, h) = pre.take()?;
+        let s = h.join().expect("open thread");
+        Some(s.map(|s| Source { track: t, ..s }))
     }
 
     fn seek(&mut self, io: &Io, secs: f32) -> Result<(), String> {
@@ -614,7 +621,7 @@ impl Mixer {
         let ready = self.pre.as_ref().is_some_and(|p| p.1.is_finished());
         let mut ev = None;
         if cf > 0.0 && self.inc.is_none() && rem <= (cf as f64).min(cur.dur / 2.0) && ready {
-            match self.pre.take().map(|p| p.1.join().expect("open thread")) {
+            match Self::take_pre(&mut self.pre) {
                 Some(Ok(s)) => {
                     ev = Some(Event::Started(s.track.id.clone()));
                     self.fade = (0, (rem.max(0.05) * rate as f64) as usize);
@@ -644,7 +651,7 @@ impl Mixer {
             return Ok((n, ev));
         }
         self.cur = None;
-        match self.pre.take().map(|p| p.1.join().expect("open thread")) {
+        match Self::take_pre(&mut self.pre) {
             Some(Ok(mut s)) => {
                 let m = s.fill(&mut out[n * 2..], rate)?;
                 let id = s.track.id.clone();
@@ -770,15 +777,20 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             }
             match cmd {
                 Cmd::Play(t, at) => {
-                    let pre = mix.pre.take_if(|p| at == 0.0 && p.0 == t).map(|p| p.1);
+                    let pre = mix
+                        .pre
+                        .take_if(|p| at == 0.0 && p.0.url == t.url)
+                        .map(|p| p.1);
                     let mut was = [mix.cur.take(), mix.old.take()];
                     let same = |s: &mut Source| !t.transcoded && s.track.url == t.url;
                     let hit = was.iter_mut().find_map(|s| s.take_if(|s| same(s)));
                     mix.old = was.into_iter().flatten().next();
                     (mix.inc, play) = (None, Some((t, at, pre, hit)));
                 }
-                Cmd::Next(t) if mix.pre.as_ref().is_some_and(|p| Some(&p.0) == t.as_ref()) => {}
-                Cmd::Next(t) => mix.queue(&io, t),
+                Cmd::Next(t) => match (&mut mix.pre, t) {
+                    (Some(p), Some(t)) if p.0.url == t.url => p.0 = t,
+                    (_, t) => mix.queue(&io, t),
+                },
                 Cmd::Gain(g) => mix
                     .inc
                     .iter_mut()
@@ -807,7 +819,10 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     s.track = t;
                     s.seek(at).map(|()| s).map_err(|e| e.to_string())
                 }
-                (None, Some(h)) => h.join().expect("open thread"),
+                (None, Some(h)) => h
+                    .join()
+                    .expect("open thread")
+                    .map(|s| Source { track: t, ..s }),
                 (None, None) => Source::open(t, &io, mix.rate, at),
             };
             mix.cur = s.map_err(fail).ok();
