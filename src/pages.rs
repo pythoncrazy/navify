@@ -998,8 +998,15 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         let s = format!("Album{DOT}{}", x.artist);
         (&x.cover, &x.name, s, go("album", &x.id), false)
     };
+    let starts = |n: &str| n.to_lowercase().starts_with(&ql);
     let exact = r.artists.iter().find(|a| a.name.to_lowercase() == ql);
-    let best = exact.map(art).or_else(|| r.albums.first().map(album));
+    let exact = exact.or_else(|| r.artists.iter().find(|a| starts(&a.name)));
+    let albums = r
+        .albums
+        .iter()
+        .find(|a| starts(&a.name))
+        .or(r.albums.first());
+    let best = exact.map(art).or_else(|| albums.map(album));
     let best = best.or_else(|| r.artists.first().map(art)).or_else(|| {
         let s = r.songs.first()?;
         let sub = format!("Song{DOT}{}", s.artist);
