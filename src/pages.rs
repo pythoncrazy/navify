@@ -1322,6 +1322,25 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             });
             return boxed(Row::with_children(stars).into(), 192.0, 48.0, 6);
         }
+        MenuKind::Device => {
+            head = Some(
+                container(bold("Select an output device", 14.0))
+                    .padding([0, 12])
+                    .center_y(40)
+                    .into(),
+            );
+            let found = app
+                .data::<Vec<(String, String)>>("devices")
+                .into_iter()
+                .flatten();
+            let all =
+                std::iter::once((String::new(), "System default".into())).chain(found.cloned());
+            all.map(|(id, name)| {
+                let c = [i::DEVICE, i::CHECK][usize::from(id == app.cfg.settings.device)];
+                it(c, &name, set(|s, v| s.device = v, id))
+            })
+            .collect()
+        }
         MenuKind::User => {
             let url = ell(user.map_or("", |s| &s.url), W - 32.0, 12.0, Normal);
             let name = bold(user.map_or("", |s| &s.user), 14.0);

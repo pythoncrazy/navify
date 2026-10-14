@@ -63,3 +63,4 @@ layout-grid 0xe0ff
 circle-plus 0xe081
 maximize 0xe112
 minimize 0xe11a
+monitor-speaker 0xe210

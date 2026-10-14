@@ -65,6 +65,7 @@ pub enum MenuKind {
     Artist(Artist),
     Playlist(Playlist),
     User,
+    Device,
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +101,14 @@ pub fn set<T: Clone + Send + Sync + 'static>(f: fn(&mut config::Settings, T), v:
         let o = a.cfg.settings.clone();
         f(&mut a.cfg.settings, v.clone());
         a.settings(o)
+    })
+}
+
+fn scan_devices() -> Task<Message> {
+    let scan = tokio::task::spawn_blocking(navify_audio::devices);
+    Task::perform(scan, |d| {
+        let d = d.expect("device scan").map(|v| Arc::new(v) as AnyData);
+        Message::Loaded("devices".into(), d)
     })
 }
 
@@ -924,12 +933,7 @@ impl App {
             tasks.push(op::focus(format!("login{}", n.unwrap_or(2))));
         }
         if route == "settings" {
-            let scan = tokio::task::spawn_blocking(navify_audio::devices);
-            tasks.push(Task::perform(scan, |d| {
-                let d = d.expect("device scan").map(|v| Arc::new(v) as AnyData);
-                Message::Loaded("devices".into(), d)
-            }));
-            tasks.push(self.disk(None));
+            tasks.extend([scan_devices(), self.disk(None)]);
         }
         Task::batch(tasks)
     }
@@ -1215,12 +1219,14 @@ impl App {
                 let bits = CURSOR.load(Relaxed);
                 let x = f32::from_bits((bits >> 32) as u32);
                 let y = f32::from_bits(bits as u32);
+                let scan = matches!(*kind, MenuKind::Device).then(scan_devices);
                 self.menu = Some(Menu {
                     x,
                     y,
                     kind: *kind,
                     sub: 0,
                 });
+                return Task::batch(scan);
             }
             Message::MenuClose if self.full && self.menu.is_none() && self.modal.is_none() => {
                 return self.update(Message::Full(false));

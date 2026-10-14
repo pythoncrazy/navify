@@ -491,6 +491,12 @@ fn player_bar(app: &App) -> El<'_> {
     ];
     let right = row![
         (!app.full).then(|| panels.spacing(4)),
+        side(
+            ic(i::DEVICE),
+            false,
+            "Connect to a device",
+            Message::Menu(Box::new(MenuKind::Device))
+        ),
         side(vol_icon, false, mute, Message::Mute),
         volume,
         side(
