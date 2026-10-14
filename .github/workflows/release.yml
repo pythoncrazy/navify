@@ -54,17 +54,8 @@ jobs:
       - run: cargo install --locked cargo-packager@0.11.8
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - run: cargo packager --release --target ${{ matrix.target }} -f ${{ matrix.formats }} -o dist
-      - name: Portable archive
-        shell: bash
-        run: |
-          dir=target/${{ matrix.target }}/release
-          name=navify-${GITHUB_REF_NAME//\//-}-${{ matrix.target }}
-          if [ "$RUNNER_OS" = Windows ]; then
-            7z a "dist/$name.zip" "./$dir/navify.exe" LICENSE
-          else
-            tar czf "dist/$name.tar.gz" -C "$dir" navify -C "$GITHUB_WORKSPACE" LICENSE
-          fi
-          [ ! -f dist/PKGBUILD ] || mv dist/PKGBUILD "dist/PKGBUILD-${{ matrix.target }}"
+      - if: runner.os == 'Linux'
+        run: mv dist/PKGBUILD dist/PKGBUILD-${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -72,7 +63,6 @@ jobs:
             dist/*.deb
             dist/*.AppImage
             dist/*.tar.gz
-            dist/*.zip
             dist/*.exe
             dist/*.dmg
             dist/PKGBUILD-*
