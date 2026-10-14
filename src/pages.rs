@@ -21,7 +21,6 @@ use crate::view::{
 type Cols = (f32, f32, f32, f32);
 
 pub const PAD: f32 = 24.0;
-pub const ROW: f32 = 56.0;
 pub const GRID_Y: f32 = 136.0;
 pub const BAR: f32 = 84.0;
 pub const HEAD: f32 = 53.0;
@@ -153,10 +152,16 @@ fn playlist_card<'a>(app: &App, p: &Playlist) -> El<'a> {
     card(app, &p.cover, &p.name, by, r, false)
 }
 
-fn table_head<'a>(c: Cols) -> El<'a> {
+fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     let h = |t: &'static str, w: f32| (w > 0.0).then(|| sub(t, 14.0).width(w));
+    let half = c.0 / 2.0 - 8.0;
+    let split = app.cfg.settings.compact && !app.route.starts_with("artist:");
+    let title = match split {
+        true => row![h("Title", half), h("Artist", half)].spacing(16),
+        false => row![h("Title", c.0)],
+    };
     let clock = container(i(i::CLOCK, 16.0).color(SUB)).align_right(120);
-    let r = row![sub("#", 16.0).width(c.3).center(), h("Title", c.0)];
+    let r = row![sub("#", 16.0).width(c.3).center(), title];
     let r = r.push(h("Album", c.1)).push(h("Date added", c.2));
     let r = r.push(clock.padding(padding::right(52)));
     let r = r.spacing(16).padding([0, 16]).height(36).align_y(Center);
@@ -181,7 +186,8 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let sel = app.sel.as_ref().is_some_and(|x| x.0 == key) && app.picked.contains(&n);
     let cur = app.current_song().is_some_and(|x| x.id == s.id);
     let starred = app.is_starred(&s.id, s.starred);
-    let art = !key.starts_with("album:");
+    let compact = app.cfg.settings.compact;
+    let art = !key.starts_with("album:") && !compact;
     let fg = if cur { ACCENT } else { TEXT };
     let at = Message::PlayAt(key.into(), n);
     let play = if cur { Message::Toggle } else { at.clone() };
@@ -193,9 +199,16 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         _ => num.width(c.3).center().into(),
     };
     let tw = c.0 - if art { 52.0 } else { 0.0 };
-    let title = column![ell(&s.title, tw, 16.0, Normal).color(fg)];
-    let by = (!pop).then(|| artists_line(&s.artists, 14.0, tw));
-    let title = title.push(by).spacing(2);
+    let half = [tw, tw / 2.0 - 8.0][usize::from(compact && !pop)];
+    let name = ell(&s.title, half, 16.0, Normal).color(fg);
+    let by = (!pop).then(|| artists_line(&s.artists, 14.0, half));
+    let title: El = match compact {
+        true => row![name.width(half), by]
+            .spacing(16)
+            .align_y(Center)
+            .into(),
+        false => column![name].push(by).spacing(2).into(),
+    };
     let plays = (s.play_count > 0).then(|| fmt_n(s.play_count as usize));
     let album = ell(&s.album, c.1, 14.0, Normal);
     let album = link_btn(album, SUB, go("album", &s.album_id));
@@ -212,7 +225,11 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let tail = row![container(heart).width(32), dur, container(more).width(32)];
     let r = row![idx, name].push((c.1 > 0.0).then_some(second));
     let r = r.push(added).push(tail.align_y(Center));
-    let r = r.spacing(16).padding([0, 16]).height(ROW).align_y(Center);
+    let r = r
+        .spacing(16)
+        .padding([0, 16])
+        .height(app.row_h())
+        .align_y(Center);
     let a = [[0.0, 0.1], [0.3; 2]][usize::from(sel)][usize::from(hot)];
     let (k, enter) = (key.to_string(), hk.clone());
     let r = container(r);
@@ -257,16 +274,19 @@ fn vlist<'a>(app: &'a App, songs: &'a [Song], key: &'a str, c: Cols, y0: f32) ->
         })
         .collect();
     let (off, view) = app.scroll();
-    let (lo, hi) = span(off - y0, off - y0 + view, ROW, rows.len(), 6);
+    let (lo, hi) = span(off - y0, off - y0 + view, app.row_h(), rows.len(), 6);
     let items = rows[lo..hi].iter().map(|r| match *r {
         Ok(n) => track(app, &songs[n], n, key, c),
         Err(d) => {
             let disc = i(i::ALBUM, 16.0).color(SUB).width(16).center();
             let r = row![disc, bold(format!("Disc {d}"), 16.0).color(SUB)].spacing(16);
-            r.padding([0, 16]).height(ROW).align_y(Center).into()
+            r.padding([0, 16])
+                .height(app.row_h())
+                .align_y(Center)
+                .into()
         }
     });
-    let col = gaps(lo, hi, rows.len(), ROW, items);
+    let col = gaps(lo, hi, rows.len(), app.row_h(), items);
     container(col).padding(Padding::new(PAD).top(0)).into()
 }
 
@@ -344,7 +364,7 @@ fn disc_rows<'a>(app: &'a App, albums: &'a [Album], f: &str) -> Vec<(f32, f32, &
         let songs = app.data::<(Album, Vec<Song>)>(&format!("album:{}", a.id));
         let n = songs.map_or(0, |x| x.1.len());
         let n = if n > 0 { n } else { a.song_count as usize };
-        let h = DISC_HEAD + n as f32 * ROW + 48.0;
+        let h = DISC_HEAD + n as f32 * app.row_h() + 48.0;
         y += h;
         (y - h, h, a)
     };
@@ -420,7 +440,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
     let songs = songs.filter(|s| !s.is_empty());
     let n = songs.map_or(al.song_count as usize, <[Song]>::len);
     let ((off, view), top) = (app.scroll(), y + DISC_HEAD);
-    let (lo, hi) = span(off - top, off + view - top, ROW, n, 6);
+    let (lo, hi) = span(off - top, off + view - top, app.row_h(), n, 6);
     let year = (al.year > 0).then(|| al.year.to_string());
     let count = Some(plural(al.song_count, "song"));
     let meta = [Some(kind(al).0.to_string()), year, count];
@@ -440,15 +460,15 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
         let Some(s) = songs else {
             let r = row![blk(16.0, 14.0, 4.0), blk(240.0, 14.0, 4.0)].spacing(16);
             let r = container(r.align_y(Center)).padding([0.0, PAD + 16.0]);
-            return r.center_y(ROW).into();
+            return r.center_y(app.row_h()).into();
         };
         let t = track(app, &s[k], k, &key, c);
         container(t).padding([0.0, PAD]).into()
     });
     let head = head.padding([0.0, PAD]).height(136);
     let head = column![head, Space::new().height(16)];
-    let list = gaps(lo, hi, n, ROW, rows).push(Space::new().height(48));
-    head.push(table_head(c)).push(list).into()
+    let list = gaps(lo, hi, n, app.row_h(), rows).push(Space::new().height(48));
+    head.push(table_head(app, c)).push(list).into()
 }
 
 fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
@@ -604,7 +624,16 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
     let play = play_btn(app, 56.0, &app.route, play_all(&app.route));
-    let bar = row![play, shuffle].extend(p.extra).spacing(PAD);
+    let compact = app.cfg.settings.compact;
+    let tables = ["album", "playlist", "liked", "songs"];
+    let view = tables
+        .contains(&app.route.split(':').next().unwrap_or(""))
+        .then(|| {
+            let b = theme::sq(i(i::LIST, 20.0).center(), 32.0);
+            let b = b.style(theme::link([SUB, TEXT][usize::from(compact)]));
+            b.on_press(set(|s, b| s.compact = b, !compact))
+        });
+    let bar = row![play, shuffle].extend(p.extra).push(view).spacing(PAD);
     let bar = container(bar.align_y(Center)).height(BAR);
     let bar = bar.padding(Padding::new(PAD).top(12).bottom(16));
     let rest = fade(theme::shade(p.color, 0.4), 232.0, column![bar, body]);
@@ -640,7 +669,11 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             title: &a.name,
             meta: meta(lead.align_y(Center), rest),
             color: head_color(app, &a.cover),
-            extra: vec![heart, dots(MenuKind::Album(Box::new(a.clone())))],
+            extra: vec![
+                heart,
+                dots(MenuKind::Album(Box::new(a.clone()))),
+                Space::new().width(Fill).into(),
+            ],
             banner: None,
         };
         return Some((p, songs, cols(app, false, false, songs.len())));
@@ -744,7 +777,8 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         false => art(px, i(i::MUSIC, 0.0).color(ACCENT), SONGS_BG),
     };
     let meta = meta(bold(user, 14.0), count.unwrap_or_default());
-    let extra = sort.map_or(vec![], |s| vec![Space::new().width(Fill).into(), s.into()]);
+    let mut extra = vec![Space::new().width(Fill).into()];
+    extra.extend(sort.map(Into::into));
     let page = Page {
         art,
         kind,
@@ -770,7 +804,7 @@ pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
 fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
     let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
-    let body = column![table_head(c), vlist(app, songs, &app.route, c, y0)];
+    let body = column![table_head(app, c), vlist(app, songs, &app.route, c, y0)];
     let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
         let day = Some(date(&a.release_date)).filter(|d| !d.is_empty());
         let day = day.or((a.year > 0).then(|| a.year.to_string()));
@@ -816,7 +850,9 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let play = play_btn(app, 48.0, &app.route, play_all(&app.route));
     let head = row![play, title].spacing(8).align_y(Center);
     let head = bar(head.into(), theme::shade(color, 0.5));
-    let cols = cols.filter(|_| off > top + BAR - 64.0).map(table_head);
+    let cols = cols
+        .filter(|_| off > top + BAR - 64.0)
+        .map(|c| table_head(app, c));
     let cols = cols.map(|c| container(c).style(fill(color!(0x1a1a1a), 0.0)));
     (off > top - 64.0).then(|| column![head].push(cols).into())
 }

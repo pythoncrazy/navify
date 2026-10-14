@@ -508,6 +508,10 @@ impl App {
         self.sel = Some((key, n));
     }
 
+    pub fn row_h(&self) -> f32 {
+        [56.0, 32.0][usize::from(self.cfg.settings.compact)]
+    }
+
     pub fn lib_w(&self) -> f32 {
         let s = &self.cfg.settings;
         if s.lib_collapsed { 72.0 } else { s.panels.0 }
@@ -1606,7 +1610,7 @@ impl App {
                 return self.update(Message::FocusMove(up));
             }
             Message::Arrow(up) => {
-                use crate::pages::{BAR, HEAD, PAD, ROW};
+                use crate::pages::{BAR, HEAD, PAD};
                 let Some((key, n)) = self.sel.clone() else {
                     return Task::none();
                 };
@@ -1623,11 +1627,11 @@ impl App {
                 }
                 let discs = (1 + discs) * usize::from(multi && kind == "album");
                 let top = crate::pages::art_px(self) + 2.0 * PAD + BAR + HEAD;
-                let top = top + (n + discs) as f32 * ROW;
+                let top = top + (n + discs) as f32 * self.row_h();
                 let (off, view) = self.scroll();
                 let to = match () {
                     _ if top < off + 100.0 => top - 100.0,
-                    _ if top + ROW > off + view => top + ROW - view,
+                    _ if top + self.row_h() > off + view => top + self.row_h() - view,
                     _ => return Task::none(),
                 };
                 self.scrolls.insert(key, (to.max(0.0), view));
@@ -1783,7 +1787,7 @@ impl App {
             let lo = (off / h).max(0.0) as usize;
             (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
         };
-        let rows = |v: &[Song]| span(v.len(), crate::pages::ROW, 1);
+        let rows = |v: &[Song]| span(v.len(), self.row_h(), 1);
         let tiles = |n: usize| span(n, cw + 52.0, cols);
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();

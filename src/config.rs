@@ -41,6 +41,7 @@ pub struct Settings {
     pub rg_clip: bool,
     pub lyrics_offset: f32,
     pub lyrics_size: f32,
+    pub compact: bool,
 }
 
 impl Default for Settings {
@@ -71,6 +72,7 @@ impl Default for Settings {
             rg_clip: true,
             lyrics_offset: 0.0,
             lyrics_size: 32.0,
+            compact: false,
         }
     }
 }
