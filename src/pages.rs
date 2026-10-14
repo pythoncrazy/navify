@@ -1175,6 +1175,14 @@ fn pick<'a, T: Clone + Send + Sync + 'static>(
     p.menu_style(theme::pick_menu).into()
 }
 
+fn devices(app: &App) -> Vec<(String, String)> {
+    let found = app.data::<Vec<(String, String)>>("devices");
+    let found = found.into_iter().flatten().cloned();
+    std::iter::once((String::new(), "System default".into()))
+        .chain(found)
+        .collect()
+}
+
 fn settings(app: &App) -> El<'_> {
     let st = &app.cfg.settings;
     let opts = |v: &[&str]| v.chunks(2).map(|p| (p[0].into(), p[1].into())).collect();
@@ -1195,10 +1203,6 @@ fn settings(app: &App) -> El<'_> {
         let label = txt(label, 14.0).color(SUB).width(Fill);
         row![label, c].align_y(Center).height(48).into()
     };
-    let devices = app.data::<Vec<(String, String)>>("devices");
-    let default = (String::new(), "System default".to_string());
-    let devices = devices.into_iter().flatten().cloned();
-    let devices = std::iter::once(default).chain(devices).collect();
     let mut rates = [0, 320, 256, 192, 128, 96].map(|b| (b, format!("{b} kbps")));
     rates[0].1 = "No limit".into();
     let zooms = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5].map(|z| (z, format!("{:.0}%", z * 100.0)));
@@ -1206,7 +1210,7 @@ fn settings(app: &App) -> El<'_> {
     let formats = opts(&["", "Original", "mp3", "MP3", "opus", "Opus", "aac", "AAC"]);
     let (tf, br) = (st.transcode_format.as_str(), st.transcode_max_bitrate);
     let (x, secs) = (st.crossfade_secs, format!("{:.0} s", st.crossfade_secs));
-    let device = pick(devices, st.device.as_str(), |s, v| s.device = v);
+    let device = pick(devices(app), st.device.as_str(), |s, v| s.device = v);
     let gain = pick(gains, st.replaygain.as_str(), |s, v| s.replaygain = v);
     let preamp = db(st.preamp_db, |s, v| s.preamp_db = v);
     let fallback = db(st.fallback_db, |s, v| s.fallback_db = v);
@@ -1532,11 +1536,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let mine = |p: &Playlist| user.is_some_and(|s| s.user == p.owner);
     let star = |id: &str, server: bool, yes: &str, no: &str| {
         let k = usize::from(app.is_starred(id, server));
-        it(
-            [i::SAVE, i::SAVED][k],
-            [no, yes][k],
-            Message::Star(vec![id.into()], k == 0),
-        )
+        let m = Message::Star(vec![id.into()], k == 0);
+        it([i::SAVE, i::SAVED][k], [no, yes][k], m)
     };
     let ctx = |kind: &str, id: &str| {
         let r = format!("{kind}:{id}");
@@ -1562,18 +1563,9 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             return boxed(Row::with_children(stars).into(), 192.0, 48.0, 6);
         }
         MenuKind::Device => {
-            head = Some(
-                container(bold("Select an output device", 14.0))
-                    .padding([0, 12])
-                    .center_y(40)
-                    .into(),
-            );
-            let found = app
-                .data::<Vec<(String, String)>>("devices")
-                .into_iter()
-                .flatten();
-            let all =
-                std::iter::once((String::new(), "System default".into())).chain(found.cloned());
+            let t = bold("Select an output device", 14.0);
+            head = Some(container(t).padding([0, 12]).center_y(40).into());
+            let all = devices(app).into_iter();
             all.map(|(id, name)| {
                 let c = [i::DEVICE, i::CHECK][usize::from(id == app.cfg.settings.device)];
                 it(c, &name, set(|s, v| s.device = v, id))
