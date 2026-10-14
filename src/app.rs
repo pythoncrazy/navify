@@ -948,6 +948,18 @@ impl App {
         p.map_or(self.position, |p| p.position())
     }
 
+    pub fn clock(&self) -> Box<dyn Fn() -> f32> {
+        let fixed = self.seek_preview.unwrap_or(self.position);
+        match self
+            .player
+            .as_ref()
+            .filter(|_| self.loaded && self.seek_preview.is_none())
+        {
+            Some(p) => Box::new(p.clock()),
+            None => Box::new(move || fixed),
+        }
+    }
+
     fn listen(&mut self, on: bool) -> Task<Message> {
         let enabled = self.cfg.settings.scrobble;
         let since = self.since.take();
@@ -2240,7 +2252,7 @@ impl App {
                 _ => None,
             }));
         }
-        if self.playing && !self.hidden {
+        if self.playing && !self.hidden && (self.route == "lyrics" || self.panel == 1) {
             let ms = if self.route == "lyrics" { 250 } else { 1000 };
             subs.push(
                 iced::time::every(Duration::from_millis(ms)).map(|_| act(|a| a.position = a.pos())),
