@@ -1344,7 +1344,40 @@ fn settings(app: &App) -> El<'_> {
     let col = col.push(head("Servers"));
     let col = col.extend(app.cfg.servers.iter().map(server));
     let col = col.push(head("Storage"));
-    let col = col.push(line("Cover cache", cache)).push(head("About"));
+    let col = col.push(line("Cover cache", cache));
+    let copy = task(|a| {
+        let json = serde_json::to_string_pretty(&a.cfg.settings).expect("settings are JSON");
+        iced::Task::batch([
+            iced::clipboard::write(json),
+            a.toast("Copied the settings to the clipboard."),
+        ])
+    });
+    let paste = task(|_| {
+        iced::clipboard::read().map(|t| {
+            task(
+                move |a| match serde_json::from_str(t.as_deref().unwrap_or_default()) {
+                    Ok(new) => {
+                        let old = std::mem::replace(&mut a.cfg.settings, new);
+                        iced::Task::batch([
+                            a.settings(old),
+                            a.toast("Applied the settings from the clipboard."),
+                        ])
+                    }
+                    Err(e) => a.toast(&format!(
+                        "The clipboard does not contain Navify settings. {e}"
+                    )),
+                },
+            )
+        })
+    });
+    let copy = theme::pill_btn("Copy", copy);
+    let paste = theme::pill_btn("Paste", paste);
+    let io = row![copy, paste].spacing(8).into();
+    let col = col.push(line(
+        "Copy the settings to the clipboard, or paste them from it",
+        io,
+    ));
+    let col = col.push(head("About"));
     let col = col.push(line("Version", version)).max_width(860);
     container(col).padding(PAD).into()
 }

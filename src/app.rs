@@ -1062,7 +1062,7 @@ impl App {
         })
     }
 
-    fn settings(&mut self, o: config::Settings) -> Task<Message> {
+    pub(crate) fn settings(&mut self, o: config::Settings) -> Task<Message> {
         self.menu = None;
         let n = &self.cfg.settings;
         if let Some(p) = &self.player
