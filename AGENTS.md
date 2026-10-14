@@ -41,7 +41,8 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 
 ## Commands
 
-- Build: `cargo build` · Run: `cargo run` · Test: `cargo test --workspace`
+- Build: `cargo build` · Run: `cargo run` · Test: `cargo test --workspace` · Install: `cargo install --locked --path .`
+- `.cargo/config.toml` sets `rustc-wrapper = "sccache"` (install it with `cargo install --locked sccache`) and `rust-lld` on Windows. Rust uses `rust-lld` on x86_64 Linux by default. CI uses `mozilla-actions/sccache-action` with the GitHub cache.
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings` · Format: `cargo fmt --all`
 - Logo: `cargo run --example logo` writes `assets/navify.svg`, `assets/navify.ico`, and `assets/icons/hicolor`. On Linux, `navify --install` writes the desktop entry and icons to the user data directory.
 - Hooks: install prek with `cargo install --locked prek`. Make sure `~/.cargo/bin` is on PATH. Then run `prek install` and `prek run --all-files`.

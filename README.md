@@ -109,21 +109,29 @@ xattr -dr com.apple.quarantine /Applications/Navify.app
 
 ## Build
 
-Install Rust 1.90 or newer. On Linux, install these packages first:
+1. Install Rust 1.90 or newer with [rustup](https://rustup.rs).
+2. On Linux, install the system libraries:
+   `sudo apt-get install libasound2-dev libdbus-1-dev pkg-config`
+   (Arch Linux: `sudo pacman -S alsa-lib dbus pkgconf`).
+3. Install sccache. Cargo uses it to keep compiled crates between builds:
 
-```sh
-sudo apt-get install libasound2-dev libdbus-1-dev pkg-config
-```
+   ```sh
+   cargo install --locked sccache
+   ```
 
-Then build and run:
+4. Build Navify and install it in `~/.cargo/bin`:
 
-```sh
-cargo run --release
-```
+   ```sh
+   cargo install --locked --path .
+   ```
 
-The release profile uses full LTO and one codegen unit for the fastest binary,
-so a release build takes some minutes. Cargo uses 4 build jobs (`.cargo/config.toml`).
-Use `cargo run` for fast development builds.
+5. On Linux, run `navify --install` one time to add the menu entry and the icons.
+
+Use `cargo run` for fast development builds, and `cargo run --release` to run the release build.
+The release profile uses full LTO and one codegen unit, so a release build takes some minutes.
+`.cargo/config.toml` sets sccache, and the bundled `rust-lld` linker on Windows.
+Rust uses `rust-lld` on x86_64 Linux by default. The development profile optimizes the
+dependencies, so the debug build plays audio at full speed.
 
 To make packages, install cargo-packager and run it after the release build:
 
@@ -164,6 +172,10 @@ and `NAVIFY_TEST_LOCAL_PASSWORD`. A test fails when a value is missing.
 2. Push a tag with the same version, for example `v0.2.0`.
 3. The release workflow builds all packages and makes a draft release.
 4. Examine the draft and publish it.
+
+## AI notice
+
+Claude Opus 5.5, an AI model by Anthropic, wrote this project with human direction and review.
 
 ## License
 
