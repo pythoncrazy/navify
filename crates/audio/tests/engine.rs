@@ -77,9 +77,10 @@ fn player_sends_events_on_null_device() {
     use navify_audio::{Event, Player};
     use std::time::Duration;
     let alsa = std::env::var_os("ALSA_CONFIG_PATH");
+    let alsa = alsa.filter(|p| std::path::Path::new(p).is_file());
     assert!(
         alsa.is_some(),
-        "set ALSA_CONFIG_PATH=crates/audio/tests/null.conf"
+        "set ALSA_CONFIG_PATH to the full path of tests/null.conf"
     );
     let ((rt, http), t) = setup("One Two", None);
     let (p, mut rx) = Player::new(rt.clone(), http);
@@ -89,7 +90,8 @@ fn player_sends_events_on_null_device() {
     while got.last() != Some(&Event::Ended) {
         let e =
             rt.block_on(async { tokio::time::timeout(Duration::from_secs(20), rx.recv()).await });
-        got.push(e.expect("event in 20 s").expect("engine is running"));
+        let e = e.unwrap_or_else(|_| panic!("no event in 20 s after {got:?}"));
+        got.push(e.expect("engine is running"));
     }
     assert_eq!(got, [Event::Started(t[1].id.clone()), Event::Ended]);
 }
