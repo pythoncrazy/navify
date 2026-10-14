@@ -62,3 +62,18 @@ async fn shuffle_keeps_the_current_song() {
     let _ = app.update(Message::Shuffle);
     assert!(cur(&app) == playing && app.shuffle.is_none());
 }
+
+#[test]
+fn gain_follows_the_replaygain_settings() {
+    let mut app = app();
+    let rg = json!({"id": "s", "replayGain": {"trackGain": 6.0, "trackPeak": 1.5}});
+    let song: Song = parse(rg).expect("song");
+    let db = |app: &App| 20.0 * app.gain(&song).log10();
+    assert!((db(&app) + 20.0 * 1.5f32.log10()).abs() < 0.01);
+    app.cfg.settings.rg_clip = false;
+    assert!((db(&app) - 6.0).abs() < 0.01);
+    app.cfg.settings.preamp_db = -2.0;
+    assert!((db(&app) - 4.0).abs() < 0.01);
+    app.cfg.settings.replaygain = "off".into();
+    assert_eq!(app.gain(&song), 1.0);
+}

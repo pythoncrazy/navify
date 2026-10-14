@@ -36,6 +36,11 @@ pub struct Settings {
     pub lib_collapsed: bool,
     pub banners: bool,
     pub lib_sort: u8,
+    pub scrobble_pct: f32,
+    pub seek_secs: f32,
+    pub rg_clip: bool,
+    pub lyrics_offset: f32,
+    pub lyrics_size: f32,
 }
 
 impl Default for Settings {
@@ -61,6 +66,11 @@ impl Default for Settings {
             lib_collapsed: false,
             banners: false,
             lib_sort: 0,
+            scrobble_pct: 50.0,
+            seek_secs: 5.0,
+            rg_clip: true,
+            lyrics_offset: 0.0,
+            lyrics_size: 32.0,
         }
     }
 }

@@ -679,7 +679,8 @@ impl App {
         };
         let peak = rg.track_peak.or(rg.album_peak).unwrap_or(1.0).max(1e-3);
         let db = db.unwrap_or(st.fallback_db) + st.preamp_db;
-        10f32.powf(db / 20.0).min(1.0 / peak)
+        let max = [f32::MAX, 1.0 / peak][usize::from(st.rg_clip)];
+        10f32.powf(db / 20.0).min(max)
     }
 
     fn track(&self, song: &Song) -> Track {
@@ -766,7 +767,8 @@ impl App {
         let Some(song) = self.current_song().filter(ok) else {
             return Task::none();
         };
-        let left = (song.duration * 0.5).min(240.0) - self.heard;
+        let pct = self.cfg.settings.scrobble_pct / 100.0;
+        let left = (song.duration * pct).min(240.0) - self.heard;
         let id = song.id.clone();
         if left <= 0.0 {
             self.scrobbled = true;
@@ -1637,7 +1639,7 @@ impl App {
                     E::Pause | E::Stop if self.playing => Message::Toggle,
                     E::Next => Message::Next(true),
                     E::Previous => Message::Prev,
-                    E::Seek(d) => by(d, 10.0),
+                    E::Seek(d) => by(d, self.cfg.settings.seek_secs),
                     E::SeekBy(d, t) => by(d, t.as_secs_f32()),
                     E::SetPosition(p) => Message::Seek(p.0.as_secs_f32()),
                     E::SetVolume(v) => Message::Vol(v.clamp(0.0, 1.0) as f32),
@@ -1833,7 +1835,10 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
         Key::Unidentified => return None,
     };
     let vol = |d: f32| task(move |a| a.update(Message::Vol((a.volume + d).clamp(0.0, 1.0))));
-    let seek = |d: f32| task(move |a| a.update(Message::Seek((a.pos() + d).max(0.0))));
+    let seek = |d: f32| {
+        let to = move |a: &App| (a.pos() + d * a.cfg.settings.seek_secs).max(0.0);
+        task(move |a| a.update(Message::Seek(to(a))))
+    };
     let like = |a: &mut App| {
         let s = a
             .current_song()
@@ -1859,8 +1864,8 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
         (_, "Space") => Message::Toggle,
         ((_, true, _), "ArrowLeft") => Message::Back,
         ((_, true, _), "ArrowRight") => Message::Fwd,
-        ((_, _, true), "ArrowLeft") => seek(-5.0),
-        ((_, _, true), "ArrowRight") => seek(5.0),
+        ((_, _, true), "ArrowLeft") => seek(-1.0),
+        ((_, _, true), "ArrowRight") => seek(1.0),
         ((_, true, true), "h") => Message::Nav("home".into()),
         ((_, true, true), "s") => Message::Nav("liked".into()),
         ((_, true, true), "j") => Message::Panel(1),
