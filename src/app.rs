@@ -366,6 +366,7 @@ impl App {
 
     pub fn boot() -> (Self, Task<Message>) {
         let mut app = Self::new();
+        app.hidden = app.cfg.settings.start_min;
         let env = |k| std::env::var(k).ok();
         let creds = env("NAVIFY_URL")
             .zip(env("NAVIFY_USER"))
@@ -476,6 +477,7 @@ impl App {
             size: Size::new(w.max(800.0), h.max(600.0)) * (1.0 / self.scale()),
             min_size: Some(Size::new(800.0, 600.0)),
             exit_on_close_request: false,
+            visible: !(self.hidden && self.cfg.settings.tray),
             icon: Some(icon.expect("the bundled icon has a valid size")),
             #[cfg(target_os = "linux")]
             platform_specific: window::settings::PlatformSpecific {
@@ -825,8 +827,12 @@ impl App {
         let Some(song) = self.current_song().filter(ok) else {
             return Task::none();
         };
-        let pct = self.cfg.settings.scrobble_pct / 100.0;
-        let left = (song.duration * pct).min(240.0) - self.heard;
+        let st = &self.cfg.settings;
+        let at = match st.scrobble_by_time {
+            true => st.scrobble_secs.min(song.duration),
+            false => (song.duration * st.scrobble_pct / 100.0).min(240.0),
+        };
+        let left = at - self.heard;
         let id = song.id.clone();
         if left <= 0.0 {
             self.scrobbled = true;
@@ -1053,6 +1059,7 @@ impl App {
             self.pl_view = (self.route.clone(), stamp, rows);
         }
         let follow = self.lyric.1.is_some() && self.route == "lyrics";
+        let follow = follow && self.cfg.settings.lyrics_follow;
         let line = crate::pages::lyric_scroll(self).filter(|l| follow && l.0 != self.lyric.0);
         if let Some((n, y)) = line {
             self.lyric = (n, Some(y));
@@ -1468,12 +1475,21 @@ impl App {
             }
             Message::Focus(true) => self.hidden = false,
             Message::Focus(false) => {
-                let min = |m: Option<bool>| act(move |a| a.hidden = m == Some(true));
+                let min = |m: Option<bool>| {
+                    task(move |a| {
+                        a.hidden = m == Some(true);
+                        match a.hidden && a.cfg.settings.min_tray && a.tray.is_some() {
+                            true => a.update(Message::Window(false)),
+                            false => Task::none(),
+                        }
+                    })
+                };
                 let wait = later(0.3, Message::Noop).then(|_| iced::window::latest());
                 return wait.and_then(iced::window::is_minimized).map(min);
             }
             Message::Close => {
-                let save = Task::batch([self.persist(), self.save_queue()]);
+                let q = self.loaded.then(|| self.save_queue());
+                let save = Task::batch(q.into_iter().chain([self.persist()]));
                 return save.collect().then(|_| iced::exit());
             }
             Message::CloseWindow if self.tray.is_some() && self.cfg.settings.tray => {
@@ -1487,6 +1503,7 @@ impl App {
             Message::Window(show) => {
                 use iced::window::{self as w, Mode};
                 let Some(id) = self.win else {
+                    self.hidden = false;
                     return self.open();
                 };
                 if show {
@@ -1498,7 +1515,8 @@ impl App {
                     true => w::set_mode(id, Mode::Hidden),
                     false => w::close(id),
                 };
-                return Task::batch([self.persist(), self.save_queue(), close]);
+                let q = self.loaded.then(|| self.save_queue());
+                return Task::batch(q.into_iter().chain([self.persist(), close]));
             }
             Message::Win(id) => {
                 use iced::window::raw_window_handle::RawWindowHandle;
@@ -1517,15 +1535,30 @@ impl App {
                     Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
                     _ => 0,
                 });
-                return scroll.chain(hwnd.map(Message::MediaInit));
+                use iced::window::{self as w, Mode};
+                let min =
+                    self.hidden
+                        .then(|| match self.tray.is_some() && self.cfg.settings.tray {
+                            true => Task::done(Message::Window(false)),
+                            false => w::set_mode(id, Mode::Windowed).chain(w::minimize(id, true)),
+                        });
+                return scroll
+                    .chain(hwnd.map(Message::MediaInit))
+                    .chain(Task::batch(min));
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
+                let mode = if mode == 0 {
+                    self.cfg.settings.play_mode
+                } else {
+                    mode
+                };
                 if mode < 2 {
                     self.ctx = route.clone();
                 }
                 if let Some((v, src)) = self.songs_of(&route).filter(|(v, _)| !v.is_empty()) {
-                    return self.play_songs(v.to_vec(), src, mode);
+                    let v = v.iter().filter(|s| !s.is_dir).cloned().collect();
+                    return self.play_songs(v, src, mode);
                 }
                 let load = |s: Session| async move {
                     let (kind, id) = route.split_once(':').unwrap_or((&route, ""));
@@ -1588,8 +1621,18 @@ impl App {
                 };
                 let head = &list[..n.min(list.len())];
                 let n = n - head.iter().filter(|s| s.is_dir).count();
-                let list = list.iter().filter(|s| !s.is_dir).cloned().collect();
-                let t = self.update(Message::Play(list, n, src));
+                let list: Vec<Song> = list.iter().filter(|s| !s.is_dir).cloned().collect();
+                let t = match self.cfg.settings.play_mode {
+                    m @ (2 | 3) => {
+                        let one = list.into_iter().nth(n).into_iter().collect();
+                        return self.play_songs(one, src, m);
+                    }
+                    1 => {
+                        (self.queue, self.source) = (list, src);
+                        self.start(n, true)
+                    }
+                    _ => self.update(Message::Play(list, n, src)),
+                };
                 self.ctx = key;
                 return t;
             }
@@ -1756,8 +1799,8 @@ impl App {
     }
 
     fn play_songs(&mut self, songs: Vec<Song>, src: String, mode: u8) -> Task<Message> {
-        if mode == 2 {
-            return self.update(Message::Queue(songs, false));
+        if mode >= 2 {
+            return self.update(Message::Queue(songs, mode == 3));
         }
         (self.queue, self.source) = (songs, src);
         self.start(0, mode == 1)

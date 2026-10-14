@@ -42,6 +42,13 @@ pub struct Settings {
     pub lyrics_offset: f32,
     pub lyrics_size: f32,
     pub compact: bool,
+    pub scrobble_by_time: bool,
+    pub scrobble_secs: f32,
+    pub lyrics_follow: bool,
+    pub play_mode: u8,
+    pub ratings: bool,
+    pub start_min: bool,
+    pub min_tray: bool,
 }
 
 impl Default for Settings {
@@ -73,6 +80,13 @@ impl Default for Settings {
             lyrics_offset: 0.0,
             lyrics_size: 32.0,
             compact: false,
+            scrobble_by_time: false,
+            scrobble_secs: 240.0,
+            lyrics_follow: true,
+            play_mode: 0,
+            ratings: false,
+            start_min: false,
+            min_tray: false,
         }
     }
 }

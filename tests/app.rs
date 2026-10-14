@@ -95,6 +95,10 @@ async fn playlist_search_and_sort_keep_the_server_order() {
     let _ = app.update(Message::PlayAt(key.clone(), 0));
     let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, "abc");
+    app.cfg.settings.play_mode = 3;
+    let _ = app.update(Message::PlayAt(key.clone(), 2));
+    let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, "acbc");
     let _ = app.update(act(|a| a.pl_find = Some("B".into())));
     let _ = app.update(Message::SelectAll);
     let _ = app.update(Message::DeleteSel);

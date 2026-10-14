@@ -49,7 +49,8 @@ fn plural(n: u32, word: &str) -> String {
 
 fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let idx = 16.0 + 8.0 * n.max(1).ilog10().saturating_sub(1) as f32;
-    let w = app.main_w() - 2.0 * PAD - 184.0 - idx;
+    let stars = if app.cfg.settings.ratings { 106.0 } else { 0.0 };
+    let w = app.main_w() - 2.0 * PAD - 184.0 - idx - stars;
     let (a, d) = (f32::from(album && w > 480.0), f32::from(date && w > 640.0));
     let w = w - 16.0 * (a + d);
     let fr = w / (6.0 + 4.0 * a + 3.0 * d);
@@ -163,6 +164,8 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     let clock = container(i(i::CLOCK, 16.0).color(SUB)).align_right(120);
     let r = row![sub("#", 16.0).width(c.3).center(), title];
     let r = r.push(h("Album", c.1)).push(h("Date added", c.2));
+    let star = container(i(i::STAR, 16.0).color(SUB)).width(90);
+    let r = r.push(app.cfg.settings.ratings.then_some(star));
     let r = r.push(clock.padding(padding::right(52)));
     let r = r.spacing(16).padding([0, 16]).height(36).align_y(Center);
     let p = Padding::new(PAD).top(0).bottom(16);
@@ -222,9 +225,18 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let thumb = art.then(|| cover(app, &s.cover, 40.0, false));
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
     let added = (c.2 > 0.0).then(|| sub(date(&s.created), 14.0).width(c.2));
+    let cur_rate = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
+    let stars = app.cfg.settings.ratings.then(|| {
+        Row::with_children((1..=5u8).map(|k| {
+            let m = Message::Rate(s.id.clone(), if k == cur_rate { 0 } else { k });
+            let c = [[Color::TRANSPARENT, SUB], [ACCENT; 2]][usize::from(k <= cur_rate)];
+            let b = theme::sq(i(i::STAR, 14.0).center(), 18.0);
+            b.style(theme::link(c[usize::from(hot)])).on_press(m).into()
+        }))
+    });
     let tail = row![container(heart).width(32), dur, container(more).width(32)];
     let r = row![idx, name].push((c.1 > 0.0).then_some(second));
-    let r = r.push(added).push(tail.align_y(Center));
+    let r = r.push(added).push(stars).push(tail.align_y(Center));
     let r = r
         .spacing(16)
         .padding([0, 16])
@@ -582,13 +594,6 @@ struct Page<'a> {
     banner: Option<&'a str>,
 }
 
-fn play_all(route: &str) -> Message {
-    match route.starts_with("artist:") {
-        true => Message::PlayCtx(route.into(), 0),
-        false => Message::PlayAt(route.into(), 0),
-    }
-}
-
 fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let px = art_px(app);
     let title = |tw: f32| {
@@ -623,7 +628,12 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         hero.height(px + 2.0 * PAD).style(bg).into()
     };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
-    let play = play_btn(app, 56.0, &app.route, play_all(&app.route));
+    let play = play_btn(
+        app,
+        56.0,
+        &app.route,
+        Message::PlayCtx(app.route.clone(), 0),
+    );
     let compact = app.cfg.settings.compact;
     let tables = ["album", "playlist", "liked", "songs"];
     let view = tables
@@ -847,7 +857,12 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     };
     let top = art_px(app) + 2.0 * PAD;
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
-    let play = play_btn(app, 48.0, &app.route, play_all(&app.route));
+    let play = play_btn(
+        app,
+        48.0,
+        &app.route,
+        Message::PlayCtx(app.route.clone(), 0),
+    );
     let head = row![play, title].spacing(8).align_y(Center);
     let head = bar(head.into(), theme::shade(color, 0.5));
     let cols = cols
@@ -1187,7 +1202,35 @@ fn settings(app: &App) -> El<'_> {
     let (pct, step) = (st.scrobble_pct, st.seek_secs);
     let (lag, size) = (st.lyrics_offset, st.lyrics_size);
     let (l1, l2) = (format!("{pct:.0}%"), format!("{step:.0} s"));
-    let pct = num(pct, 10.0..=100.0, |s, v| s.scrobble_pct = v, l1);
+    let secs = st.scrobble_secs;
+    let pct = match st.scrobble_by_time {
+        true => num(
+            secs,
+            10.0..=600.0,
+            |s, v| s.scrobble_secs = v,
+            format!("{secs:.0} s"),
+        ),
+        false => num(pct, 10.0..=100.0, |s, v| s.scrobble_pct = v, l1),
+    };
+    let by = [
+        (false, "Part of the track".into()),
+        (true, "Time played".into()),
+    ];
+    let by = pick(by.into(), st.scrobble_by_time, |s, v| {
+        s.scrobble_by_time = v
+    });
+    let modes = [
+        (0, "Play now"),
+        (3, "Add next"),
+        (2, "Add to the end"),
+        (1, "Shuffle"),
+    ];
+    let modes = modes.map(|(m, l)| (m, l.to_string())).into();
+    let mode = pick(modes, st.play_mode, |s, v| s.play_mode = v);
+    let ratings = tog(st.ratings, |s, b| s.ratings = b);
+    let follow = tog(st.lyrics_follow, |s, b| s.lyrics_follow = b);
+    let start_min = tog(st.start_min, |s, b| s.start_min = b);
+    let min_tray = tog(st.min_tray, |s, b| s.min_tray = b);
     let step = num(step, 1.0..=30.0, |s, v| s.seek_secs = v, l2);
     let (l1, l2) = (format!("{lag:+.1} s"), format!("{size:.0} px"));
     let lag = num(lag, -5.0..=5.0, |s, v| s.lyrics_offset = v, l1);
@@ -1233,20 +1276,30 @@ fn settings(app: &App) -> El<'_> {
         line("Limit the gain to stop clipping", clip),
         line("Crossfade", fade),
         line("Seek step for keys and media controls", step),
+        line("Action of the play buttons and double-click", mode),
         head("Streaming"),
         line("Transcode format", format),
         line("Maximum bitrate", rate),
         head("Library"),
         line("Sync the play queue with the server", sync),
         line("Send played tracks to the server (scrobble)", scrobble),
-        line("Scrobble after this part of the track", pct),
+        line("Scrobble by", by),
+        line("Scrobble after", pct),
         head("Display"),
         line("Zoom", zoom),
         line(banners_label, banners),
+        line("Show the rating column", ratings),
+        line("Scroll the lyrics with the track", follow),
         line("Lyrics offset (positive shows the lines later)", lag),
         line("Lyrics text size", size),
     ];
-    let col = col.push(frame).push(tray).push(head("Servers"));
+    let col = col.push(frame).push(tray);
+    let col = col.push(line("Start minimized", start_min));
+    let col = col.push(line(
+        "Hide Navify in the tray when you minimize the window",
+        min_tray,
+    ));
+    let col = col.push(head("Servers"));
     let col = col.extend(app.cfg.servers.iter().map(server));
     let col = col.push(head("Storage"));
     let col = col.push(line("Cover cache", cache)).push(head("About"));
