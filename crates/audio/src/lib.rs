@@ -779,7 +779,12 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 }
                 Cmd::Next(t) if mix.pre.as_ref().is_some_and(|p| Some(&p.0) == t.as_ref()) => {}
                 Cmd::Next(t) => mix.queue(&io, t),
-                Cmd::Gain(g) => mix.cur.iter_mut().for_each(|c| c.track.gain = g),
+                Cmd::Gain(g) => mix
+                    .inc
+                    .iter_mut()
+                    .chain(&mut mix.cur)
+                    .take(1)
+                    .for_each(|c| c.track.gain = g),
                 Cmd::Device(d) => (dev, out) = (d, None),
                 Cmd::Seek(s) => mix.seek(&io, s).unwrap_or_else(fail),
                 Cmd::Stop => {
