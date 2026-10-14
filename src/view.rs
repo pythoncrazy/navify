@@ -10,12 +10,24 @@ use crate::api::Artist;
 use crate::app::{App, Lib, MenuKind, Message, act, set, task};
 use crate::pages;
 use crate::theme::{
-    self, ACCENT, BG, Btn, CHIP, ELEVATED, PANEL, SUB, TEXT, Txt, bold, fill, icon as i, sub, txt,
+    self, ACCENT, BG, Btn, CHIP, ELEVATED, SUB, TEXT, Txt, bold, fill, icon as i, sub, txt,
 };
 
 pub const SCROLL: &str = "main-scroll";
 pub const SONGS_BG: Color = color!(0x006450);
 pub type El<'a> = Element<'a, Message>;
+
+static CAPS: std::sync::LazyLock<[image::Handle; 4]> = std::sync::LazyLock::new(|| {
+    [(0, 0), (15, 0), (0, 15), (15, 15)].map(|(fx, fy)| {
+        let px = (0..256).flat_map(|i: u32| {
+            let (x, y) = ((i % 16).abs_diff(fx) as f32, (i / 16).abs_diff(fy) as f32);
+            let d = |a: f32, s: u32| 15.875 - a - s as f32 / 4.0;
+            let out = (0..16).filter(|s| d(x, s % 4).hypot(d(y, s / 4)) > 16.0);
+            [0, 0, 0, (out.count() * 255 / 16) as u8]
+        });
+        image::Handle::from_rgba(16, 16, px.collect::<Vec<u8>>())
+    })
+});
 
 pub fn btn<'a>(c: impl Into<El<'a>>, msg: Message) -> Btn<'a, Message> {
     theme::link_btn(c, TEXT, msg)
@@ -391,8 +403,8 @@ fn lib_panel(app: &App) -> El<'_> {
     let list = scrollable(list).style(theme::scroll).height(Fill);
     let list = list.on_scroll(|v| Message::LibScrolled(v.absolute_offset().y, v.bounds().height));
     let body = column![container(head).padding([4, 8]), chips, tools, list];
-    let body = container(body.spacing(12).padding(8)).width(w).height(Fill);
-    body.style(fill(PANEL, 8.0)).into()
+    let body = container(body.spacing(12).padding(8)).width(w);
+    body.height(Fill).into()
 }
 
 fn player_bar(app: &App) -> El<'_> {
@@ -578,19 +590,30 @@ pub fn view(app: &App) -> El<'_> {
     let scroll = scroll.style(theme::scroll).height(Fill);
     let main = stack![scroll].push(pages::sticky(app));
     let main = container(main).width(Fill).height(Fill).clip(true);
+    let gap = || container(Space::new().width(8).height(Fill)).style(fill(BG, 0.0));
     let grip = |n| {
-        let g = mouse_area(Space::new().width(8).height(Fill));
+        let g = mouse_area(gap());
         let g = g.interaction(iced::mouse::Interaction::ResizingHorizontally);
         g.on_press(Message::Drag(Some(n)))
     };
     let right = (app.panel > 0).then(|| {
         let p = [pages::queue_panel, pages::now_playing][usize::from(app.panel == 1)](app);
         let p = container(p).width(app.right_w()).height(Fill);
-        row![grip(1), p.style(fill(PANEL, 8.0))]
+        row![grip(1), p]
     });
-    let main = main.style(fill(PANEL, 8.0));
-    let panels = row![lib_panel(app), grip(0), main].push(right);
-    let panels = container(panels.height(Fill)).padding([0, 8]);
-    let base = column![top_bar(app), panels, player_bar(app)];
-    stack![base, modal, menu, toast].into()
+    let panels = row![gap(), lib_panel(app), grip(0), main].push(right);
+    let black = |e| container(e).style(fill(BG, 0.0));
+    let (top, bottom) = (black(top_bar(app)), black(player_bar(app)));
+    let base = column![top, panels.push(gap()).height(Fill), bottom];
+    let caps = |w: f32| {
+        let cap = |k: usize| image(CAPS[k].clone()).width(8).height(8);
+        let r = |a, b| row![cap(a), Space::new().width(Fill), cap(b)];
+        column![r(0, 1), Space::new().height(Fill), r(2, 3)].width(w)
+    };
+    let gap = || Space::new().width(8);
+    let right = (app.panel > 0).then(|| row![gap(), caps(app.right_w())]);
+    let caps = row![gap(), caps(app.lib_w()), gap(), caps(app.main_w())].push(right);
+    let pad = |h| Space::new().height(h);
+    let caps = column![pad(64), caps.height(Fill), pad(72)];
+    stack![base, caps, modal, menu, toast].into()
 }

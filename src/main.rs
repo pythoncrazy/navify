@@ -80,7 +80,7 @@ fn main() -> iced::Result {
         .scale_factor(|a: &App, _| a.scale())
         .theme(|_: &App, _| Theme::Dark)
         .style(|_, _| iced::theme::Style {
-            background_color: iced::Color::BLACK,
+            background_color: navify::theme::PANEL,
             text_color: iced::Color::WHITE,
         })
         .default_font(Font::with_name("Figtree"))
