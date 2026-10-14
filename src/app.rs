@@ -1853,6 +1853,10 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
         ((true, ..), "r") => Message::Repeat,
         ((true, ..), "a") => Message::SelectAll,
         ((true, ..), ",") => Message::Nav("settings".into()),
+        ((true, ..), "/") => task(|a| {
+            a.modal = Some((String::new(), 3));
+            Task::none()
+        }),
         ((true, ..), "q") => Message::Close,
         ((true, ..), "w") => Message::Window(false),
         ((true, ..), "ArrowLeft") => Message::Prev,
