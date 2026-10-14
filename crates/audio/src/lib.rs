@@ -81,6 +81,7 @@ struct Shared {
     crossfade: AtomicU32,
     pos: AtomicU32,
     paused: AtomicBool,
+    broken: AtomicBool,
     read: AtomicU64,
     flush: AtomicU64,
 }
@@ -706,6 +707,7 @@ fn open(
     };
     let (prod, mut cons) = RingBuffer::<f32>::new(rate as usize);
     let (sh, etx, me, half) = (sh.clone(), tx.clone(), thread::current(), rate as usize / 2);
+    let (sh2, me2) = (sh.clone(), me.clone());
     let (mut read, mut vol, ramp) = (0u64, 0f32, 1000.0 / rate as f32);
     let config = cpal::StreamConfig {
         channels: 2,
@@ -735,7 +737,12 @@ fn open(
                 me.unpark();
             }
         },
-        move |e| drop(etx.send(Event::Error(e.to_string()))),
+        move |e| {
+            if !sh2.broken.swap(true, Relaxed) && !sh2.paused.load(Relaxed) {
+                let _ = etx.send(Event::Error(e.to_string()));
+            }
+            me2.unpark();
+        },
         None,
     )?;
     Ok((stream, prod, rate))
@@ -782,6 +789,13 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             }
         }
         let (paused, fresh) = (sh.paused.load(Relaxed), play.is_some());
+        if sh.broken.load(Relaxed) {
+            out = None;
+            sh.broken.store(false, Relaxed);
+            if !paused {
+                (mix.cur, mix.inc) = (None, None);
+            }
+        }
         if let Some((t, at, pre, hit)) = play {
             let s = match (hit, pre) {
                 (Some(mut s), _) => {
