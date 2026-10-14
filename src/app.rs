@@ -631,6 +631,20 @@ impl App {
         self.edit::<Lib>("lib", |l| l.playlists.iter_mut().filter(mine).for_each(f));
     }
 
+    fn recount(&mut self, pid: &str, more: (u32, f32), f: impl FnOnce(&mut Vec<Song>)) {
+        let key = format!("playlist:{pid}");
+        self.edit::<(Playlist, Vec<Song>)>(&key, |(p, s)| {
+            f(s);
+            (p.song_count, p.duration) = (s.len() as u32, s.iter().map(|x| x.duration).sum());
+        });
+        let now = self.data::<(Playlist, Vec<Song>)>(&key);
+        let now = now.map(|x| (x.0.song_count, x.0.duration));
+        self.edit_pl(pid, |p| {
+            let add = (p.song_count + more.0, p.duration + more.1);
+            (p.song_count, p.duration) = now.unwrap_or(add);
+        });
+    }
+
     fn find_song(&self, id: &str) -> Option<Song> {
         let mut lists = self.cache.values().filter_map(|(_, v)| song_list(v));
         let s = lists.find_map(|(l, _)| l.iter().find(|s| s.id == id));
@@ -1572,10 +1586,8 @@ impl App {
             Message::PlAdd(pid, ids) => {
                 self.menu = None;
                 let songs: Vec<Song> = ids.iter().filter_map(|id| self.find_song(id)).collect();
-                let n = songs.len() as u32;
-                let key = format!("playlist:{pid}");
-                self.edit::<(Playlist, Vec<Song>)>(&key, |(_, s)| s.extend(songs));
-                self.edit_pl(&pid, |p| p.song_count += n);
+                let more = (songs.len() as u32, songs.iter().map(|s| s.duration).sum());
+                self.recount(&pid, more, |s| s.extend(songs));
                 let done = format!("Added to {}.", self.playlist(&pid).map_or("", |p| &p.name));
                 let done = self.toast(&done);
                 let undo = reload(&pid);
@@ -1617,17 +1629,21 @@ impl App {
                     return Task::none();
                 };
                 (self.sel, self.picked) = (None, BTreeSet::new());
-                self.edit::<(Playlist, Vec<Song>)>(&self.route.clone(), |(_, s)| {
+                self.recount(&pid, (0, 0.0), |s| {
                     let mut n = 0;
                     s.retain(|_| (!idx.contains(&n), n += 1).0);
                 });
-                let k = idx.len() as u32;
-                self.edit_pl(&pid, |p| p.song_count = p.song_count.saturating_sub(k));
+                let done = format!(
+                    "Removed from {}.",
+                    self.playlist(&pid).map_or("", |p| &p.name)
+                );
+                let done = self.toast(&done);
                 let undo = reload(&pid);
                 let rm = |s: Session| async move {
                     s.playlist_update(&pid, None, None, &[], &idx).await
                 };
-                return self.send(rm, "Could not remove the songs from the playlist.", undo);
+                let rm = self.send(rm, "Could not remove the songs from the playlist.", undo);
+                return Task::batch([rm, done]);
             }
             Message::Radio(id) => {
                 self.menu = None;
