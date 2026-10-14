@@ -125,6 +125,7 @@ fn later(secs: f32, m: Message) -> Task<Message> {
 #[derive(Clone, Debug)]
 pub enum Message {
     Loaded(String, Result<AnyData, String>),
+    Expired(String),
     Cover(String, u32, Result<Decoded, String>),
     Nav(String),
     Back,
@@ -304,6 +305,7 @@ pub struct App {
     pub hidden: bool,
     pub modal: Option<(String, u8)>,
     held: Option<Message>,
+    expired: (Vec<String>, Option<Instant>),
     pub recording: Option<&'static str>,
     awake: (bool, Option<std::sync::mpsc::Sender<bool>>),
     pub new_pl_desc: String,
@@ -667,10 +669,10 @@ impl App {
         (self.index < self.queue.len()).then(|| &self.queue[self.real_at(self.index)])
     }
 
-    pub(crate) fn real_at(&self, i: usize) -> usize {
+    pub fn real_at(&self, i: usize) -> usize {
         self.shuffle.as_ref().map_or(i, |o| {
             assert_eq!(o.len(), self.queue.len(), "shuffle covers the queue");
-            o[i]
+            o.get(i).copied().unwrap_or(i)
         })
     }
 
@@ -1248,6 +1250,58 @@ impl App {
                 self.modal = None;
                 return t;
             }
+            Message::Expired(key) => {
+                self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
+                let Some(srv) = self.session.as_ref().map(|s| s.server.clone()) else {
+                    return Task::none();
+                };
+                self.expired.0.push(key);
+                if self.expired.0.len() > 1 {
+                    return Task::none();
+                }
+                let (id, ok) = (
+                    srv.id.clone(),
+                    self.expired.1.is_none_or(|t| t.elapsed() > STALE),
+                );
+                let again = async move {
+                    anyhow::ensure!(ok, "The server refused the new session.");
+                    let pass = tokio::task::spawn_blocking(move || config::recall(&srv.id));
+                    match pass.await?? {
+                        Some(p) => Session::login(&srv.url, &srv.user, &p).await.map(Some),
+                        None => Ok(None),
+                    }
+                };
+                return Task::perform(again, move |r| {
+                    let (id, r) = (id.clone(), r.map_err(|e| e.to_string()));
+                    task(move |a| {
+                        let keys = std::mem::take(&mut a.expired.0);
+                        let Some(cur) = a.session.as_mut().filter(|s| s.server.id == id) else {
+                            return Task::none();
+                        };
+                        let note = match r.clone() {
+                            Ok(Some(s)) => {
+                                let (old, new) = (&mut cur.server, s.server);
+                                (old.salt, old.token, old.jwt) = (new.salt, new.token, new.jwt);
+                                *cur = Session::new(cur.server.clone());
+                                let saved = a.cfg.servers.iter_mut().find(|v| v.id == id);
+                                saved.into_iter().for_each(|v| *v = cur.server.clone());
+                                a.expired.1 = Some(Instant::now());
+                                None
+                            }
+                            Ok(None) => Some(
+                                "The server session expired. Log in again to use all functions."
+                                    .into(),
+                            ),
+                            Err(e) => Some(format!("Could not log in again. {e}")),
+                        };
+                        cur.server.native &= note.is_none();
+                        let toast = note.map(|n| a.toast(&n));
+                        keys.iter().for_each(|k| drop(a.cache.remove(k)));
+                        let load = keys.iter().map(|k| a.request(k, 0)).collect::<Vec<_>>();
+                        Task::batch(load.into_iter().chain(toast).chain([a.persist()]))
+                    })
+                });
+            }
             Message::Loaded(key, Err(e)) => {
                 self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
                 if self.shot.is_some() {
@@ -1633,19 +1687,9 @@ impl App {
                     return Task::none();
                 };
                 let h = self.reset();
-                let s = Session::new(srv);
-                (self.session, self.cfg.active) = (Some(s.clone()), Some(id));
-                let ping =
-                    async move { s.rest::<serde_json::Value>("ping", &[], "").await.is_ok() };
-                let check = Task::perform(ping, |ok| match ok {
-                    true => Message::Noop,
-                    false => task(|a| {
-                        a.session.iter_mut().for_each(|s| s.server.native = false);
-                        a.toast("The server session expired. Using the compatible API.")
-                    }),
-                });
+                (self.session, self.cfg.active) = (Some(Session::new(srv)), Some(id));
                 let (t, n) = (self.persist(), self.nav("home".into()));
-                return Task::batch([h, t, n, self.restore(), check]);
+                return Task::batch([h, t, n, self.restore()]);
             }
             Message::DropServer(id) => {
                 self.cfg.servers.retain(|s| s.id != id);
@@ -1779,8 +1823,8 @@ impl App {
                     (self.sel, self.picked, self.anchor) = (Some((key.clone(), n)), [n].into(), n);
                 }
                 let list = self.songs_of(&key).expect("a rendered row has its list").0;
-                let idx = self.picked.iter().copied().filter(|&i| !list[i].is_dir);
-                let idx: Vec<usize> = idx.collect();
+                let row = |&i: &usize| list.get(i).is_some_and(|s| !s.is_dir);
+                let idx: Vec<usize> = self.picked.iter().copied().filter(row).collect();
                 let songs = idx.iter().map(|&i| list[i].clone()).collect();
                 let kind = match key.starts_with("playlist:") {
                     true => {
@@ -2338,7 +2382,14 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
         })
     };
     Task::perform(load, move |r| {
-        Message::Loaded(key.clone(), r.map_err(|e| e.to_string()))
+        let io = r
+            .as_ref()
+            .err()
+            .and_then(|e| e.downcast_ref::<std::io::Error>());
+        match io.map(std::io::Error::kind) {
+            Some(std::io::ErrorKind::PermissionDenied) => Message::Expired(key.clone()),
+            _ => Message::Loaded(key.clone(), r.map_err(|e| e.to_string())),
+        }
     })
 }
 

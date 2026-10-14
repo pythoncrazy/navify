@@ -59,6 +59,8 @@ async fn shuffle_keeps_the_current_song() {
     let playing = cur(&app);
     let _ = app.update(Message::QDel(0));
     assert_eq!(cur(&app), playing);
+    let _ = app.update(Message::QDel(99));
+    assert!(app.real_at(99) == 99 && cur(&app) == playing);
     let _ = app.update(Message::Shuffle);
     assert!(cur(&app) == playing && app.shuffle.is_none());
 }
