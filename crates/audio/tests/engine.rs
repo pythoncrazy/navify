@@ -62,6 +62,33 @@ fn render_gives_exact_length_and_gain() {
             "{case}: {got:.4} s, not {want:.4} s"
         );
     }
+    for (seek, want) in [(0.0, 3.0), (1.0, 2.0)] {
+        use std::io::{Read, Write};
+        let (io, mut t) = setup("One", Some("mp3"));
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let (up, at) = (t[0].url.clone(), l.local_addr().expect("address"));
+        std::thread::spawn(move || {
+            for mut c in l.incoming().map(|c| c.expect("accept")) {
+                let mut b = [0; 4096];
+                let n = c.read(&mut b).expect("read");
+                let req = String::from_utf8_lossy(&b[..n]).to_string();
+                let off = req.split("timeOffset=").nth(1).map(|s| s.split(' ').next());
+                let url = format!("{up}&timeOffset={}", off.flatten().unwrap_or("0"));
+                let body = reqwest::blocking::get(url)
+                    .and_then(|r| r.bytes())
+                    .expect("get");
+                let head = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+                let _ = c.write_all(head).and_then(|_| c.write_all(&body));
+            }
+        });
+        (t[0].url, t[0].transcoded) = (format!("http://{at}/?a=1"), false);
+        let pcm = render(io, t, RATE, seek, 0.0).expect("render without range support");
+        let got = pcm.len() as f32 / 2.0 / RATE as f32;
+        assert!(
+            (got - want).abs() <= 0.08,
+            "no range, seek {seek}: {got:.4} s"
+        );
+    }
     let (io, t) = setup("One", None);
     let peak = |gain| {
         let mut t = t.clone();

@@ -340,7 +340,7 @@ struct Source {
 }
 
 impl Source {
-    fn open(track: Track, (rt, http): &Io, rate: u32, offset: f32) -> Result<Source, String> {
+    fn open(mut track: Track, (rt, http): &Io, rate: u32, offset: f32) -> Result<Source, String> {
         let mut url = track.url.clone();
         if track.transcoded && offset >= 1.0 {
             url += &format!("&timeOffset={}", offset as u32);
@@ -359,15 +359,22 @@ impl Source {
                 let (head, tail) =
                     tokio::try_join!(get.header(RANGE, "bytes=0-").send(), tail.send())?;
                 let (head, tail) = (head.error_for_status()?, tail.error_for_status()?);
-                let ttfb = t.elapsed().as_secs_f64();
-                let len = range(&head).map(|r| r.1).or(head.content_length());
-                let at = range(&tail).map_or(0, |r| r.0);
-                let tail = (at, tail.bytes().await?.to_vec());
+                let (ttfb, len) = (t.elapsed().as_secs_f64(), range(&head).map(|r| r.1));
+                let tail = match range(&tail).filter(|_| len.is_some()) {
+                    Some((at, _)) => (at, tail.bytes().await?.to_vec()),
+                    None => Default::default(),
+                };
                 let mut st = net.st();
-                (st.ttfb, st.tail) = (ttfb, tail);
-                st.len = Some(len.ok_or("The server did not send the stream length.")?);
+                (st.ttfb, st.tail, st.len) = (ttfb, tail, len);
                 Ok(head)
             })?;
+            if !track.transcoded && net.st().len.is_none() {
+                track.transcoded = true;
+                if offset >= 1.0 {
+                    let io = (rt.clone(), http.clone());
+                    return Ok(Source::open(track.clone(), &io, rate, offset)?);
+                }
+            }
             let mut task = JoinSet::new();
             task.spawn_on(fetch(net.clone(), http.clone(), url, Some(head)), rt);
             let (n, pos, _task) = (net.clone(), 0, task);
@@ -488,8 +495,17 @@ impl Source {
     }
 
     fn moved(mut self, io: &Io, rate: u32, secs: f32) -> Result<Source, String> {
-        match self.track.transcoded || self.seek(secs).is_err() {
-            true => Source::open(self.track, io, rate, secs),
+        let seq = self.track.transcoded || self.net.st().len.is_none();
+        match seq || self.seek(secs).is_err() {
+            true => Source::open(
+                Track {
+                    transcoded: seq,
+                    ..self.track
+                },
+                io,
+                rate,
+                secs,
+            ),
             false => Ok(self),
         }
     }
