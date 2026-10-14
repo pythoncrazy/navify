@@ -683,7 +683,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         let lead = row![face, Row::with_children(links)].spacing(8);
         let year = (a.year > 0).then(|| format!("{DOT}{}", a.year));
         let (year, len) = (year.unwrap_or_default(), fmt_long(a.duration));
-        let rest = format!("{year}{DOT}{} songs, {len}", a.song_count);
+        let rest = format!("{year}{DOT}{}, {len}", plural(a.song_count, "song"));
         let heart = heart_btn(&a.id, app.is_starred(&a.id, a.starred), 32.0);
         let p = Page {
             art: cover(app, &a.cover, px, false),
@@ -702,7 +702,10 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     }
     if let Some((p, songs)) = app.data::<(Playlist, Vec<Song>)>(key) {
         let len = fmt_long(p.duration);
-        let rest = format!("{DOT}{} songs, {len}", p.song_count);
+        let rest = match p.song_count {
+            0 => String::new(),
+            n => format!("{DOT}{}, {len}", plural(n, "song")),
+        };
         const ORDER: [&str; 6] = [
             "Custom order",
             "Title",
@@ -827,6 +830,8 @@ fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
     let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
     let body = column![table_head(app, c), vlist(app, songs, &app.route, c, y0)];
+    let none = container(sub("There are no songs to show.", 16.0)).padding(PAD);
+    let body = body.push(songs.is_empty().then_some(none));
     let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
         let day = Some(date(&a.release_date)).filter(|d| !d.is_empty());
         let day = day.or((a.year > 0).then(|| a.year.to_string()));
