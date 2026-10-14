@@ -239,7 +239,13 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                     let (t, r) = (Instant::now(), http.get(url.clone()));
                     let r = r.header(RANGE, format!("bytes={from}-")).send().await?;
                     net.st().ttfb = t.elapsed().as_secs_f64();
-                    r.error_for_status()?
+                    let r = r.error_for_status()?;
+                    if range(&r).map(|r| r.0) != Some(from) {
+                        let e = "The server does not support range requests.";
+                        net.st().err = Some(e.into());
+                        return Ok(());
+                    }
+                    r
                 }
             };
             let (t, mut n) = (Instant::now(), 0);
@@ -277,7 +283,9 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
         }
     }
     .await;
-    net.st().err = res.err().map(|e| e.without_url().to_string());
+    if let Err(e) = res {
+        net.st().err = Some(e.without_url().to_string());
+    }
     net.1.notify_all();
 }
 
@@ -502,11 +510,12 @@ impl Source {
         let time = Time::try_from_secs_f64((target - preroll).max(0.0)).ok_or("invalid seek")?;
         let st = self.net.st();
         let len = st.len.unwrap_or(0);
-        let need = len.min((len as f64 * secs as f64 / self.dur) as u64 + (256 << 10));
+        let need =
+            len.min(((len as f64 * secs as f64 / self.dur) as u64).saturating_add(256 << 10));
         let have = usize::from(st.start == 0 && st.end() >= need);
         drop(st);
         let mode = [SeekMode::Coarse, SeekMode::Accurate][have];
-        let (track_id, past) = (self.tid, secs as f64 >= self.dur);
+        let (track_id, past) = (self.tid, self.dur > 0.0 && secs as f64 >= self.dur);
         let t = self.demux.tracks().iter().find(|t| t.id == track_id);
         let start = t.ok_or("invalid track")?.start_ts;
         if !past {
@@ -528,6 +537,12 @@ impl Source {
 
     fn moved(mut self, io: &Io, rate: u32, secs: f32) -> Result<Source, String> {
         let seq = self.track.transcoded || self.net.st().len.is_none();
+        if seq && self.dur > 0.0 && secs as f64 >= self.dur - 0.5 {
+            return self
+                .seek(self.dur as f32)
+                .map(|()| self)
+                .map_err(|e| e.to_string());
+        }
         if !seq && self.seek(secs).is_ok() {
             return Ok(self);
         }
@@ -636,6 +651,7 @@ struct Mixer {
     old: Option<Source>,
     fade: (usize, usize),
     pre: Pre,
+    bad: Option<String>,
     b: Vec<f32>,
 }
 
@@ -670,14 +686,15 @@ impl Mixer {
         let ready = self.pre.as_ref().and_then(|p| p.1.as_ref());
         let ready = ready.is_some_and(JoinHandle::is_finished);
         let mut ev = None;
-        if cf > 0.0 && self.inc.is_none() && rem <= (cf as f64).min(cur.dur / 2.0) && ready {
+        let fade = cf > 0.0 && cur.dur > 0.0 && rem <= (cf as f64).min(cur.dur / 2.0);
+        if fade && self.inc.is_none() && ready {
             match Self::take_pre(&mut self.pre, io, rate) {
                 Some(Ok(s)) => {
                     ev = Some(Event::Started(s.track.id.clone()));
                     self.fade = (0, (rem.max(0.05) * rate as f64) as usize);
                     self.inc = Some(s);
                 }
-                e => ev = e.and_then(Result::err).map(Event::Error),
+                e => self.bad = e.and_then(Result::err),
             }
         }
         let n = cur.fill(out, rate)?;
@@ -706,7 +723,12 @@ impl Mixer {
             return Ok((n, ev));
         }
         self.cur = None;
-        match Self::take_pre(&mut self.pre, io, rate) {
+        match self
+            .bad
+            .take()
+            .map(Err)
+            .or_else(|| Self::take_pre(&mut self.pre, io, rate))
+        {
             Some(Ok(mut s)) => {
                 let m = s.fill(&mut out[n * 2..], rate)?;
                 let id = s.track.id.clone();
@@ -822,8 +844,8 @@ fn open(
 fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io) {
     let mut mix = Mixer::default();
     let mut out: Option<(cpal::Stream, Producer<f32>)> = None;
-    let (mut written, mut running, mut idle, mut dev) =
-        (0u64, false, None::<Instant>, String::new());
+    let (mut written, mut running, mut idle, mut dev, mut asked) =
+        (0u64, false, None::<Instant>, String::new(), 0u32);
     let mut buf = vec![0f32; CHUNK * 2];
     let mut marks = VecDeque::<(u64, Option<f32>, Option<Event>)>::new();
     let fail = |e: String| drop(tx.send(Event::Error(e)));
@@ -835,6 +857,12 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             };
+            if matches!(cmd, Cmd::Seek(_)) {
+                marks
+                    .drain(..)
+                    .filter_map(|m| m.2)
+                    .for_each(|e| drop(tx.send(e)));
+            }
             if !matches!(cmd, Cmd::Next(_) | Cmd::Gain(_) | Cmd::Device(_)) {
                 sh.flush.store(written, Relaxed);
                 marks.clear();
@@ -848,13 +876,13 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     let mut was = [mix.cur.take(), mix.old.take()];
                     let same = |s: &mut Source| !t.transcoded && s.track.url == t.url;
                     let hit = was.iter_mut().find_map(|s| s.take_if(|s| same(s)));
-                    mix.old = was.into_iter().flatten().next();
-                    (mix.inc, play) = (None, Some((t, at, pre, hit)));
+                    mix.old = was.into_iter().flatten().find(|s| s.net.st().len.is_some());
+                    (mix.inc, mix.bad, play) = (None, None, Some((t, at, pre, hit)));
                     sh.set_pos(at, u64::MAX);
                 }
                 Cmd::Next(t) => match (&mut mix.pre, t) {
                     (Some(p), Some(t)) if p.0.url == t.url => p.0 = t,
-                    (_, t) => mix.pre = t.map(|t| (t, None)),
+                    (_, t) => (mix.pre, mix.bad) = (t.map(|t| (t, None)), None),
                 },
                 Cmd::Gain(g) => mix
                     .inc
@@ -865,10 +893,13 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 Cmd::Device(d) => (dev, out) = (d, None),
                 Cmd::Seek(s) => {
                     sh.set_pos(s, u64::MAX);
-                    mix.seek(&io, s).unwrap_or_else(fail);
+                    match &mut play {
+                        Some(p) => (p.1, p.2) = (s, None),
+                        None => mix.seek(&io, s).unwrap_or_else(fail),
+                    }
                 }
                 Cmd::Stop => {
-                    (mix.cur, mix.inc) = (None, None);
+                    (mix.cur, mix.inc, mix.old, mix.pre, play) = (None, None, None, None, None);
                     sh.set_pos(0.0, u64::MAX);
                 }
             }
@@ -881,7 +912,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 (mix.cur, mix.inc) = (None, None);
             }
         }
-        if out.is_none() && !marks.is_empty() {
+        if out.is_none() && !paused && !marks.is_empty() {
             let mut at = sh.now();
             for e in marks.drain(..).filter_map(|m| m.2) {
                 at = if matches!(e, Event::Started(_)) {
@@ -903,7 +934,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 (None, None) => Source::open(t, &io, mix.rate, at),
             };
             mix.cur = s.map_err(fail).ok();
-            if mix.cur.as_ref().is_some_and(|c| c.rate != mix.rate as f64) {
+            if mix.cur.as_ref().is_some_and(|c| c.rate as u32 != asked) {
                 out = None;
             }
         }
@@ -911,7 +942,8 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             && !paused
             && let Some(c) = &mix.cur
         {
-            match open(&dev, c.rate as u32, &sh, &tx) {
+            asked = c.rate as u32;
+            match open(&dev, asked, &sh, &tx) {
                 Ok((s, p, rate)) => {
                     (written, running, idle, out, mix.rate) = (0, false, None, Some((s, p)), rate);
                     sh.read.store(0, Relaxed);
