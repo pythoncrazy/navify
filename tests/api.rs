@@ -90,8 +90,14 @@ async fn local_reads_and_writes_with_both_apis() -> Result<()> {
     let mut s = session("NAVIFY_TEST_LOCAL_", ["URL", "USERNAME", "PASSWORD"]).await;
     assert!(s.server.native && !s.jwt().is_empty());
     assert!(s.server.ext.iter().any(|e| e == "topSongsByArtistId"));
-    let bad = Session::new(Server { jwt: "x".into(), ..s.server.clone() });
-    let e = bad.albums("newest", &[], 0, 1).await.expect_err("an old token fails");
+    let bad = Session::new(Server {
+        jwt: "x".into(),
+        ..s.server.clone()
+    });
+    let e = bad
+        .albums("newest", &[], 0, 1)
+        .await
+        .expect_err("an old token fails");
     let kind = e.downcast_ref::<std::io::Error>().map(std::io::Error::kind);
     assert_eq!(kind, Some(std::io::ErrorKind::PermissionDenied));
     read_suite(&s).await?;
