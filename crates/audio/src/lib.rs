@@ -33,10 +33,11 @@ const CLOSE: Duration = Duration::from_secs(30);
 const TAIL: u64 = 64 * 1024;
 const AHEAD: u64 = 4 << 20;
 const BACK: u64 = 1 << 20;
+const LEAD: f64 = 30.0;
 
 type Io = (Handle, Client);
 type Res<T> = Result<T, Box<dyn Error>>;
-type Opening = JoinHandle<Result<Source, String>>;
+type Pre = Option<(Track, Option<JoinHandle<Result<Source, String>>>)>;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Track {
@@ -586,20 +587,17 @@ struct Mixer {
     inc: Option<Source>,
     old: Option<Source>,
     fade: (usize, usize),
-    pre: Option<(Track, Opening)>,
+    pre: Pre,
     b: Vec<f32>,
 }
 
 impl Mixer {
-    fn queue(&mut self, io: &Io, t: Option<Track>) {
-        let (io, r) = (io.clone(), self.rate);
-        let open = move |t: Track| thread::spawn(move || Source::open(t, &io, r, 0.0));
-        self.pre = t.map(|t| (t.clone(), open(t)));
-    }
-
-    fn take_pre(pre: &mut Option<(Track, Opening)>) -> Option<Result<Source, String>> {
+    fn take_pre(pre: &mut Pre, io: &Io, rate: u32) -> Option<Result<Source, String>> {
         let (t, h) = pre.take()?;
-        let s = h.join().expect("open thread");
+        let s = match h {
+            Some(h) => h.join().expect("open thread"),
+            None => Source::open(t.clone(), io, rate, 0.0),
+        };
         Some(s.map(|s| Source { track: t, ..s }))
     }
 
@@ -612,16 +610,23 @@ impl Mixer {
         Ok(())
     }
 
-    fn step(&mut self, out: &mut [f32], cf: f32) -> Res<(usize, Option<Event>)> {
+    fn step(&mut self, io: &Io, out: &mut [f32], cf: f32) -> Res<(usize, Option<Event>)> {
         let rate = self.rate;
         let Some(cur) = &mut self.cur else {
             return Ok((0, None));
         };
         let rem = cur.dur - cur.pos() as f64;
-        let ready = self.pre.as_ref().is_some_and(|p| p.1.is_finished());
+        if let Some((t, h @ None)) = &mut self.pre
+            && rem <= LEAD + cf as f64
+        {
+            let (io, t) = (io.clone(), t.clone());
+            *h = Some(thread::spawn(move || Source::open(t, &io, rate, 0.0)));
+        }
+        let ready = self.pre.as_ref().and_then(|p| p.1.as_ref());
+        let ready = ready.is_some_and(JoinHandle::is_finished);
         let mut ev = None;
         if cf > 0.0 && self.inc.is_none() && rem <= (cf as f64).min(cur.dur / 2.0) && ready {
-            match Self::take_pre(&mut self.pre) {
+            match Self::take_pre(&mut self.pre, io, rate) {
                 Some(Ok(s)) => {
                     ev = Some(Event::Started(s.track.id.clone()));
                     self.fade = (0, (rem.max(0.05) * rate as f64) as usize);
@@ -651,7 +656,7 @@ impl Mixer {
             return Ok((n, ev));
         }
         self.cur = None;
-        match Self::take_pre(&mut self.pre) {
+        match Self::take_pre(&mut self.pre, io, rate) {
             Some(Ok(mut s)) => {
                 let m = s.fill(&mut out[n * 2..], rate)?;
                 let id = s.track.id.clone();
@@ -669,16 +674,21 @@ pub fn render(io: Io, tracks: Vec<Track>, rate: u32, at: f32, cf: f32) -> Res<Ve
     let (mut mix, mut it) = (Mixer::default(), tracks.into_iter());
     mix.rate = rate;
     mix.cur = Some(Source::open(it.next().ok_or("no tracks")?, &io, rate, at)?);
-    mix.queue(&io, it.next());
+    mix.pre = it.next().map(|t| (t, None));
     let (mut out, mut buf) = (Vec::new(), vec![0.0; CHUNK * 2]);
     while mix.cur.is_some() {
-        while mix.pre.as_ref().is_some_and(|p| !p.1.is_finished()) {
+        while mix
+            .pre
+            .as_ref()
+            .and_then(|p| p.1.as_ref())
+            .is_some_and(|h| !h.is_finished())
+        {
             thread::sleep(Duration::from_millis(1));
         }
-        let (n, ev) = mix.step(&mut buf, cf)?;
+        let (n, ev) = mix.step(&io, &mut buf, cf)?;
         match ev {
             Some(Event::Error(e)) => Err(e)?,
-            Some(Event::Started(_)) => mix.queue(&io, it.next()),
+            Some(Event::Started(_)) => mix.pre = it.next().map(|t| (t, None)),
             _ => {}
         }
         out.extend_from_slice(&buf[..n * 2]);
@@ -780,7 +790,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     let pre = mix
                         .pre
                         .take_if(|p| at == 0.0 && p.0.url == t.url)
-                        .map(|p| p.1);
+                        .and_then(|p| p.1);
                     let mut was = [mix.cur.take(), mix.old.take()];
                     let same = |s: &mut Source| !t.transcoded && s.track.url == t.url;
                     let hit = was.iter_mut().find_map(|s| s.take_if(|s| same(s)));
@@ -789,7 +799,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 }
                 Cmd::Next(t) => match (&mut mix.pre, t) {
                     (Some(p), Some(t)) if p.0.url == t.url => p.0 = t,
-                    (_, t) => mix.queue(&io, t),
+                    (_, t) => mix.pre = t.map(|t| (t, None)),
                 },
                 Cmd::Gain(g) => mix
                     .inc
@@ -852,10 +862,12 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         }
         if let Some((_, prod)) = &mut out {
             while !paused && mix.cur.is_some() && prod.slots() >= buf.len() {
-                let (n, ev) = mix.step(&mut buf, get(&sh.crossfade)).unwrap_or_else(|e| {
-                    (mix.cur, mix.inc) = (None, None);
-                    (0, Some(Event::Error(e.to_string())))
-                });
+                let (n, ev) = mix
+                    .step(&io, &mut buf, get(&sh.crossfade))
+                    .unwrap_or_else(|e| {
+                        (mix.cur, mix.inc) = (None, None);
+                        (0, Some(Event::Error(e.to_string())))
+                    });
                 prod.push_entire_slice(&buf[..n * 2])
                     .expect("ring buffer has room");
                 written += n as u64 * 2;
