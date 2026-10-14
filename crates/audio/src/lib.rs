@@ -263,11 +263,7 @@ impl Read for Http {
             st.want = pos;
         }
         loop {
-            let (at, d) = if tail {
-                (st.tail.0, &st.tail.1)
-            } else {
-                (st.start, &st.data)
-            };
+            let (at, d) = [(st.start, &st.data), (st.tail.0, &st.tail.1)][usize::from(tail)];
             let d = pos.checked_sub(at).and_then(|i| d.get(i as usize..));
             if let Some(d) = d.filter(|d| !d.is_empty()) {
                 let n = buf.len().min(d.len());
@@ -557,11 +553,7 @@ impl Source {
                     continue;
                 }
             }
-            let src = if self.out.is_empty() {
-                &self.pcm[self.off..]
-            } else {
-                &self.out
-            };
+            let src = [&self.pcm[self.off..], &self.out][usize::from(!self.out.is_empty())];
             let m = src.len().min(out.len() - k);
             if m == 0 {
                 break;

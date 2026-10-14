@@ -542,20 +542,12 @@ impl App {
 
     pub fn lib_mini(&self) -> bool {
         let s = &self.cfg.settings;
-        let right = if self.panel > 0 {
-            s.panels.1 + 8.0
-        } else {
-            0.0
-        };
+        let right = [0.0, s.panels.1 + 8.0][usize::from(self.panel > 0)];
         s.lib_collapsed || self.view_size().0 - 24.0 - s.panels.0 - right < 400.0
     }
 
     pub fn lib_w(&self) -> f32 {
-        if self.lib_mini() {
-            72.0
-        } else {
-            self.cfg.settings.panels.0
-        }
+        [self.cfg.settings.panels.0, 72.0][usize::from(self.lib_mini())]
     }
 
     pub fn right_w(&self) -> f32 {
@@ -563,8 +555,8 @@ impl App {
     }
 
     pub fn main_w(&self) -> f32 {
-        let right = self.right_w() + 8.0;
-        self.view_size().0 - 24.0 - self.lib_w() - if self.panel > 0 { right } else { 0.0 }
+        let right = [0.0, self.right_w() + 8.0][usize::from(self.panel > 0)];
+        self.view_size().0 - 24.0 - self.lib_w() - right
     }
 
     pub fn grid(&self) -> (usize, f32) {
@@ -949,10 +941,8 @@ impl App {
             return Task::none();
         };
         let st = &self.cfg.settings;
-        let at = match st.scrobble_by_time {
-            true => st.scrobble_secs.min(song.duration),
-            false => (song.duration * st.scrobble_pct / 100.0).min(240.0),
-        };
+        let pct = (song.duration * st.scrobble_pct / 100.0).min(240.0);
+        let at = [pct, st.scrobble_secs.min(song.duration)][usize::from(st.scrobble_by_time)];
         let left = at - self.heard;
         let id = song.id.clone();
         if left <= 0.0 {
@@ -1754,10 +1744,8 @@ impl App {
                 let min = |m: Option<bool>| {
                     task(move |a| {
                         a.hidden = m == Some(true);
-                        match a.hidden && a.cfg.settings.min_tray && a.tray.is_some() {
-                            true => a.update(Message::Window(false)),
-                            false => Task::none(),
-                        }
+                        let tray = a.hidden && a.cfg.settings.min_tray && a.tray.is_some();
+                        Task::batch(tray.then(|| a.update(Message::Window(false))))
                     })
                 };
                 let wait = later(0.3, Message::Noop).then(|_| iced::window::latest());
@@ -1824,11 +1812,9 @@ impl App {
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
-                let mode = if mode == 0 {
-                    self.cfg.settings.play_mode
-                } else {
-                    mode
-                };
+                let mode = Some(mode)
+                    .filter(|&m| m > 0)
+                    .unwrap_or(self.cfg.settings.play_mode);
                 if mode < 2 {
                     self.ctx = route.clone();
                 }
