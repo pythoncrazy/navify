@@ -114,6 +114,16 @@ fn scan_devices() -> Task<Message> {
     })
 }
 
+fn ours(s: &Session, m: Message) -> Message {
+    let s = s.clone();
+    task(
+        move |a| match a.session.as_ref().is_some_and(|x| x.same(&s)) {
+            true => a.update(m.clone()),
+            false => Task::none(),
+        },
+    )
+}
+
 fn say(text: String) -> Message {
     task(move |a| a.toast(&text))
 }
@@ -1029,8 +1039,8 @@ impl App {
         let Some(s) = self.session.clone() else {
             return Task::none();
         };
-        Task::perform(f(s), move |r| {
-            r.map_or_else(|e| say(format!("{fail} {e}")), &ok)
+        Task::perform(f(s.clone()), move |r| {
+            ours(&s, r.map_or_else(|e| say(format!("{fail} {e}")), &ok))
         })
     }
 
@@ -1043,11 +1053,11 @@ impl App {
             return Task::none();
         };
         let fail = fail.to_string();
-        Task::perform(f(s), move |r| match r {
+        Task::perform(f(s.clone()), move |r| match r {
             Ok(()) => Message::Noop,
             Err(e) => {
                 let (undo, text) = (undo.clone(), format!("{fail} {e}"));
-                task(move |a| Task::batch([undo(a), a.toast(&text)]))
+                ours(&s, task(move |a| Task::batch([undo(a), a.toast(&text)])))
             }
         })
     }
@@ -1319,9 +1329,7 @@ impl App {
                         };
                         let note = match r.clone() {
                             Ok(Some(s)) => {
-                                let (old, new) = (&mut cur.server, s.server);
-                                (old.salt, old.token, old.jwt) = (new.salt, new.token, new.jwt);
-                                *cur = Session::new(cur.server.clone());
+                                cur.renew(s.server);
                                 let saved = a.cfg.servers.iter_mut().find(|v| v.id == id);
                                 saved.into_iter().for_each(|v| *v = cur.server.clone());
                                 a.expired.1 = Some(Instant::now());
@@ -2382,7 +2390,7 @@ fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usiz
 }
 
 fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
-    let k = key.clone();
+    let (k, me) = (key.clone(), s.clone());
     let load = async move {
         let (kind, arg) = k.split_once(':').unwrap_or((&k, ""));
         let or = |d: &'static str| if arg.is_empty() { d } else { arg };
@@ -2437,10 +2445,11 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             .as_ref()
             .err()
             .and_then(|e| e.downcast_ref::<std::io::Error>());
-        match io.map(std::io::Error::kind) {
+        let m = match io.map(std::io::Error::kind) {
             Some(std::io::ErrorKind::PermissionDenied) => Message::Expired(key.clone()),
             _ => Message::Loaded(key.clone(), r.map_err(|e| e.to_string())),
-        }
+        };
+        ours(&me, m)
     })
 }
 

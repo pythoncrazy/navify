@@ -314,6 +314,16 @@ impl Session {
         Self { server, jwt, http }
     }
 
+    pub fn same(&self, o: &Session) -> bool {
+        Arc::ptr_eq(&self.jwt, &o.jwt)
+    }
+
+    pub fn renew(&mut self, new: Server) {
+        *self.jwt.lock().expect("JWT lock") = new.jwt.clone();
+        let old = &mut self.server;
+        (old.salt, old.token, old.jwt) = (new.salt, new.token, new.jwt);
+    }
+
     pub fn jwt(&self) -> String {
         self.jwt.lock().expect("JWT lock").clone()
     }
