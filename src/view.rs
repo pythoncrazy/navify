@@ -619,23 +619,6 @@ pub fn view(app: &App) -> El<'_> {
     if app.session.is_none() {
         return pages::login(app);
     }
-    if app.full {
-        let s = app.current_song();
-        let top = s.and_then(|s| app.covers.color.get(&s.cover).copied());
-        let w = app.view_size().0 - 428.0;
-        let info = s.map(|s| {
-            let lines = column![theme::ell(&s.title, w, 64.0, Black)];
-            let lines = lines.push(artists_line(&s.artists, 24.0, w)).spacing(8);
-            row![cover(app, &s.cover, 300.0, false), lines]
-                .spacing(32)
-                .align_y(iced::Bottom)
-        });
-        let from = column![sub("Playing from", 12.0), bold(app.source.clone(), 14.0)];
-        let body = column![from.spacing(4), Space::new().height(Fill)].push(info);
-        let body = column![body.padding(48).height(Fill), player_bar(app)];
-        let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];
-        return container(body).style(theme::down(&bg)).into();
-    }
     let scrim = |c: Color| {
         let s = container(Space::new()).width(Fill).height(Fill);
         let s = mouse_area(s.style(fill(c, 0.0))).on_press(Message::MenuClose);
@@ -650,7 +633,7 @@ pub fn view(app: &App) -> El<'_> {
         let (ww, wh) = app.view_size();
         let x = if m.x + w + 8.0 > ww { m.x - w } else { m.x };
         let y = if m.y + h + 8.0 > wh { m.y - h } else { m.y };
-        let (x, y) = (x.clamp(8.0, ww - w - 8.0), y.clamp(8.0, wh - h - 8.0));
+        let (x, y) = (x.min(ww - w - 8.0).max(8.0), y.min(wh - h - 8.0).max(8.0));
         let at = padding::top(y).left(x);
         stack![scrim(theme::CLEAR), container(el).padding(at)]
     });
@@ -660,6 +643,24 @@ pub fn view(app: &App) -> El<'_> {
         let t = container(t).center_x(Fill).align_bottom(Fill);
         t.padding(padding::bottom(104))
     });
+    if app.full {
+        let s = app.current_song();
+        let top = s.and_then(|s| app.covers.color.get(&s.cover).copied());
+        let w = app.view_size().0 - 428.0;
+        let info = s.map(|s| {
+            let lines = column![theme::ell(&s.title, w, 64.0, Black)];
+            let lines = lines.push(artists_line(&s.artists, 24.0, w)).spacing(8);
+            row![cover(app, &s.cover, 300.0, false), lines]
+                .spacing(32)
+                .align_y(iced::Bottom)
+        });
+        let from = s.map(|_| column![sub("Playing from", 12.0), bold(app.source.clone(), 14.0)]);
+        let body = column![from.map(|f| f.spacing(4)), Space::new().height(Fill)].push(info);
+        let body = column![body.padding(48).height(Fill), player_bar(app)];
+        let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];
+        let body = container(body).style(theme::down(&bg));
+        return stack![body, modal, menu, toast].into();
+    }
     let scroll = scrollable(pages::route(app)).id(SCROLL).on_scroll(|v| {
         let (b, c) = (v.bounds().height, v.content_bounds().height);
         Message::Scrolled(v.absolute_offset().y, b, c)
