@@ -1137,6 +1137,8 @@ fn lyrics(app: &App) -> El<'_> {
     };
     let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
     let at = |t: u64| t as i64 + l.offset + lag;
+    use iced::alignment::Horizontal as H;
+    let align = [H::Left, H::Center, H::Right][usize::from(app.cfg.settings.lyrics_align.min(2))];
     let lines = l.lines.iter().enumerate().map(|(n, (t, line))| -> El<'_> {
         let fg = match n {
             _ if !synced || n == cur => TEXT,
@@ -1145,6 +1147,7 @@ fn lyrics(app: &App) -> El<'_> {
         };
         let size = app.cfg.settings.lyrics_size;
         let words = bold(if line.is_empty() { "\u{266a}" } else { line }, size);
+        let words = words.align_x(align);
         match t {
             Some(t) if synced => {
                 let seek = Message::Seek(at(*t).max(0) as f32 / 1000.0);
@@ -1153,7 +1156,10 @@ fn lyrics(app: &App) -> El<'_> {
             _ => words.color(fg).into(),
         }
     });
-    let col = Column::with_children(lines).spacing(16).max_width(900);
+    let col = Column::with_children(lines)
+        .spacing(16)
+        .max_width(900)
+        .align_x(align);
     let pad = Padding::new(PAD * 2.0).top(48).bottom(app.scroll().1 * 0.6);
     container(col).padding(pad).width(Fill).style(bg).into()
 }
@@ -1275,6 +1281,14 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         .size(14)
         .into();
     let step = num(step, 1.0..=30.0, |s, v| s.seek_secs = v, l2);
+    let vs = st.vol_step;
+    let vol_step = num(vs, 1.0..=25.0, |s, v| s.vol_step = v, format!("{vs:.0}%"));
+    let aligns = [
+        (0, "Left".into()),
+        (1, "Center".into()),
+        (2, "Right".into()),
+    ];
+    let align = pick(aligns.into(), st.lyrics_align, |s, v| s.lyrics_align = v);
     let (l1, l2) = (format!("{lag:+.1} s"), format!("{size:.0} px"));
     let lag = num(lag, -5.0..=5.0, |s, v| s.lyrics_offset = v, l1);
     let size = num(size, 20.0..=48.0, |s, v| s.lyrics_size = v, l2);
@@ -1318,6 +1332,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         on!("Limit the gain to stop clipping", rg_clip),
         line("Crossfade", fade),
         line("Seek step for keys and media controls", step),
+        line("Volume step for keys and the mouse wheel", vol_step),
         line("Action of the play buttons and double-click", mode),
         head("Queue"),
         on!("Ask before you replace the queue", confirm_queue),
@@ -1337,6 +1352,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         on!("Scroll the lyrics with the track", lyrics_follow),
         line("Lyrics offset (positive shows the lines later)", lag),
         line("Lyrics text size", size),
+        line("Lyrics alignment", align),
         cfg!(target_os = "linux").then(|| on!(frame_label, system_frame)),
         on!(tray_label, tray),
         on!("Start minimized", start_min),

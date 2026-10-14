@@ -54,6 +54,8 @@ pub struct Settings {
     pub keys: std::collections::BTreeMap<String, String>,
     pub notify: bool,
     pub awake: bool,
+    pub vol_step: f32,
+    pub lyrics_align: u8,
 }
 
 impl Default for Settings {
@@ -97,6 +99,8 @@ impl Default for Settings {
             keys: Default::default(),
             notify: false,
             awake: false,
+            vol_step: 10.0,
+            lyrics_align: 0,
         }
     }
 }
