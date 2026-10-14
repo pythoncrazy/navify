@@ -5,6 +5,7 @@ use iced::widget::{
     text_input, tooltip,
 };
 use iced::{Background, Center, Color, Element, Fill, FillPortion, color, padding};
+use std::borrow::Cow;
 
 use crate::api::Artist;
 use crate::app::{App, Lib, MenuKind, Message, act, set, task};
@@ -253,8 +254,14 @@ pub fn liked_art<'a>(px: f32) -> El<'a> {
     art(px, heart, g.add_stop(1.0, color!(0xc4efd9)))
 }
 
-pub fn media<'a>(art: El<'a>, title: &str, sub: &str, w: f32, fg: Color) -> Row<'a, Message> {
-    let title = theme::ell(title, w, 16.0, Normal).color(fg);
+pub fn media<'a>(
+    art: El<'a>,
+    title: &'a str,
+    sub: impl Into<Cow<'a, str>>,
+    w: f32,
+    fg: Color,
+) -> Row<'a, Message> {
+    let (title, sub) = (theme::ell(title, w, 16.0, Normal).color(fg), sub.into());
     let sub = (!sub.is_empty()).then(|| theme::ell(sub, w, 14.0, Normal).color(SUB));
     let lines = column![title].push(sub);
     let r = row![art, lines.spacing(2).width(Fill)];
@@ -269,8 +276,9 @@ pub fn artists_line<'a>(artists: &[Artist], size: f32, w: f32) -> El<'a> {
             break;
         }
         let name = format!("{}{}", if n > 0 { ", " } else { "" }, a.name);
-        let t = theme::ell(&name, left, size, Normal).color(SUB);
-        left -= theme::width(&name, size, Normal);
+        let used = theme::width(&name, size, Normal);
+        let t = theme::ell(name, left, size, Normal).color(SUB);
+        left -= used;
         let link = format!("artist:{}", a.id);
         r = r.push(match a.id.is_empty() {
             true => El::from(t),
@@ -299,7 +307,11 @@ pub fn fmt_long(s: f32) -> String {
     }
 }
 
-pub fn tip<'a>(c: impl Into<El<'a>>, label: impl ToString, at: tooltip::Position) -> El<'a> {
+pub fn tip<'a>(
+    c: impl Into<El<'a>>,
+    label: impl text::IntoFragment<'a>,
+    at: tooltip::Position,
+) -> El<'a> {
     let body = container(txt(label, 14.0)).padding([4, 8]);
     let body = body.style(fill(theme::MENU, 4.0));
     let delay = std::time::Duration::from_millis(200);
@@ -307,12 +319,12 @@ pub fn tip<'a>(c: impl Into<El<'a>>, label: impl ToString, at: tooltip::Position
 }
 
 fn top_bar(app: &App) -> El<'_> {
-    let nav = |c: char, on: bool, label: &str, m: Message| {
+    let nav = |c: char, on: bool, label: &'static str, m: Message| {
         let b = theme::sq(i(c, 22.0).center(), 32.0);
         let b = b.style(theme::link(if on { SUB } else { theme::DIM }));
         tip(b.on_press_maybe(on.then_some(m)), label, Bottom)
     };
-    let round = |c: Txt<'static>, label: &str, m: Message| {
+    let round = |c: Txt<'static>, label: &'static str, m: Message| {
         let b = button(container(c.center()).center(48)).padding(0);
         tip(b.style(theme::round(ELEVATED)).on_press(m), label, Bottom)
     };
@@ -405,12 +417,12 @@ pub fn lib_rows(app: &App) -> (usize, Vec<LibRow<'_>>, std::ops::Range<usize>) {
     (k, rows, lo..hi)
 }
 
-fn lib_panel(app: &App) -> El<'_> {
+fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.lib_mini());
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| name.to_lowercase().contains(&q);
     let sort = app.cfg.settings.lib_sort;
-    let item = |art: El<'static>, title: &str, sub: &str, route: String| -> El<'static> {
+    let item = |art: El<'a>, title: &'a str, sub: Cow<'a, str>, route: String| -> El<'a> {
         let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
         let on = !app.ctx.is_empty() && same(&app.ctx);
         let fg = if on { ACCENT } else { TEXT };
@@ -452,7 +464,7 @@ fn lib_panel(app: &App) -> El<'_> {
     let pins = pins.into_iter().filter(|p| p.0 && hit(p.3));
     let pins = pins.map(|(_, c, (bg, fg), t, r)| {
         let art = art(48.0, i(c, 0.0).color(fg), bg);
-        item(art, t, "Library", r.into())
+        item(art, t, "Library".into(), r.into())
     });
     let (_, rows, span) = lib_rows(app);
     let gap = |n: usize| Space::new().height(n as f32 * 64.0);
@@ -460,9 +472,16 @@ fn lib_panel(app: &App) -> El<'_> {
     let rows = rows.into_iter().take(span.end).skip(span.start);
     let rows = rows.map(|(c, n, s, r, _)| {
         let round = r.starts_with("artist:");
-        item(cover(app, c, 48.0, round), n, &s, r)
+        item(cover(app, c, 48.0, round), n, s.into(), r)
     });
-    let liked = || item(liked_art(48.0), "Liked Songs", "Playlist", "liked".into());
+    let liked = || {
+        item(
+            liked_art(48.0),
+            "Liked Songs",
+            "Playlist".into(),
+            "liked".into(),
+        )
+    };
     let liked = (f < 2 && hit("Liked Songs")).then(liked);
     let list = column![liked].extend(pins).push(top);
     let list = list.extend(rows).push(bottom);
@@ -498,7 +517,7 @@ fn lib_panel(app: &App) -> El<'_> {
 
 fn player_bar(app: &App) -> El<'_> {
     let song = app.current_song();
-    let side = |t: Txt<'static>, on: bool, label: &str, m: Message| {
+    let side = |t: Txt<'static>, on: bool, label: &'static str, m: Message| {
         let dot = container(Space::new().width(4).height(4)).style(fill(ACCENT, 2.0));
         let dot = on.then(|| container(dot).center_x(Fill).align_bottom(Fill));
         let b = theme::sq(stack![container(t).center(Fill)].push(dot), 32.0);
@@ -758,7 +777,7 @@ pub fn view(app: &App) -> El<'_> {
                 .spacing(32)
                 .align_y(iced::Bottom)
         });
-        let from = s.map(|_| column![sub("Playing from", 12.0), bold(app.source.clone(), 14.0)]);
+        let from = s.map(|_| column![sub("Playing from", 12.0), bold(&app.source, 14.0)]);
         let body = column![from.map(|f| f.spacing(4)), Space::new().height(Fill)].push(info);
         let body = column![body.padding(48).height(Fill), player_bar(app)];
         let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];

@@ -681,7 +681,12 @@ impl Mixer {
             let m = inc.fill(&mut self.b, rate)?;
             self.b[m * 2..].fill(0.0);
             let (pos, len) = self.fade;
-            for (i, (o, b)) in out.chunks_mut(2).zip(self.b.chunks(2)).enumerate() {
+            let frames = out
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(self.b.as_chunks::<2>().0);
+            for (i, (o, b)) in frames.enumerate() {
                 let (s, c) = (((pos + i) as f32 / len as f32).min(1.0) * FRAC_PI_2).sin_cos();
                 o.iter_mut().zip(b).for_each(|(o, b)| *o = *o * c + b * s);
             }
