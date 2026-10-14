@@ -1280,7 +1280,7 @@ fn settings(app: &App) -> El<'_> {
     let mb = |b: u64| b as f32 / 1_048_576.0;
     let disk = mb(app.data::<u64>("disk").copied().unwrap_or(0));
     let memory = mb(app.covers.bytes as u64);
-    let cache = format!("{disk:.0} MB on disk, {memory:.1} MB in memory");
+    let cache = format!("{disk:.1} MB on disk, {memory:.1} MB in memory");
     let cache = sub(cache, 14.0);
     let clear = theme::pill_btn("Clear", Message::ClearCache);
     let cache = row![cache, clear].spacing(16).align_y(Center).into();
