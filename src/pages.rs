@@ -147,27 +147,16 @@ fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, k: Me
 }
 
 fn album_card<'a>(app: &App, a: &Album, sub: String) -> El<'a> {
-    let r = format!("album:{}", a.id);
-    card(
-        app,
-        &a.cover,
-        &a.name,
-        sub,
-        r,
+    let (r, k) = (
+        format!("album:{}", a.id),
         MenuKind::Album(Box::new(a.clone())),
-    )
+    );
+    card(app, &a.cover, &a.name, sub, r, k)
 }
 
 fn artist_card<'a>(app: &App, a: &Artist) -> El<'a> {
-    let r = format!("artist:{}", a.id);
-    card(
-        app,
-        &a.cover,
-        &a.name,
-        "Artist".into(),
-        r,
-        MenuKind::Artist(a.clone()),
-    )
+    let (r, k) = (format!("artist:{}", a.id), MenuKind::Artist(a.clone()));
+    card(app, &a.cover, &a.name, "Artist".into(), r, k)
 }
 
 fn playlist_card<'a>(app: &App, p: &Playlist) -> El<'a> {
