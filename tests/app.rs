@@ -95,6 +95,10 @@ async fn playlist_search_and_sort_keep_the_server_order() {
     let _ = app.update(Message::PlayAt(key.clone(), 0));
     let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, "abc");
+    app.cfg.settings.play_mode = 3;
+    let _ = app.update(Message::PlayAt(key.clone(), 2));
+    let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, "acbc");
     let _ = app.update(act(|a| a.pl_find = Some("B".into())));
     let _ = app.update(Message::SelectAll);
     let _ = app.update(Message::DeleteSel);
@@ -104,4 +108,34 @@ async fn playlist_search_and_sort_keep_the_server_order() {
         .1
         .iter();
     assert_eq!(left.map(|s| s.id.as_str()).collect::<String>(), "ca");
+}
+
+#[tokio::test]
+async fn queue_filter_skips_songs_and_replace_asks_first() {
+    let mut app = app();
+    let songs: Vec<Song> = ["a", "b (Live)", "c"]
+        .map(|t| parse(json!({"id": t, "title": t})).expect("song"))
+        .into();
+    let cur = |app: &App| app.current_song().expect("a song plays").id.clone();
+    app.cfg.settings.queue_skip = " live ,".into();
+    let _ = app.update(Message::Play(songs.clone(), 2, "t".into()));
+    assert_eq!(app.queue.len(), 2);
+    assert_eq!(cur(&app), "c");
+    app.cfg.settings.confirm_queue = true;
+    let _ = app.update(Message::Play(songs, 0, "u".into()));
+    assert!(app.modal.as_ref().is_some_and(|m| m.1 == 4) && cur(&app) == "c");
+    let _ = app.update(Message::Confirm);
+    assert!(app.modal.is_none() && cur(&app) == "a");
+}
+
+#[tokio::test]
+async fn recorded_shortcut_replaces_the_old_binding() {
+    let mut app = app();
+    let _ = app.update(Message::Key("C+S".into()));
+    assert!(app.shuffle.is_some());
+    let _ = app.update(Message::Record(Some("shuffle")));
+    let _ = app.update(Message::Key("C+R".into()));
+    assert!(app.binding("shuffle") == "C+R" && app.binding("repeat").is_empty());
+    let _ = app.update(Message::Key("C+R".into()));
+    assert!(app.shuffle.is_none() && app.repeat == 0);
 }

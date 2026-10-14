@@ -195,6 +195,9 @@ pub enum Message {
     CloseWindow,
     Win(iced::window::Id),
     Full(bool),
+    Key(String),
+    Record(Option<&'static str>),
+    Confirm,
 }
 
 #[derive(Debug, Default)]
@@ -300,6 +303,9 @@ pub struct App {
     pub login: Login,
     pub hidden: bool,
     pub modal: Option<(String, u8)>,
+    held: Option<Message>,
+    pub recording: Option<&'static str>,
+    awake: (bool, Option<std::sync::mpsc::Sender<bool>>),
     pub new_pl_desc: String,
     pub shot: Option<String>,
     pub new_pl: String,
@@ -366,6 +372,7 @@ impl App {
 
     pub fn boot() -> (Self, Task<Message>) {
         let mut app = Self::new();
+        app.hidden = app.cfg.settings.start_min;
         let env = |k| std::env::var(k).ok();
         let creds = env("NAVIFY_URL")
             .zip(env("NAVIFY_USER"))
@@ -476,6 +483,7 @@ impl App {
             size: Size::new(w.max(800.0), h.max(600.0)) * (1.0 / self.scale()),
             min_size: Some(Size::new(800.0, 600.0)),
             exit_on_close_request: false,
+            visible: !(self.hidden && self.cfg.settings.tray),
             icon: Some(icon.expect("the bundled icon has a valid size")),
             #[cfg(target_os = "linux")]
             platform_specific: window::settings::PlatformSpecific {
@@ -679,7 +687,7 @@ impl App {
         }
     }
 
-    fn toast(&mut self, text: &str) -> Task<Message> {
+    pub(crate) fn toast(&mut self, text: &str) -> Task<Message> {
         self.toast_seq += 1;
         let n = self.toast_seq;
         self.toast = Some((n, text.to_string()));
@@ -775,7 +783,33 @@ impl App {
         (i + 1 < len).then_some(i + 1).or(wrap)
     }
 
+    pub fn binding(&self, id: &str) -> &str {
+        let default = KEYS.iter().find(|k| k.0 == id).expect("a known action").2;
+        self.cfg
+            .settings
+            .keys
+            .get(id)
+            .map_or(default, |s| s.as_str())
+    }
+
+    fn kept(&self) -> impl Fn(&Song) -> bool + use<> {
+        let words = self.cfg.settings.queue_skip.to_lowercase();
+        let words: Vec<String> = words.split(',').map(|w| w.trim().to_string()).collect();
+        let words: Vec<String> = words.into_iter().filter(|w| !w.is_empty()).collect();
+        move |s| {
+            let hay = [&s.title, &s.artist, &s.album, &s.genre].map(|f| f.to_lowercase());
+            !words.iter().any(|w| hay.iter().any(|h| h.contains(w)))
+        }
+    }
+
     fn start(&mut self, i: usize, shuffled: bool) -> Task<Message> {
+        let keep = self.kept();
+        let i = self.queue.iter().take(i).filter(|s| keep(s)).count();
+        self.queue.retain(|s| keep(s));
+        if self.queue.is_empty() {
+            let t = self.toast("The queue filter removed all the songs.");
+            return Task::batch([self.halt(), t]);
+        }
         self.shuffle = shuffled.then(|| shuffle(0..self.queue.len(), i));
         self.play_index(if shuffled { 0 } else { i }, 0.0)
     }
@@ -807,7 +841,39 @@ impl App {
         let now = |s: Session| async move { s.scrobble(&song.id, false).await };
         let now = self.send(now, "Could not send the playing track to the server.");
         let now = Task::batch(self.cfg.settings.scrobble.then_some(now));
-        Task::batch([lyr, now, self.save_later()])
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let files = self
+            .session
+            .as_ref()
+            .map(|s| [128, 192, 300, 640].map(|z| s.cover_file(&song.cover, z)));
+        let show = move || {
+            let mut n = notify_rust::Notification::new();
+            let body = format!("{}{}{}", song.artist, crate::pages::DOT, song.album);
+            n.appname("Navify")
+                .summary(&song.title)
+                .body(&body)
+                .icon("navify");
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                static ID: AtomicU32 = AtomicU32::new(0);
+                if let Some(p) = files.iter().flatten().find(|p| p.exists()) {
+                    n.image_path(&p.to_string_lossy());
+                }
+                let h = n.id(ID.load(Relaxed)).show().map_err(|e| e.to_string())?;
+                ID.store(h.id(), Relaxed);
+                Ok::<_, String>(())
+            }
+            #[cfg(not(all(unix, not(target_os = "macos"))))]
+            n.show().map(drop).map_err(|e| e.to_string())
+        };
+        let note = Task::perform(tokio::task::spawn_blocking(show), |r| {
+            match r.expect("the notification task ends") {
+                Ok(()) => Message::Noop,
+                Err(e) => task(move |a| a.toast(&format!("Could not show a notification. {e}"))),
+            }
+        });
+        let note = Task::batch(self.cfg.settings.notify.then_some(note));
+        Task::batch([lyr, now, note, self.save_later()])
     }
 
     fn pos(&self) -> f32 {
@@ -825,8 +891,12 @@ impl App {
         let Some(song) = self.current_song().filter(ok) else {
             return Task::none();
         };
-        let pct = self.cfg.settings.scrobble_pct / 100.0;
-        let left = (song.duration * pct).min(240.0) - self.heard;
+        let st = &self.cfg.settings;
+        let at = match st.scrobble_by_time {
+            true => st.scrobble_secs.min(song.duration),
+            false => (song.duration * st.scrobble_pct / 100.0).min(240.0),
+        };
+        let left = at - self.heard;
         let id = song.id.clone();
         if left <= 0.0 {
             self.scrobbled = true;
@@ -992,7 +1062,7 @@ impl App {
         })
     }
 
-    fn settings(&mut self, o: config::Settings) -> Task<Message> {
+    pub(crate) fn settings(&mut self, o: config::Settings) -> Task<Message> {
         self.menu = None;
         let n = &self.cfg.settings;
         if let Some(p) = &self.player
@@ -1053,10 +1123,20 @@ impl App {
             self.pl_view = (self.route.clone(), stamp, rows);
         }
         let follow = self.lyric.1.is_some() && self.route == "lyrics";
+        let follow = follow && self.cfg.settings.lyrics_follow;
         let line = crate::pages::lyric_scroll(self).filter(|l| follow && l.0 != self.lyric.0);
         if let Some((n, y)) = line {
             self.lyric = (n, Some(y));
             t = Task::batch([t, self.scroll_to(y)]);
+        }
+        let awake = self.playing && self.cfg.settings.awake;
+        if awake != self.awake.0 {
+            let tx = self
+                .awake
+                .1
+                .get_or_insert_with(|| crate::power::spawn(CH.0.clone()));
+            tx.send(awake).expect("the power thread runs");
+            self.awake.0 = awake;
         }
         if let Some(p) = &self.player {
             p.set_volume(if self.muted { 0.0 } else { self.volume });
@@ -1094,7 +1174,24 @@ impl App {
     }
 
     fn handle(&mut self, m: Message) -> Task<Message> {
+        let st = &self.cfg.settings;
+        let replaces = match &m {
+            Message::Play(..) => true,
+            Message::PlayAt(k, _) | Message::PlayCtx(k, 0) => st.play_mode < 2 && *k != self.ctx,
+            Message::PlayCtx(k, 1) => *k != self.ctx,
+            _ => false,
+        };
+        if replaces && st.confirm_queue && self.modal.is_none() && !self.queue.is_empty() {
+            (self.menu, self.modal, self.held) = (None, Some((String::new(), 4)), Some(m));
+            return Task::none();
+        }
         match m {
+            Message::Confirm => {
+                let held = self.held.take().expect("the dialog holds a play action");
+                let t = self.update(held);
+                self.modal = None;
+                return t;
+            }
             Message::Loaded(key, Err(e)) => {
                 self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
                 if self.shot.is_some() {
@@ -1237,6 +1334,10 @@ impl App {
                 return self.send(rate, "Could not set the rating.");
             }
             Message::Queue(songs, next) => {
+                let songs: Vec<Song> = songs.into_iter().filter(self.kept()).collect();
+                if songs.is_empty() {
+                    return self.toast("The queue filter removed all the songs.");
+                }
                 let (n, at) = (songs.len(), if next { self.index + 1 } else { usize::MAX });
                 if let Some(o) = &mut self.shuffle {
                     let base = self.queue.len();
@@ -1299,7 +1400,34 @@ impl App {
                 if self.menu.is_none() && self.modal.is_none() {
                     (self.sel, self.picked) = (None, BTreeSet::new());
                 }
-                (self.menu, self.modal) = (None, None);
+                (self.menu, self.modal, self.recording) = (None, None, None);
+            }
+            Message::Record(id) => self.recording = id,
+            Message::Key(c) if self.recording.is_some() => {
+                let id = self.recording.take().expect("a recording");
+                let used: Vec<&str> = KEYS
+                    .iter()
+                    .map(|k| k.0)
+                    .filter(|k| self.binding(k) == c)
+                    .collect();
+                let keys = &mut self.cfg.settings.keys;
+                keys.extend(used.into_iter().map(|k| (k.to_string(), String::new())));
+                keys.insert(id.to_string(), c);
+                return self.persist();
+            }
+            Message::Key(c) => {
+                let hit = KEYS.iter().find(|k| self.binding(k.0) == c);
+                let base = c.rsplit('+').next().filter(|_| !c.starts_with("C+"));
+                let m = match (hit, base.unwrap_or_default()) {
+                    (Some(k), _) => (k.3)(),
+                    (_, "Tab") => Message::FocusMove(c.contains("Shift+")),
+                    (_, "ArrowUp") => Message::Arrow(true),
+                    (_, "ArrowDown") => Message::Arrow(false),
+                    (_, "Enter") => Message::Enter,
+                    (_, "Delete" | "Backspace") => Message::DeleteSel,
+                    _ => return Task::none(),
+                };
+                return self.update(m);
             }
             Message::PlAdd(pid, ids) => {
                 self.menu = None;
@@ -1468,12 +1596,21 @@ impl App {
             }
             Message::Focus(true) => self.hidden = false,
             Message::Focus(false) => {
-                let min = |m: Option<bool>| act(move |a| a.hidden = m == Some(true));
+                let min = |m: Option<bool>| {
+                    task(move |a| {
+                        a.hidden = m == Some(true);
+                        match a.hidden && a.cfg.settings.min_tray && a.tray.is_some() {
+                            true => a.update(Message::Window(false)),
+                            false => Task::none(),
+                        }
+                    })
+                };
                 let wait = later(0.3, Message::Noop).then(|_| iced::window::latest());
                 return wait.and_then(iced::window::is_minimized).map(min);
             }
             Message::Close => {
-                let save = Task::batch([self.persist(), self.save_queue()]);
+                let q = self.loaded.then(|| self.save_queue());
+                let save = Task::batch(q.into_iter().chain([self.persist()]));
                 return save.collect().then(|_| iced::exit());
             }
             Message::CloseWindow if self.tray.is_some() && self.cfg.settings.tray => {
@@ -1487,6 +1624,7 @@ impl App {
             Message::Window(show) => {
                 use iced::window::{self as w, Mode};
                 let Some(id) = self.win else {
+                    self.hidden = false;
                     return self.open();
                 };
                 if show {
@@ -1498,7 +1636,8 @@ impl App {
                     true => w::set_mode(id, Mode::Hidden),
                     false => w::close(id),
                 };
-                return Task::batch([self.persist(), self.save_queue(), close]);
+                let q = self.loaded.then(|| self.save_queue());
+                return Task::batch(q.into_iter().chain([self.persist(), close]));
             }
             Message::Win(id) => {
                 use iced::window::raw_window_handle::RawWindowHandle;
@@ -1517,15 +1656,30 @@ impl App {
                     Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
                     _ => 0,
                 });
-                return scroll.chain(hwnd.map(Message::MediaInit));
+                use iced::window::{self as w, Mode};
+                let min =
+                    self.hidden
+                        .then(|| match self.tray.is_some() && self.cfg.settings.tray {
+                            true => Task::done(Message::Window(false)),
+                            false => w::set_mode(id, Mode::Windowed).chain(w::minimize(id, true)),
+                        });
+                return scroll
+                    .chain(hwnd.map(Message::MediaInit))
+                    .chain(Task::batch(min));
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
+                let mode = if mode == 0 {
+                    self.cfg.settings.play_mode
+                } else {
+                    mode
+                };
                 if mode < 2 {
                     self.ctx = route.clone();
                 }
                 if let Some((v, src)) = self.songs_of(&route).filter(|(v, _)| !v.is_empty()) {
-                    return self.play_songs(v.to_vec(), src, mode);
+                    let v = v.iter().filter(|s| !s.is_dir).cloned().collect();
+                    return self.play_songs(v, src, mode);
                 }
                 let load = |s: Session| async move {
                     let (kind, id) = route.split_once(':').unwrap_or((&route, ""));
@@ -1588,8 +1742,17 @@ impl App {
                 };
                 let head = &list[..n.min(list.len())];
                 let n = n - head.iter().filter(|s| s.is_dir).count();
-                let list = list.iter().filter(|s| !s.is_dir).cloned().collect();
-                let t = self.update(Message::Play(list, n, src));
+                let list: Vec<Song> = list.iter().filter(|s| !s.is_dir).cloned().collect();
+                let t = match self.cfg.settings.play_mode {
+                    m @ (2 | 3) => {
+                        let one = list.into_iter().nth(n).into_iter().collect();
+                        return self.play_songs(one, src, m);
+                    }
+                    m => {
+                        (self.queue, self.source) = (list, src);
+                        self.start(n, m == 1 || self.shuffle.is_some())
+                    }
+                };
                 self.ctx = key;
                 return t;
             }
@@ -1756,8 +1919,8 @@ impl App {
     }
 
     fn play_songs(&mut self, songs: Vec<Song>, src: String, mode: u8) -> Task<Message> {
-        if mode == 2 {
-            return self.update(Message::Queue(songs, false));
+        if mode >= 2 {
+            return self.update(Message::Queue(songs, mode == 3));
         }
         (self.queue, self.source) = (songs, src);
         self.start(0, mode == 1)
@@ -1919,60 +2082,86 @@ impl App {
 }
 
 fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message> {
+    use iced::keyboard::key::Named::{Alt, Control, Meta, Shift, Super};
     let k = match key {
+        Key::Named(Shift | Control | Alt | Super | Meta) | Key::Unidentified => return None,
         Key::Named(n) => format!("{n:?}"),
-        Key::Character(c) => c.to_lowercase(),
-        Key::Unidentified => return None,
+        Key::Character(c) => c.to_uppercase(),
     };
-    let vol = |d: f32| task(move |a| a.update(Message::Vol((a.volume + d).clamp(0.0, 1.0))));
-    let seek = |d: f32| {
-        let to = move |a: &App| (a.pos() + d * a.cfg.settings.seek_secs).max(0.0);
-        task(move |a| a.update(Message::Seek(to(a))))
-    };
-    let like = |a: &mut App| {
-        let s = a
-            .current_song()
-            .map(|s| (s.id.clone(), !a.is_starred(&s.id, s.starred)));
-        Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
-    };
-    Some(match ((m.command(), m.alt(), m.shift()), k.as_str()) {
-        (_, "Escape") => Message::MenuClose,
-        _ if status == iced::event::Status::Captured => return None,
-        ((true, ..), "k" | "l") => task(|_| op::focus("search")),
-        ((true, ..), "s") => Message::Shuffle,
-        ((true, ..), "r") => Message::Repeat,
-        ((true, ..), "a") => Message::SelectAll,
-        ((true, ..), ",") => Message::Nav("settings".into()),
-        ((true, ..), "/") => task(|a| {
-            a.modal = Some((String::new(), 3));
-            Task::none()
-        }),
-        ((true, ..), "q") => Message::Close,
-        ((true, ..), "w") => Message::Window(false),
-        ((true, ..), "ArrowLeft") => Message::Prev,
-        ((true, ..), "ArrowRight") => Message::Next(true),
-        ((true, ..), "ArrowUp") => vol(0.1),
-        ((true, ..), "ArrowDown") => vol(-0.1),
-        ((true, ..), _) => return None,
-        ((_, _, shift), "Tab") => Message::FocusMove(shift),
-        (_, "Space") => Message::Toggle,
-        ((_, true, _), "ArrowLeft") => Message::Back,
-        ((_, true, _), "ArrowRight") => Message::Fwd,
-        ((_, _, true), "ArrowLeft") => seek(-1.0),
-        ((_, _, true), "ArrowRight") => seek(1.0),
-        ((_, true, true), "h") => Message::Nav("home".into()),
-        ((_, true, true), "s") => Message::Nav("liked".into()),
-        ((_, true, true), "j") => Message::Panel(1),
-        ((_, true, true), "q") => Message::Panel(2),
-        ((_, true, true), "l") => Message::LibCollapse,
-        ((_, true, true), "b") => task(like),
-        (_, "ArrowUp") => Message::Arrow(true),
-        (_, "ArrowDown") => Message::Arrow(false),
-        (_, "Enter") => Message::Enter,
-        (_, "Delete" | "Backspace") => Message::DeleteSel,
-        _ => return None,
-    })
+    let on = |b: bool, s: &'static str| if b { s } else { "" };
+    let c = format!(
+        "{}{}{}{k}",
+        on(m.command(), "C+"),
+        on(m.alt(), "Alt+"),
+        on(m.shift(), "Shift+")
+    );
+    match (c.as_str(), status) {
+        ("Escape", _) => Some(Message::MenuClose),
+        (_, iced::event::Status::Captured) => None,
+        _ => Some(Message::Key(c)),
+    }
 }
+
+pub fn key_label(c: &str) -> String {
+    let cmd = ["Ctrl+", "Cmd+"][usize::from(cfg!(target_os = "macos"))];
+    c.replace("C+", cmd).replace("Arrow", "")
+}
+
+pub type KeyAction = (&'static str, &'static str, &'static str, fn() -> Message);
+
+pub const KEYS: [KeyAction; 23] = [
+    ("toggle", "Play or pause", "Space", || Message::Toggle),
+    ("next", "Next track", "C+ArrowRight", || Message::Next(true)),
+    ("prev", "Previous track", "C+ArrowLeft", || Message::Prev),
+    ("seek_fwd", "Seek forward", "Shift+ArrowRight", || {
+        task(|a| a.update(Message::Seek(a.pos() + a.cfg.settings.seek_secs)))
+    }),
+    ("seek_back", "Seek backward", "Shift+ArrowLeft", || {
+        task(|a| a.update(Message::Seek((a.pos() - a.cfg.settings.seek_secs).max(0.0))))
+    }),
+    ("vol_up", "Volume up", "C+ArrowUp", || {
+        task(|a| a.update(Message::Vol((a.volume + 0.1).min(1.0))))
+    }),
+    ("vol_down", "Volume down", "C+ArrowDown", || {
+        task(|a| a.update(Message::Vol((a.volume - 0.1).max(0.0))))
+    }),
+    ("shuffle", "Shuffle", "C+S", || Message::Shuffle),
+    ("repeat", "Repeat", "C+R", || Message::Repeat),
+    ("like", "Like the current song", "Alt+Shift+B", || {
+        task(|a| {
+            let s = a.current_song();
+            let s = s.map(|s| (s.id.clone(), !a.is_starred(&s.id, s.starred)));
+            Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
+        })
+    }),
+    ("search", "Search", "C+K", || task(|_| op::focus("search"))),
+    ("select_all", "Select all", "C+A", || Message::SelectAll),
+    ("back", "Go back", "Alt+ArrowLeft", || Message::Back),
+    ("forward", "Go forward", "Alt+ArrowRight", || Message::Fwd),
+    ("home", "Home", "Alt+Shift+H", || {
+        Message::Nav("home".into())
+    }),
+    ("liked", "Liked Songs", "Alt+Shift+S", || {
+        Message::Nav("liked".into())
+    }),
+    ("now_playing", "Now playing view", "Alt+Shift+J", || {
+        Message::Panel(1)
+    }),
+    ("queue", "Queue", "Alt+Shift+Q", || Message::Panel(2)),
+    ("library", "Collapse Your Library", "Alt+Shift+L", || {
+        Message::LibCollapse
+    }),
+    ("settings", "Settings", "C+,", || {
+        Message::Nav("settings".into())
+    }),
+    ("shortcuts", "Keyboard shortcuts", "C+/", || {
+        act(|a| a.modal = Some((String::new(), 3)))
+    }),
+    ("close", "Close the window", "C+W", || {
+        Message::Window(false)
+    }),
+    ("quit", "Quit", "C+Q", || Message::Close),
+];
 
 fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
     use ::image::imageops::FilterType;
