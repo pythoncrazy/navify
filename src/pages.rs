@@ -1113,7 +1113,7 @@ fn lyrics(app: &App) -> El<'_> {
     let Some((l, cur, synced)) = lyric_at(app, song) else {
         let t = bold("No lyrics are available for this song.", 24.0);
         let t = container(t).center_x(Fill).padding(80);
-        return t.height(app.view_size().1 - 160.0).style(bg).into();
+        return t.height(app.scroll().1).style(bg).into();
     };
     let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
     let at = |t: u64| t as i64 + l.offset + lag;
@@ -1480,7 +1480,10 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let from = [&from, "Next up"][usize::from(app.source.is_empty())].to_string();
     let now = app.current_song().map(|s| queue_row(app, s, app.index, w));
     let now = now.map(|r| column![title("Now playing".into()), r]);
-    let list = column![now, (!next.is_empty()).then(|| title(from))].extend(next);
+    let clear = link_btn(bold("Clear queue", 14.0), SUB, Message::QClear);
+    let from = row![ell(&from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
+    let from = container(from).padding(Padding::new(8.0).top(16));
+    let list = column![now, (!next.is_empty()).then_some(from)].extend(next);
     let list = list.push((more > 0).then(|| note(format!("{more} more songs"))));
     let empty = app.queue.is_empty();
     let list = list.push(empty.then(|| note("The queue is empty.".into())));
@@ -1516,9 +1519,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
         tab("Queue", !app.recent_tab),
         tab("Recently played", app.recent_tab)
     ];
-    let clear = link_btn(bold("Clear queue", 14.0), SUB, Message::QClear);
-    let clear = (!empty && !app.recent_tab).then(|| clear.into());
-    let head = panel_head(tabs.spacing(24), 2, clear);
+    let head = panel_head(tabs.spacing(24), 2, None);
     if app.recent_tab {
         return column![head, scrollable(past).style(theme::scroll)].into();
     }
