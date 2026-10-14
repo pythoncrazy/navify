@@ -743,8 +743,13 @@ impl App {
         later(3.0, clear)
     }
 
-    fn report(&mut self, r: anyhow::Result<()>) -> Task<Message> {
-        r.map_or_else(|e| self.toast(&e.to_string()), |()| Task::none())
+    fn keyring(f: impl FnOnce() -> anyhow::Result<()> + Send + 'static) -> Task<Message> {
+        Task::perform(tokio::task::spawn_blocking(f), |r| {
+            match r.expect("keyring task") {
+                Ok(()) => Message::Noop,
+                Err(e) => say(e.to_string()),
+            }
+        })
     }
 
     fn save_later(&mut self) -> Task<Message> {
@@ -775,9 +780,22 @@ impl App {
         {
             v.jwt = s.jwt();
         }
-        Task::perform(async move { c.save() }, |r| match r {
-            Ok(()) => Message::Noop,
-            Err(e) => say(format!("Could not save the settings. {e}")),
+        static LAST: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let n = NEXT.fetch_add(1, Relaxed);
+        let save = move || {
+            let mut last = LAST.lock().expect("save lock");
+            if n < *last {
+                return Ok(());
+            }
+            *last = n;
+            c.save()
+        };
+        Task::perform(tokio::task::spawn_blocking(save), |r| {
+            match r.expect("save task") {
+                Ok(()) => Message::Noop,
+                Err(e) => say(format!("Could not save the settings. {e}")),
+            }
         })
     }
 
@@ -1676,14 +1694,14 @@ impl App {
                 return login(l.url.clone(), l.user.clone(), l.pass.clone());
             }
             Message::LogOut => {
-                let gone = self.cfg.active.take().map_or(Ok(()), |id| {
+                let gone = self.cfg.active.take().map(|id| {
                     self.cfg.servers.retain(|s| s.id != id);
-                    config::forget(&id)
+                    Self::keyring(move || config::forget(&id))
                 });
                 let h = self.reset();
                 self.session = None;
                 let (t, n) = (self.persist(), self.nav("login".into()));
-                return Task::batch([h, t, n, self.report(gone)]);
+                return Task::batch([h, t, n].into_iter().chain(gone));
             }
             Message::UseServer(id) => {
                 let Some(srv) = self.cfg.servers.iter().find(|s| s.id == id).cloned() else {
@@ -1697,8 +1715,8 @@ impl App {
             }
             Message::DropServer(id) => {
                 self.cfg.servers.retain(|s| s.id != id);
-                let gone = config::forget(&id);
-                return Task::batch([self.persist(), self.report(gone)]);
+                let gone = Self::keyring(move || config::forget(&id));
+                return Task::batch([self.persist(), gone]);
             }
             Message::Do(Act(f)) => return f(self),
             Message::ClearCache => {
@@ -1935,8 +1953,12 @@ impl App {
                 return Task::none();
             }
         };
-        let (id, pass) = (s.server.id.clone(), &self.login.pass);
-        let kept = self.login.remember.then(|| config::remember(&id, pass));
+        let (id, pass) = (s.server.id.clone(), self.login.pass.clone());
+        let key = id.clone();
+        let kept = self
+            .login
+            .remember
+            .then(|| Self::keyring(move || config::remember(&key, &pass)));
         self.cfg.servers.retain(|x| x.id != id);
         self.cfg.servers.push(s.server.clone());
         (self.cfg.active, self.session, self.login) = (Some(id), Some(s), Login::default());
@@ -1944,7 +1966,7 @@ impl App {
         self.history.clear();
         let to = shot_key(self.shot.as_deref()).unwrap_or_else(|| "home".into());
         let (t, n) = (self.persist(), self.nav(to));
-        Task::batch([t, n, self.restore(), self.report(kept.unwrap_or(Ok(())))])
+        Task::batch([t, n, self.restore()].into_iter().chain(kept))
     }
 
     fn expired(&mut self, key: String) -> Task<Message> {

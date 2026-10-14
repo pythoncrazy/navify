@@ -96,6 +96,38 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
 }
 
 #[tokio::test]
+async fn bad_json_from_the_server_gives_errors() {
+    let bodies = [
+        "[]",
+        "\"ok\"",
+        r#"{"subsonic-response": 5}"#,
+        r#"{"subsonic-response": {"status": "ok", "album": [1]}}"#,
+        r#"{"subsonic-response": {"status": "ok", "starred2": "x"}}"#,
+    ];
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}", srv.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        for (b, c) in bodies.iter().cycle().zip(srv.incoming()) {
+            let mut c = c.expect("connection");
+            let mut r = std::io::BufReader::new(&c);
+            let lines = std::io::BufRead::lines(&mut r).map_while(Result::ok);
+            lines.take_while(|l| !l.is_empty()).for_each(drop);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                b.len()
+            );
+            let _ = std::io::Write::write_all(&mut c, (head + b).as_bytes());
+        }
+    });
+    let s = Session::new(serde_json::from_value(json!({"url": url})).expect("server"));
+    for _ in 0..3 {
+        assert!(s.genres().await.is_err());
+    }
+    assert!(s.album("a").await.is_err());
+    assert!(s.starred().await.is_ok_and(|t| t.0.is_empty()));
+}
+
+#[tokio::test]
 #[ignore = "needs the local test server"]
 async fn local_reads_and_writes_with_both_apis() -> Result<()> {
     let mut s = session("NAVIFY_TEST_LOCAL_", ["URL", "USERNAME", "PASSWORD"]).await;

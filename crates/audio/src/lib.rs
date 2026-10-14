@@ -243,20 +243,30 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                 }
             };
             let (t, mut n) = (Instant::now(), 0);
+            let ahead = || {
+                let st = net.st();
+                st.len.is_none() && !st.jump && st.end() > st.want + AHEAD
+            };
             while let Some(c) = resp.chunk().await? {
-                let mut st = net.st();
-                st.data.extend_from_slice(&c);
-                n += c.len();
-                st.rate = n as f64 / (t.elapsed().as_secs_f64() + st.ttfb);
-                let cut = st.want.saturating_sub(BACK).saturating_sub(st.start);
-                let cut = cut.min(st.data.len() as u64);
-                if cut > BACK {
-                    st.data.drain(..cut as usize);
-                    st.start += cut;
-                }
-                net.1.notify_all();
-                if st.jump || st.len.is_some_and(|_| st.end() > st.want + AHEAD) {
+                let stop = {
+                    let mut st = net.st();
+                    st.data.extend_from_slice(&c);
+                    n += c.len();
+                    st.rate = n as f64 / (t.elapsed().as_secs_f64() + st.ttfb);
+                    let cut = st.want.saturating_sub(BACK).saturating_sub(st.start);
+                    let cut = cut.min(st.data.len() as u64);
+                    if cut > BACK {
+                        st.data.drain(..cut as usize);
+                        st.start += cut;
+                    }
+                    net.1.notify_all();
+                    st.jump || st.len.is_some_and(|_| st.end() > st.want + AHEAD)
+                };
+                if stop {
                     break;
+                }
+                while ahead() {
+                    net.2.notified().await;
                 }
             }
             let mut st = net.st();
@@ -292,7 +302,7 @@ impl Read for Http {
                 buf[..n].copy_from_slice(&d[..n]);
                 self.pos += n as u64;
                 let end = st.end();
-                if !tail && end - pos < AHEAD / 2 && st.len.is_some_and(|l| end < l) {
+                if !tail && end - pos < AHEAD / 2 && st.len.is_none_or(|l| end < l) {
                     self.net.2.notify_one();
                 }
                 return Ok(n);
@@ -752,13 +762,16 @@ fn open(
         id => host.device_by_id(&id.parse()?),
     }
     .ok_or("The audio output device is not available. Select a device in Settings.")?;
+    let fit =
+        |c: &cpal::SupportedStreamConfigRange| want.clamp(c.min_sample_rate(), c.max_sample_rate());
     let sup = dev
         .supported_output_configs()
         .into_iter()
         .flatten()
-        .find(|c| c.channels() == 2 && (c.min_sample_rate()..=c.max_sample_rate()).contains(&want))
-        .map(|c| c.with_sample_rate(want))
-        .map_or_else(|| dev.default_output_config(), Ok)?;
+        .filter(|c| c.channels() == 2 && c.sample_format() == cpal::SampleFormat::F32)
+        .min_by_key(|c| fit(c).abs_diff(want))
+        .map(|c| c.with_sample_rate(fit(&c)))
+        .ok_or("The audio output device does not support 32-bit float stereo output.")?;
     let rate = sup.sample_rate();
     sh.rate.store(rate, Relaxed);
     let buffer_size = match *sup.buffer_size() {
@@ -826,7 +839,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             };
-            if !matches!(cmd, Cmd::Next(_) | Cmd::Gain(_)) {
+            if !matches!(cmd, Cmd::Next(_) | Cmd::Gain(_) | Cmd::Device(_)) {
                 sh.flush.store(written, Relaxed);
                 marks.clear();
             }
@@ -841,6 +854,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     let hit = was.iter_mut().find_map(|s| s.take_if(|s| same(s)));
                     mix.old = was.into_iter().flatten().next();
                     (mix.inc, play) = (None, Some((t, at, pre, hit)));
+                    sh.set_pos(at, u64::MAX);
                 }
                 Cmd::Next(t) => match (&mut mix.pre, t) {
                     (Some(p), Some(t)) if p.0.url == t.url => p.0 = t,
@@ -853,7 +867,10 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     .take(1)
                     .for_each(|c| c.track.gain = g),
                 Cmd::Device(d) => (dev, out) = (d, None),
-                Cmd::Seek(s) => mix.seek(&io, s).unwrap_or_else(fail),
+                Cmd::Seek(s) => {
+                    sh.set_pos(s, u64::MAX);
+                    mix.seek(&io, s).unwrap_or_else(fail);
+                }
                 Cmd::Stop => {
                     (mix.cur, mix.inc) = (None, None);
                     sh.set_pos(0.0, u64::MAX);
@@ -867,6 +884,18 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             if !paused {
                 (mix.cur, mix.inc) = (None, None);
             }
+        }
+        if out.is_none() && !marks.is_empty() {
+            let mut at = sh.now();
+            for e in marks.drain(..).filter_map(|m| m.2) {
+                at = if matches!(e, Event::Started(_)) {
+                    0.0
+                } else {
+                    at
+                };
+                let _ = tx.send(e);
+            }
+            sh.set_pos(at, u64::MAX);
         }
         if let Some((t, at, pre, hit)) = play {
             let s = match (hit, pre) {
@@ -891,7 +920,6 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     (written, running, idle, out, mix.rate) = (0, false, None, Some((s, p)), rate);
                     sh.read.store(0, Relaxed);
                     sh.flush.store(0, Relaxed);
-                    marks.clear();
                     if !fresh {
                         mix.seek(&io, get(&sh.pos)).unwrap_or_else(fail);
                     }
