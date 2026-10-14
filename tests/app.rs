@@ -39,6 +39,10 @@ fn album_reopen_in_stale_time_sends_no_request() {
     }
     let p = app.data::<Pager<Album>>("albums").expect("merged page");
     assert!(p.items.len() == 150 && p.offset == 0 && p.items[120].id == "120");
+    let _ = app.update(Message::Nav("search:long".into()));
+    assert_eq!(app.search_q, "long");
+    let _ = app.update(Message::Back);
+    assert!(app.search_q.is_empty());
 }
 
 #[tokio::test]

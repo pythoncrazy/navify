@@ -499,12 +499,12 @@ fn player_bar(app: &App) -> El<'_> {
         ),
         side(vol_icon, false, mute, Message::Mute),
         volume,
-        side(
+        (app.full || app.current_song().is_some()).then(|| side(
             ic([i::FULL, i::WINDOW][usize::from(app.full)]),
             false,
             ["Full screen", "Exit full screen"][usize::from(app.full)],
             Message::Full(!app.full),
-        ),
+        )),
     ];
     let right = container(right.spacing(4).align_y(Center)).align_right(FillPortion(3));
     let left = container(left).width(FillPortion(3));
