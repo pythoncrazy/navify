@@ -26,14 +26,14 @@ fn album_reopen_in_stale_time_sends_no_request() {
     assert!(app.pending.contains(pend));
     let album: Album = parse(json!({"id": "a1"})).expect("album");
     let data = Arc::new((album, Vec::<Song>::new()));
-    let _ = app.update(Message::Loaded(key.clone(), Ok(data)));
+    let _ = app.update(Message::Loaded(key.clone(), 0, Ok(data)));
     let _ = app.update(Message::Nav("home".into()));
     let _ = app.update(Message::Nav(key.clone()));
     assert!(app.route == key && !app.pending.contains(pend));
     for (offset, n) in [(0, 100), (100, 50)] {
         let items: Vec<Album> = items((offset..offset + n).map(|i| i.to_string()));
         let page: AnyData = Arc::new((items, 150usize));
-        let _ = app.update(Message::Loaded("albums".into(), Ok(page)));
+        let _ = app.update(Message::Loaded("albums".into(), offset, Ok(page)));
     }
     let p = app
         .data::<(Vec<Album>, usize)>("albums")
@@ -120,7 +120,7 @@ async fn playlist_search_and_sort_keep_the_server_order() {
         .map(|v| parse(v).expect("song"))
         .collect();
     let pl: navify::api::Playlist = parse(json!({"id": "p1", "name": "P"})).expect("playlist");
-    let _ = app.update(Message::Loaded(key.clone(), Ok(Arc::new((pl, songs)))));
+    let _ = app.update(Message::Loaded(key.clone(), 0, Ok(Arc::new((pl, songs)))));
     let _ = app.update(act(|a| a.pl_sort = 1));
     let _ = app.update(Message::PlayAt(key.clone(), 0));
     let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
@@ -165,6 +165,7 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     let fkey = "folder:f1".to_string();
     let _ = app.update(Message::Loaded(
         fkey.clone(),
+        0,
         Ok(Arc::new(("F".to_string(), dir))),
     ));
     app.sel = Some((fkey.clone(), 1));
@@ -174,6 +175,40 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     assert!(app.toast.is_none() && cur(&app) == "a");
     let _ = app.update(Message::Seek(99.0));
     assert_eq!(app.position, 0.0);
+}
+
+#[tokio::test]
+async fn queue_and_pages_stay_in_order() {
+    let mut app = app();
+    let songs = |ids: &str| items::<Vec<Song>>(ids.chars().map(String::from));
+    let ids = |app: &App| app.queue.iter().map(|s| s.id.as_str()).collect::<String>();
+    let _ = app.update(Message::Play(songs("abcdef"), 1, "t".into()));
+    let _ = app.update(Message::Shuffle);
+    let _ = app.update(Message::Queue(songs("xy"), true));
+    let _ = app.update(Message::Shuffle);
+    assert_eq!(ids(&app), "abxycdef");
+    let _ = app.update(Message::Next(true));
+    assert_eq!(app.current_song().map(|s| s.id.as_str()), Some("x"));
+    app.cfg.settings.queue_skip = "a,b,c,d,e,f".into();
+    let _ = app.update(Message::Shuffle);
+    let titled = ["a", "b", "c"].map(|t| parse(json!({"id": t, "title": t})).expect("song"));
+    let _ = app.update(Message::Play(titled.into(), 0, "t".into()));
+    let _ = app.update(Message::Queue(songs("z"), false));
+    assert!(ids(&app) == "z" && app.shuffle.as_ref().is_some_and(|o| o.len() == 1));
+    let _ = app.update(Message::Nav("albums".into()));
+    let page = |o: usize, n: usize| -> AnyData {
+        Arc::new((
+            items::<Vec<Album>>((o..o + n).map(|i| i.to_string())),
+            300usize,
+        ))
+    };
+    let _ = app.update(Message::Loaded("albums".into(), 0, Ok(page(0, 100))));
+    app.sel = Some(("albums".into(), 5));
+    let _ = app.update(Message::Loaded("albums".into(), 100, Ok(page(100, 100))));
+    let _ = app.update(Message::Loaded("albums".into(), 100, Ok(page(100, 100))));
+    let p = app.data::<(Vec<Album>, usize)>("albums").expect("pages");
+    assert!(p.0.len() == 200 && p.0[150].id == "150");
+    assert_eq!(app.sel, Some(("albums".into(), 5)));
 }
 
 #[tokio::test]

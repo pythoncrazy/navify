@@ -240,7 +240,7 @@ fn normalize(v: &mut Value) {
                 };
                 let c = match (c.as_str(), hash.as_ref().and_then(Value::as_str)) {
                     (Some(c), Some(h)) => format!("{c}#{h}").into(),
-                    (Some(c), None) => nd(c).unwrap_or(c.into()),
+                    (Some(c), None) => nd(c).unwrap_or_else(|| c.into()),
                     _ => c,
                 };
                 m.insert("cover".into(), c);
@@ -346,7 +346,7 @@ impl Session {
             id: format!("{id:016x}"),
             name: name.to_string(),
             user: user.to_string(),
-            token: digest.iter().map(|b| format!("{b:02x}")).collect(),
+            token: format!("{digest:x}"),
             url,
             salt,
             ..Server::default()

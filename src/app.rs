@@ -97,7 +97,7 @@ fn scan_devices() -> Task<Message> {
     let scan = tokio::task::spawn_blocking(navify_audio::devices);
     Task::perform(scan, |d| {
         let d = d.expect("device scan").map(|v| Arc::new(v) as AnyData);
-        Message::Loaded("devices".into(), d)
+        Message::Loaded("devices".into(), 0, d)
     })
 }
 
@@ -135,7 +135,7 @@ fn later(secs: f32, m: Message) -> Task<Message> {
 
 #[derive(Clone, Debug)]
 pub enum Message {
-    Loaded(String, Result<AnyData, String>),
+    Loaded(String, usize, Result<AnyData, String>),
     Nav(String),
     Back,
     Fwd,
@@ -406,7 +406,7 @@ impl App {
                         .starts_with("album:")
                         .then(|| songs.first())
                         .flatten();
-                    self.source = album.map_or("Liked Songs".into(), |s| s.album.clone());
+                    self.source = album.map_or_else(|| "Liked Songs".into(), |s| s.album.clone());
                     self.panel = if s == "queue" { 2 } else { 1 };
                     let first = songs.first().map(|s| format!("lyrics:{}", s.id));
                     task = Task::batch(first.map(|k| self.request(&k, 0)));
@@ -826,7 +826,7 @@ impl App {
             async move { tokio::task::spawn_blocking(scan).await },
             |n| {
                 let n: AnyData = Arc::new(n.expect("cache scan"));
-                Message::Loaded("disk".into(), Ok(n))
+                Message::Loaded("disk".into(), 0, Ok(n))
             },
         )
     }
@@ -851,26 +851,30 @@ impl App {
 
     fn kept(&self) -> impl Fn(&Song) -> bool + use<> {
         let words = self.cfg.settings.queue_skip.to_lowercase();
-        let words: Vec<String> = words.split(',').map(|w| w.trim().to_string()).collect();
-        let words: Vec<String> = words.into_iter().filter(|w| !w.is_empty()).collect();
+        let words: Vec<String> = words
+            .split(',')
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .map(String::from)
+            .collect();
         move |s| {
-            let hay = [&s.title, &s.artist, &s.album, &s.genre].map(|f| f.to_lowercase());
-            !words.iter().any(|w| hay.iter().any(|h| h.contains(w)))
+            words.is_empty() || {
+                let hay = [&s.title, &s.artist, &s.album, &s.genre].map(|f| f.to_lowercase());
+                !words.iter().any(|w| hay.iter().any(|h| h.contains(w)))
+            }
         }
     }
 
     fn start(&mut self, i: usize, shuffled: bool) -> Task<Message> {
-        if self.queue.is_empty() {
-            return self.halt();
-        }
-        let keep = self.kept();
+        let (keep, had) = (self.kept(), !self.queue.is_empty());
         let i = self.queue.iter().take(i).filter(|s| keep(s)).count();
         self.queue.retain(|s| keep(s));
-        if self.queue.is_empty() {
-            let t = self.toast("The queue filter removed all the songs.");
-            return Task::batch([self.halt(), t]);
-        }
         self.shuffle = shuffled.then(|| shuffle(0..self.queue.len(), i));
+        if self.queue.is_empty() {
+            self.index = 0;
+            let t = had.then(|| self.toast("The queue filter removed all the songs."));
+            return Task::batch([self.halt()].into_iter().chain(t));
+        }
         self.play_index(if shuffled { 0 } else { i }, 0.0)
     }
 
@@ -1258,10 +1262,11 @@ impl App {
             .cache
             .get(&self.route)
             .map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
-        let stamp = (self.pl_find.clone(), self.pl_sort, data);
-        if (&self.pl_view.0, &self.pl_view.1) != (&self.route, &stamp) {
-            if self.sel.as_ref().is_some_and(|s| s.0 == self.route) && self.pl_view.0 == self.route
-            {
+        let (r, (f, s, d), _) = &self.pl_view;
+        if (r, f, *s, *d) != (&self.route, &self.pl_find, self.pl_sort, data) {
+            let moved = (f, *s) != (&self.pl_find, self.pl_sort) || r.starts_with("playlist:");
+            let stamp = (self.pl_find.clone(), self.pl_sort, data);
+            if moved && self.sel.as_ref().is_some_and(|s| s.0 == self.route) && *r == self.route {
                 (self.sel, self.picked) = (None, BTreeSet::new());
             }
             let rows = self
@@ -1345,8 +1350,8 @@ impl App {
                 self.modal = None;
                 return t;
             }
-            Message::Loaded(key, Err(e)) => {
-                self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
+            Message::Loaded(key, off, Err(e)) => {
+                self.pending.remove(&format!("{key}#{off}"));
                 if self.shot.is_some() {
                     eprintln!("LOAD-ERR {key} {e}");
                 }
@@ -1356,10 +1361,12 @@ impl App {
                 }
                 self.cache.insert(key, (Instant::now(), Arc::new(e)));
             }
-            Message::Loaded(key, Ok(v)) => {
-                self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
+            Message::Loaded(key, off, Ok(v)) => {
+                self.pending.remove(&format!("{key}#{off}"));
                 self.seeds.remove(&key);
-                let v = self.merge(&key, v);
+                let Some(v) = self.merge(&key, off, v) else {
+                    return Task::none();
+                };
                 let banner = key.starts_with("artist:") && self.cfg.settings.banners;
                 let banner = banner
                     .then(|| v.downcast_ref::<(Artist, Vec<Album>)>())
@@ -1493,15 +1500,17 @@ impl App {
                 if songs.is_empty() {
                     return self.toast("The queue filter removed all the songs.");
                 }
-                let (n, at) = (songs.len(), if next { self.index + 1 } else { usize::MAX });
+                let n = songs.len();
+                let cur = self.current_song().map(|_| self.real_at(self.index));
+                let q = cur.filter(|_| next).map_or(self.queue.len(), |r| r + 1);
+                self.queue.splice(q..q, songs);
                 if let Some(o) = &mut self.shuffle {
-                    let base = self.queue.len();
-                    self.queue.extend(songs);
-                    let at = at.min(o.len());
-                    o.splice(at..at, shuffle(base..base + n, usize::MAX));
-                } else {
-                    let at = at.min(self.queue.len());
-                    self.queue.splice(at..at, songs);
+                    o.iter_mut().filter(|x| **x >= q).for_each(|x| *x += n);
+                    let (at, new) = match next {
+                        true => ((self.index + 1).min(o.len()), (q..q + n).collect()),
+                        false => (o.len(), shuffle(q..q + n, usize::MAX)),
+                    };
+                    o.splice(at..at, new);
                 }
                 self.queue_next_refresh();
                 return Task::batch([self.save_later(), self.toast("Added to queue")]);
@@ -1729,7 +1738,7 @@ impl App {
                     .filter(|&m| m > 0)
                     .unwrap_or(self.cfg.settings.play_mode);
                 if mode < 2 {
-                    self.ctx = route.clone();
+                    self.ctx.clone_from(&route);
                 }
                 if let Some((v, src)) = self.songs_of(&route).filter(|(v, _)| !v.is_empty()) {
                     let v = v.iter().filter(|s| !s.is_dir).cloned().collect();
@@ -1952,7 +1961,7 @@ impl App {
             }
         };
         Task::perform(again, move |r| {
-            let (id, r) = (id.clone(), r.map_err(|e| e.to_string()));
+            let r = r.map_err(|e| e.to_string());
             task(move |a| {
                 let keys = std::mem::take(&mut a.expired.0);
                 let Some(cur) = a.session.as_mut().filter(|s| s.server.id == id) else {
@@ -2080,15 +2089,15 @@ impl App {
         self.start(0, mode == 1)
     }
 
-    fn merge(&self, key: &str, v: AnyData) -> AnyData {
-        let Some((_, old)) = self.cache.get(key).filter(|(t, _)| t.elapsed() < STALE) else {
-            return v;
-        };
-        pager!(v, b => old.downcast_ref::<Page<_>>().filter(|a| a.0.len() < b.1).map(|a| {
+    fn merge(&self, key: &str, off: usize, v: AnyData) -> Option<AnyData> {
+        if off == 0 {
+            return Some(v);
+        }
+        let old = &self.cache.get(key)?.1;
+        pager!(v, b => old.downcast_ref::<Page<_>>().filter(|a| a.0.len() == off).map(|a| {
             Arc::new(([&a.0[..], &b.0[..]].concat(), b.1)) as AnyData
         }))
         .flatten()
-        .unwrap_or(v)
     }
 
     fn page_len(&self, key: &str) -> Option<usize> {
@@ -2179,9 +2188,10 @@ impl App {
 
     pub fn title(&self) -> String {
         let s = self.current_song();
-        s.map_or("Navify".into(), |s| {
-            format!("{} \u{2022} {}", s.title, s.artist)
-        })
+        s.map_or_else(
+            || "Navify".into(),
+            |s| format!("{} \u{2022} {}", s.title, s.artist),
+        )
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
@@ -2454,7 +2464,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 let k = key.clone();
                 task(move |a| a.expired(k.clone()))
             }
-            _ => Message::Loaded(key.clone(), r.map_err(|e| e.to_string())),
+            _ => Message::Loaded(key.clone(), offset, r.map_err(|e| e.to_string())),
         };
         ours(&me, m)
     })

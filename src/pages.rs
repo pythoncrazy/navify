@@ -110,13 +110,17 @@ fn dots<'a>(k: MenuKind) -> El<'a> {
     bar_btn(i::DOTS, Message::Menu(Box::new(k)))
 }
 
-fn heading<'a>(t: &str, all: Option<String>) -> El<'a> {
+fn heading<'a>(t: impl text::IntoFragment<'a>, all: Option<String>) -> El<'a> {
     let all = all.map(|r| link_btn(bold("Show all", 14.0), SUB, Message::Nav(r)));
     let r = row![bold(t, 24.0).width(Fill)].push(all).align_y(Center);
     container(r).padding([0.0, PAD]).into()
 }
 
-fn shelf<'a>(title: &str, all: Option<String>, cards: impl Iterator<Item = El<'a>>) -> El<'a> {
+fn shelf<'a>(
+    title: impl text::IntoFragment<'a>,
+    all: Option<String>,
+    cards: impl Iterator<Item = El<'a>>,
+) -> El<'a> {
     let cards: Vec<El> = cards.collect();
     if cards.is_empty() {
         return Space::new().into();
@@ -125,7 +129,14 @@ fn shelf<'a>(title: &str, all: Option<String>, cards: impl Iterator<Item = El<'a
     column![heading(title, all), row].spacing(8).into()
 }
 
-fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, k: MenuKind) -> El<'a> {
+fn card<'a>(
+    app: &'a App,
+    cid: &str,
+    title: &'a str,
+    sub: String,
+    route: String,
+    k: MenuKind,
+) -> El<'a> {
     let round = matches!(k, MenuKind::Artist(_));
     let cw = app.grid().1;
     let img = cw - 24.0;
@@ -135,7 +146,7 @@ fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, k: Me
     let over = |art| play_over(app, art, play.padding(8).into(), &route);
     let art = if round { art } else { over(art) };
     let title = ell(title, img, 16.0, Normal);
-    let lines = column![title, ell(&sub, img, 14.0, Normal).color(SUB)].spacing(4);
+    let lines = column![title, ell(sub, img, 14.0, Normal).color(SUB)].spacing(4);
     let style = theme::btn([theme::CLEAR, ELEVATED, BG], [TEXT; 3], 6.0);
     let b = button(column![art, lines].spacing(8)).padding(12);
     let b = b.style(style).width(cw).height(cw + 52.0);
@@ -145,7 +156,7 @@ fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, k: Me
         .into()
 }
 
-fn album_card<'a>(app: &App, a: &Album, sub: String) -> El<'a> {
+fn album_card<'a>(app: &'a App, a: &'a Album, sub: String) -> El<'a> {
     let (r, k) = (
         format!("album:{}", a.id),
         MenuKind::Album(Box::new(a.clone())),
@@ -153,12 +164,12 @@ fn album_card<'a>(app: &App, a: &Album, sub: String) -> El<'a> {
     card(app, &a.cover, &a.name, sub, r, k)
 }
 
-fn artist_card<'a>(app: &App, a: &Artist) -> El<'a> {
+fn artist_card<'a>(app: &'a App, a: &'a Artist) -> El<'a> {
     let (r, k) = (format!("artist:{}", a.id), MenuKind::Artist(a.clone()));
     card(app, &a.cover, &a.name, "Artist".into(), r, k)
 }
 
-fn playlist_card<'a>(app: &App, p: &Playlist) -> El<'a> {
+fn playlist_card<'a>(app: &'a App, p: &'a Playlist) -> El<'a> {
     let (by, r) = (format!("By {}", p.owner), format!("playlist:{}", p.id));
     card(app, &p.cover, &p.name, by, r, MenuKind::Playlist(p.clone()))
 }
@@ -328,7 +339,7 @@ fn grid<'a>(
     container(col).padding(p).into()
 }
 
-fn grid_head<'a>(title: &str, chips: Option<El<'a>>) -> El<'a> {
+fn grid_head<'a>(title: &'a str, chips: Option<El<'a>>) -> El<'a> {
     let col = column![bold(title, 32.0)].push(chips).spacing(16);
     let p = Padding::new(PAD).bottom(0);
     container(col).padding(p).height(GRID_Y).into()
@@ -550,13 +561,13 @@ pub fn route(app: &App) -> El<'_> {
     page.unwrap_or_else(|| Space::new().into())
 }
 
-fn home(app: &App) -> Option<El<'_>> {
+fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let h = app.data::<Home>("home")?;
     let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
     let w = app.main_w() - 2.0 * PAD;
     let n = if w >= 720.0 { 4 } else { 2 };
     let tw = (w - 8.0 * (n - 1) as f32) / n as f32;
-    let tile = |art: El<'static>, name: &str, route: String| {
+    let tile = |art: El<'a>, name: &'a str, route: String| {
         let body = row![art, ell(name, tw - 80.0, 14.0, Bold)].spacing(12);
         let style = theme::btn([0.1, 0.2, 0.3].map(theme::tint), [TEXT; 3], 4.0);
         let b = button(body.align_y(Center)).padding(0).width(tw).height(56);
@@ -840,7 +851,7 @@ fn detail(app: &App) -> Option<El<'_>> {
             .into_iter()
             .map(|x| album_card(app, x, year_kind(x)));
         let all = Some(format!("discography:{}", a.artist_id));
-        let more = shelf(&format!("More by {}", a.artist), all, more);
+        let more = shelf(format!("More by {}", a.artist), all, more);
         column![container(notes).padding([0.0, PAD]), more]
             .spacing(48)
             .padding(padding::bottom(PAD))
@@ -1059,7 +1070,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     Some(col.spacing(40).padding([PAD, 0.0]).into())
 }
 
-fn library<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
+fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
     const SORTS: [(&str, &str); 7] = [
         ("newest", "Recently added"),
         ("recent", "Recently played"),
@@ -1086,9 +1097,9 @@ fn library<'a>(app: &'a App, kind: &str, arg: &str) -> El<'a> {
     column![grid_head(title, chips), artists.or(albums)].into()
 }
 
-fn folders(app: &App) -> El<'_> {
+fn folders<'a>(app: &'a App) -> El<'a> {
     let w = app.main_w() - 2.0 * PAD - 80.0;
-    let dir = |id: &str, name: &str| -> El<'_> {
+    let dir = |id: &str, name: &'a str| -> El<'a> {
         let ic = container(i(i::FOLDER, 20.0).color(SUB).center()).center(40);
         let row = media(ic.style(fill(ELEVATED, 4.0)).into(), name, "", w, TEXT);
         let b = button(row).padding([8, 16]).width(Fill);
@@ -1195,7 +1206,7 @@ fn devices(app: &App) -> Vec<(String, String)> {
         .collect()
 }
 
-fn settings(app: &App) -> El<'_> {
+fn settings<'a>(app: &'a App) -> El<'a> {
     let st = &app.cfg.settings;
     let opts = |v: &[&str]| v.chunks(2).map(|p| (p[0].into(), p[1].into())).collect();
     let num = |v: f32, r: RangeInclusive<f32>, f: fn(&mut Settings, f32), label: String| {
@@ -1210,11 +1221,11 @@ fn settings(app: &App) -> El<'_> {
         let t = toggler(v).on_toggle(move |b| set(f, b));
         t.style(theme::tog).size(20).into()
     };
-    let head = |t: &str| container(bold(t, 16.0)).padding(padding::top(PAD).bottom(8));
-    let line = |label: &str, c: El<'static>| -> El<'_> {
+    let head = |t: &'static str| container(bold(t, 16.0)).padding(padding::top(PAD).bottom(8));
+    fn line<'a>(label: impl text::IntoFragment<'a>, c: El<'a>) -> El<'a> {
         let label = txt(label, 14.0).color(SUB).width(Fill);
         row![label, c].align_y(Center).height(48).into()
-    };
+    }
     let mut rates = [0, 320, 256, 192, 128, 96].map(|b| (b, format!("{b} kbps")));
     rates[0].1 = "No limit".into();
     let zooms = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5].map(|z| (z, format!("{:.0}%", z * 100.0)));
@@ -1282,7 +1293,7 @@ fn settings(app: &App) -> El<'_> {
             line($label, tog(st.$f, |s, b| s.$f = b))
         };
     }
-    let server = |s: &Server| -> El<'_> {
+    let server = |s: &'a Server| -> El<'a> {
         let active = app.cfg.active.as_ref() == Some(&s.id);
         let who = sub(format!("{}{DOT}{}", s.user, s.url), 14.0);
         let info = column![txt(&s.name, 14.0), who].spacing(2).width(Fill);
@@ -1326,8 +1337,8 @@ fn settings(app: &App) -> El<'_> {
         on!("Scroll the lyrics with the track", lyrics_follow),
         line("Lyrics offset (positive shows the lines later)", lag),
         line("Lyrics text size", size),
-        cfg!(target_os = "linux").then(|| on!(&frame_label, system_frame)),
-        on!(&tray_label, tray),
+        cfg!(target_os = "linux").then(|| on!(frame_label, system_frame)),
+        on!(tray_label, tray),
         on!("Start minimized", start_min),
         on!("Show a notification when a new track starts", notify),
         on!("Keep the computer awake while music plays", awake),
@@ -1470,16 +1481,18 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let next: Vec<El> = next.map(|(n, s)| queue_row(app, s, n, w)).collect();
     let more = app.queue.len().saturating_sub(app.index + 101);
     let title = |t: String| {
-        let t = container(ell(&t, w - 16.0, 16.0, Bold));
+        let t = container(ell(t, w - 16.0, 16.0, Bold));
         t.padding(Padding::new(8.0).top(16))
     };
     let note = |t: String| container(sub(t, 14.0)).padding(8);
-    let from = format!("Next from: {}", app.source);
-    let from = [&from, "Next up"][usize::from(app.source.is_empty())].to_string();
+    let from = match app.source.is_empty() {
+        true => "Next up".into(),
+        false => format!("Next from: {}", app.source),
+    };
     let now = app.current_song().map(|s| queue_row(app, s, app.index, w));
     let now = now.map(|r| column![title("Now playing".into()), r]);
     let clear = link_btn(bold("Clear queue", 14.0), SUB, task(App::q_clear));
-    let from = row![ell(&from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
+    let from = row![ell(from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
     let from = container(from).padding(Padding::new(8.0).top(16));
     let list = column![now, (!next.is_empty()).then_some(from)].extend(next);
     let list = list.push((more > 0).then(|| note(format!("{more} more songs"))));
@@ -1670,7 +1683,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let h = (n as f32 * 40.0 + seps as f32 + 8.0).min(400.0);
     let rows = list.into_iter().map(|x| match x {
         Some((c, l, msg, sub)) => {
-            let label = ell(&l, W - if sub { 92.0 } else { 64.0 }, 14.0, Normal);
+            let label = ell(l, W - if sub { 92.0 } else { 64.0 }, 14.0, Normal);
             let arrow = sub.then(|| i(i::RIGHT, 16.0));
             let r = row![i(c, 16.0).color(SUB), label.width(Fill)];
             entry(r.push(arrow), msg)

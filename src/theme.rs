@@ -42,15 +42,15 @@ pub fn fw(weight: Weight) -> Font {
     }
 }
 
-pub fn txt<'a>(t: impl ToString, size: f32) -> Txt<'a> {
-    text(t.to_string()).size(size).font(fw(Weight::Normal))
+pub fn txt<'a>(t: impl text::IntoFragment<'a>, size: f32) -> Txt<'a> {
+    text(t).size(size).font(fw(Weight::Normal))
 }
 
-pub fn bold<'a>(t: impl ToString, size: f32) -> Txt<'a> {
+pub fn bold<'a>(t: impl text::IntoFragment<'a>, size: f32) -> Txt<'a> {
     txt(t, size).font(fw(Weight::Bold))
 }
 
-pub fn sub<'a>(t: impl ToString, size: f32) -> Txt<'a> {
+pub fn sub<'a>(t: impl text::IntoFragment<'a>, size: f32) -> Txt<'a> {
     txt(t, size).color(SUB)
 }
 
@@ -150,13 +150,14 @@ pub fn width(s: &str, size: f32, w: Weight) -> f32 {
     glyphs(s, size, w).last().map_or(0.0, |g| g.0)
 }
 
-pub fn ell<'a>(s: &str, px: f32, size: f32, w: Weight) -> Txt<'a> {
-    let g = glyphs(s, size, w);
+pub fn ell<'a>(s: impl Into<std::borrow::Cow<'a, str>>, px: f32, size: f32, w: Weight) -> Txt<'a> {
+    let s = s.into();
+    let g = glyphs(&s, size, w);
     let room = px - width("\u{2026}", size, w);
     let cut = g.iter().take_while(|g| g.0 <= room).last();
     let t = match g.last().is_none_or(|g| g.0 <= px) {
-        true => s.to_string(),
-        false => format!("{}\u{2026}", s[..cut.map_or(0, |g| g.1)].trim_end()),
+        true => s,
+        false => format!("{}\u{2026}", s[..cut.map_or(0, |g| g.1)].trim_end()).into(),
     };
     txt(t, size).font(fw(w)).wrapping(text::Wrapping::None)
 }
@@ -211,7 +212,7 @@ pub fn pill_btn<'a, M: Clone + 'a>(label: &'a str, m: M) -> Btn<'a, M> {
     b.padding([7, 15]).on_press(m)
 }
 
-pub fn chip_btn<'a, M: Clone + 'a>(label: &str, on: bool, m: M) -> Element<'a, M> {
+pub fn chip_btn<'a, M: Clone + 'a>(label: &'a str, on: bool, m: M) -> Element<'a, M> {
     let bg = [[CHIP, color!(0x333333), CHIP], [TEXT; 3]][usize::from(on)];
     let style = solid(bg, if on { BG } else { TEXT });
     let b = button(txt(label, 14.0)).on_press(m);
