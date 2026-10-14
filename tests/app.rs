@@ -59,6 +59,8 @@ async fn shuffle_keeps_the_current_song() {
     let playing = cur(&app);
     let _ = app.update(Message::QDel(0));
     assert_eq!(cur(&app), playing);
+    let _ = app.update(Message::QDel(99));
+    assert!(app.real_at(99) == 99 && cur(&app) == playing);
     let _ = app.update(Message::Shuffle);
     assert!(cur(&app) == playing && app.shuffle.is_none());
 }
@@ -76,6 +78,24 @@ fn gain_follows_the_replaygain_settings() {
     assert!((db(&app) - 4.0).abs() < 0.01);
     app.cfg.settings.replaygain = "off".into();
     assert_eq!(app.gain(&song), 1.0);
+    let rg =
+        json!({"id": "a", "replayGain": {"albumGain": 6.0, "albumPeak": 2.0, "trackPeak": 1.0}});
+    let song: Song = parse(rg).expect("song");
+    (app.cfg.settings.replaygain, app.cfg.settings.rg_clip) = ("album".into(), true);
+    app.cfg.settings.preamp_db = 0.0;
+    assert!((20.0 * app.gain(&song).log10() + 20.0 * 2.0f32.log10()).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn log_out_clears_the_play_state() {
+    let mut app = app();
+    let songs = items::<Vec<Song>>(["a", "b", "c"].map(String::from));
+    let _ = app.update(Message::Play(songs, 1, "t".into()));
+    let _ = app.update(Message::Shuffle);
+    app.starred.insert("a".into(), true);
+    let _ = app.update(Message::LogOut);
+    assert!(app.queue.is_empty() && app.shuffle.is_none() && app.starred.is_empty());
+    assert!(app.current_song().is_none() && app.route == "login");
 }
 
 #[tokio::test]

@@ -125,6 +125,7 @@ fn later(secs: f32, m: Message) -> Task<Message> {
 #[derive(Clone, Debug)]
 pub enum Message {
     Loaded(String, Result<AnyData, String>),
+    Expired(String),
     Cover(String, u32, Result<Decoded, String>),
     Nav(String),
     Back,
@@ -304,6 +305,7 @@ pub struct App {
     pub hidden: bool,
     pub modal: Option<(String, u8)>,
     held: Option<Message>,
+    expired: (Vec<String>, Option<Instant>),
     pub recording: Option<&'static str>,
     awake: (bool, Option<std::sync::mpsc::Sender<bool>>),
     pub new_pl_desc: String,
@@ -667,10 +669,10 @@ impl App {
         (self.index < self.queue.len()).then(|| &self.queue[self.real_at(self.index)])
     }
 
-    pub(crate) fn real_at(&self, i: usize) -> usize {
+    pub fn real_at(&self, i: usize) -> usize {
         self.shuffle.as_ref().map_or(i, |o| {
             assert_eq!(o.len(), self.queue.len(), "shuffle covers the queue");
-            o[i]
+            o.get(i).copied().unwrap_or(i)
         })
     }
 
@@ -735,12 +737,18 @@ impl App {
 
     pub fn gain(&self, song: &Song) -> f32 {
         let (st, rg) = (&self.cfg.settings, &song.rg);
-        let db = match st.replaygain.as_str() {
-            "track" => rg.track_gain.or(rg.album_gain),
-            "album" => rg.album_gain.or(rg.track_gain),
+        let (db, peak) = match st.replaygain.as_str() {
+            "track" => (
+                rg.track_gain.or(rg.album_gain),
+                rg.track_peak.or(rg.album_peak),
+            ),
+            "album" => (
+                rg.album_gain.or(rg.track_gain),
+                rg.album_peak.or(rg.track_peak),
+            ),
             _ => return 1.0,
         };
-        let peak = rg.track_peak.or(rg.album_peak).unwrap_or(1.0).max(1e-3);
+        let peak = peak.unwrap_or(1.0).max(1e-3);
         let db = db.unwrap_or(st.fallback_db) + st.preamp_db;
         let max = [f32::MAX, 1.0 / peak][usize::from(st.rg_clip)];
         10f32.powf(db / 20.0).min(max)
@@ -983,6 +991,33 @@ impl App {
         self.call(f, fail, |()| Message::Noop)
     }
 
+    fn pl_send<F>(
+        &self,
+        pid: String,
+        f: impl FnOnce(Session, String) -> F,
+        fail: &str,
+    ) -> Task<Message>
+    where
+        F: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let Some(s) = self.session.clone() else {
+            return Task::none();
+        };
+        let (key, fail) = (format!("playlist:{pid}"), fail.to_string());
+        Task::perform(f(s, pid), move |r| match r {
+            Ok(()) => Message::Noop,
+            Err(e) => {
+                let (key, text) = (key.clone(), format!("{fail} {e}"));
+                task(move |a| {
+                    let shown = a.cache.remove(&key).is_some() && a.route == key;
+                    a.cache.remove("lib");
+                    let page = Task::batch(shown.then(|| a.request(&key, 0)));
+                    Task::batch([a.toast(&text), a.request("lib", 0), page])
+                })
+            }
+        })
+    }
+
     fn nav(&mut self, route: String) -> Task<Message> {
         if route == self.route && !route.starts_with("search") {
             return Task::none();
@@ -1072,9 +1107,23 @@ impl App {
         }
         let gain = |s: &config::Settings| {
             let t = (s.transcode_format.clone(), s.transcode_max_bitrate);
-            (s.replaygain.clone(), s.preamp_db, s.fallback_db, t)
+            (
+                s.replaygain.clone(),
+                s.preamp_db,
+                s.fallback_db,
+                s.rg_clip,
+                t,
+            )
         };
-        let heard = self.loaded && o.scrobble != n.scrobble;
+        let point = |s: &config::Settings| {
+            (
+                s.scrobble,
+                s.scrobble_by_time,
+                s.scrobble_pct,
+                s.scrobble_secs,
+            )
+        };
+        let heard = self.loaded && point(&o) != point(n);
         let (grid, zoom) = (o.disc_grid != n.disc_grid, o.zoom != n.zoom);
         if gain(&o) != gain(n)
             && let (Some(p), Some(s)) = (&self.player, self.current_song())
@@ -1087,6 +1136,15 @@ impl App {
         let zoom = Task::batch(zoom.then(|| self.update(Message::Resize(w, h))));
         let heard = Task::batch(heard.then(|| self.listen(self.playing)));
         Task::batch([grid, zoom, heard, self.persist()])
+    }
+
+    fn reset(&mut self) -> Task<Message> {
+        let h = self.halt();
+        (self.queue, self.shuffle, self.index, self.position) = (Vec::new(), None, 0, 0.0);
+        (self.starred, self.ratings, self.recent) = Default::default();
+        (self.cache, self.seeds, self.pending) = Default::default();
+        (self.covers, self.ctx) = Default::default();
+        h
     }
 
     fn halt(&mut self) -> Task<Message> {
@@ -1191,6 +1249,58 @@ impl App {
                 let t = self.update(held);
                 self.modal = None;
                 return t;
+            }
+            Message::Expired(key) => {
+                self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
+                let Some(srv) = self.session.as_ref().map(|s| s.server.clone()) else {
+                    return Task::none();
+                };
+                self.expired.0.push(key);
+                if self.expired.0.len() > 1 {
+                    return Task::none();
+                }
+                let (id, ok) = (
+                    srv.id.clone(),
+                    self.expired.1.is_none_or(|t| t.elapsed() > STALE),
+                );
+                let again = async move {
+                    anyhow::ensure!(ok, "The server refused the new session.");
+                    let pass = tokio::task::spawn_blocking(move || config::recall(&srv.id));
+                    match pass.await?? {
+                        Some(p) => Session::login(&srv.url, &srv.user, &p).await.map(Some),
+                        None => Ok(None),
+                    }
+                };
+                return Task::perform(again, move |r| {
+                    let (id, r) = (id.clone(), r.map_err(|e| e.to_string()));
+                    task(move |a| {
+                        let keys = std::mem::take(&mut a.expired.0);
+                        let Some(cur) = a.session.as_mut().filter(|s| s.server.id == id) else {
+                            return Task::none();
+                        };
+                        let note = match r.clone() {
+                            Ok(Some(s)) => {
+                                let (old, new) = (&mut cur.server, s.server);
+                                (old.salt, old.token, old.jwt) = (new.salt, new.token, new.jwt);
+                                *cur = Session::new(cur.server.clone());
+                                let saved = a.cfg.servers.iter_mut().find(|v| v.id == id);
+                                saved.into_iter().for_each(|v| *v = cur.server.clone());
+                                a.expired.1 = Some(Instant::now());
+                                None
+                            }
+                            Ok(None) => Some(
+                                "The server session expired. Log in again to use all functions."
+                                    .into(),
+                            ),
+                            Err(e) => Some(format!("Could not log in again. {e}")),
+                        };
+                        cur.server.native &= note.is_none();
+                        let toast = note.map(|n| a.toast(&n));
+                        keys.iter().for_each(|k| drop(a.cache.remove(k)));
+                        let load = keys.iter().map(|k| a.request(k, 0)).collect::<Vec<_>>();
+                        Task::batch(load.into_iter().chain(toast).chain([a.persist()]))
+                    })
+                });
             }
             Message::Loaded(key, Err(e)) => {
                 self.pending.retain(|p| !p.starts_with(&format!("{key}#")));
@@ -1328,10 +1438,22 @@ impl App {
                 });
             }
             Message::Rate(id, n) => {
-                self.ratings.insert(id.clone(), n);
+                let old = self.ratings.insert(id.clone(), n);
                 self.menu = None;
-                let rate = |s: Session| async move { s.rate(&id, n).await };
-                return self.send(rate, "Could not set the rating.");
+                let Some(s) = self.session.clone() else {
+                    return Task::none();
+                };
+                let call = async move { s.rate(&id, n).await.map_err(|e| (e.to_string(), id)) };
+                return Task::perform(call, move |r| match r {
+                    Ok(()) => Message::Noop,
+                    Err((e, id)) => task(move |a| {
+                        match old {
+                            Some(v) => a.ratings.insert(id.clone(), v),
+                            None => a.ratings.remove(&id),
+                        };
+                        a.toast(&format!("Could not set the rating. {e}"))
+                    }),
+                });
             }
             Message::Queue(songs, next) => {
                 let songs: Vec<Song> = songs.into_iter().filter(self.kept()).collect();
@@ -1438,10 +1560,11 @@ impl App {
                 self.edit_pl(&pid, |p| p.song_count += n);
                 let done = format!("Added to {}.", self.playlist(&pid).map_or("", |p| &p.name));
                 let done = self.toast(&done);
-                let add = |s: Session| async move {
+                let add = |s: Session, pid: String| async move {
                     s.playlist_update(&pid, None, None, &ids, &[]).await
                 };
-                let add = self.send(add, "Could not add the song to the playlist.");
+                let fail = "Could not add the song to the playlist.";
+                let add = self.pl_send(pid, add, fail);
                 return Task::batch([add, done]);
             }
             Message::PlNew(name, ids) => {
@@ -1460,8 +1583,11 @@ impl App {
                 self.edit::<Lib>("lib", |l| l.playlists.retain(|p| p.id != id));
                 self.cache.remove(&r);
                 let back = Task::batch((self.route == r).then(|| self.nav("home".into())));
-                let del = |s: Session| async move { s.playlist_delete(&id).await };
-                return Task::batch([back, self.send(del, "Could not delete the playlist.")]);
+                let del = |s: Session, id: String| async move { s.playlist_delete(&id).await };
+                return Task::batch([
+                    back,
+                    self.pl_send(id, del, "Could not delete the playlist."),
+                ]);
             }
             Message::PlRemove(idx) => {
                 self.menu = None;
@@ -1475,10 +1601,11 @@ impl App {
                 });
                 let k = idx.len() as u32;
                 self.edit_pl(&pid, |p| p.song_count = p.song_count.saturating_sub(k));
-                let rm = |s: Session| async move {
+                let rm = |s: Session, pid: String| async move {
                     s.playlist_update(&pid, None, None, &[], &idx).await
                 };
-                return self.send(rm, "Could not remove the songs from the playlist.");
+                let fail = "Could not remove the songs from the playlist.";
+                return self.pl_send(pid, rm, fail);
             }
             Message::Radio(id) => {
                 self.menu = None;
@@ -1550,10 +1677,8 @@ impl App {
                     self.cfg.servers.retain(|s| s.id != id);
                     config::forget(&id)
                 });
-                let h = self.halt();
+                let h = self.reset();
                 self.session = None;
-                self.queue.clear();
-                self.cache.clear();
                 let (t, n) = (self.persist(), self.nav("login".into()));
                 return Task::batch([h, t, n, self.report(gone)]);
             }
@@ -1561,20 +1686,11 @@ impl App {
                 let Some(srv) = self.cfg.servers.iter().find(|s| s.id == id).cloned() else {
                     return Task::none();
                 };
-                let s = Session::new(srv);
-                (self.session, self.cfg.active) = (Some(s.clone()), Some(id));
-                self.cache.clear();
-                self.pending.clear();
-                let ping =
-                    async move { s.rest::<serde_json::Value>("ping", &[], "").await.is_ok() };
-                let check = Task::perform(ping, |ok| match ok {
-                    true => Message::Noop,
-                    false => task(|a| {
-                        a.session.iter_mut().for_each(|s| s.server.native = false);
-                        a.toast("The server session expired. Using the compatible API.")
-                    }),
-                });
-                return Task::batch([self.persist(), self.nav("home".into()), check]);
+                let q = Task::batch(self.loaded.then(|| self.save_queue()));
+                let h = self.reset();
+                (self.session, self.cfg.active) = (Some(Session::new(srv)), Some(id));
+                let (t, n) = (self.persist(), self.nav("home".into()));
+                return Task::batch([q, h, t, n, self.restore()]);
             }
             Message::DropServer(id) => {
                 self.cfg.servers.retain(|s| s.id != id);
@@ -1708,8 +1824,8 @@ impl App {
                     (self.sel, self.picked, self.anchor) = (Some((key.clone(), n)), [n].into(), n);
                 }
                 let list = self.songs_of(&key).expect("a rendered row has its list").0;
-                let idx = self.picked.iter().copied().filter(|&i| !list[i].is_dir);
-                let idx: Vec<usize> = idx.collect();
+                let row = |&i: &usize| list.get(i).is_some_and(|s| !s.is_dir);
+                let idx: Vec<usize> = self.picked.iter().copied().filter(row).collect();
                 let songs = idx.iter().map(|&i| list[i].clone()).collect();
                 let kind = match key.starts_with("playlist:") {
                     true => {
@@ -1808,6 +1924,7 @@ impl App {
                     return self.update(Message::PlayAt(k, n));
                 }
             }
+            Message::Resize(w, h) if w == 0.0 || h == 0.0 => {}
             Message::Resize(w, h) => {
                 let s = self.scale();
                 self.cfg.settings.window = (w * s, h * s);
@@ -1853,11 +1970,11 @@ impl App {
                 let set = |p: &mut Playlist| (p.name, p.comment) = (name.clone(), comment.clone());
                 self.edit_pl(&id, set);
                 self.edit::<(Playlist, Vec<Song>)>(&format!("playlist:{id}"), |(p, _)| set(p));
-                let edit = |s: Session| async move {
+                let edit = |s: Session, id: String| async move {
                     let (n, c) = (Some(name.as_str()), Some(comment.as_str()));
                     s.playlist_update(&id, n, c, &[], &[]).await
                 };
-                return self.send(edit, "Could not change the playlist.");
+                return self.pl_send(id, edit, "Could not change the playlist.");
             }
             Message::MediaInit(hwnd) => {
                 let (tx, h) = (CH.0.clone(), hwnd as *mut std::ffi::c_void);
@@ -2266,7 +2383,14 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
         })
     };
     Task::perform(load, move |r| {
-        Message::Loaded(key.clone(), r.map_err(|e| e.to_string()))
+        let io = r
+            .as_ref()
+            .err()
+            .and_then(|e| e.downcast_ref::<std::io::Error>());
+        match io.map(std::io::Error::kind) {
+            Some(std::io::ErrorKind::PermissionDenied) => Message::Expired(key.clone()),
+            _ => Message::Loaded(key.clone(), r.map_err(|e| e.to_string())),
+        }
     })
 }
 

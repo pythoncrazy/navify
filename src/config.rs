@@ -146,6 +146,13 @@ pub fn remember(server_id: &str, password: &str) -> Result<()> {
         .context("Could not store the password.")
 }
 
+pub fn recall(server_id: &str) -> Result<Option<String>> {
+    match entry(server_id)?.get_password() {
+        Err(keyring_core::Error::NoEntry) => Ok(None),
+        r => r.map(Some).context("Could not read the password."),
+    }
+}
+
 pub fn forget(server_id: &str) -> Result<()> {
     match entry(server_id)?.delete_credential() {
         Err(keyring_core::Error::NoEntry) => Ok(()),

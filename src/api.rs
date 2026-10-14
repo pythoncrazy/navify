@@ -370,9 +370,17 @@ impl Session {
         let url = self.url(method, &q.into());
         let res = self.http.get(url).send().await.map_err(net_err)?;
         let status = res.status().as_u16();
-        let mut v: Value = res.json().await.map_err(|_| anyhow!(INVALID))?;
+        let http = move || anyhow!("The server returned HTTP {status}.");
+        let bad = move |_| {
+            if status < 300 {
+                anyhow!(INVALID)
+            } else {
+                http()
+            }
+        };
+        let mut v: Value = res.json().await.map_err(bad)?;
         let mut v = v["subsonic-response"].take();
-        ensure!(!v.is_null(), "The server returned HTTP {status}.");
+        ensure!(!v.is_null(), http());
         let e = v["error"].take();
         let msg = match e["code"].as_u64().unwrap_or_default() {
             40 => "Wrong username or password.",
