@@ -976,7 +976,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
             let g = &gs[n];
             let label = bold(&g.name, 24.0).wrapping(text::Wrapping::WordOrGlyph);
             let b = button(label).padding(16).width(tw).height(th).clip(true);
-            let b = b.style(theme::btn([theme::color_of(&g.name); 3], [TEXT; 3], 8.0));
+            let b = b.style(theme::btn([theme::hue(n); 3], [TEXT; 3], 8.0));
             let b = b.on_press(go("genre", &g.name));
             container(b).padding(12).into()
         };
@@ -1088,15 +1088,15 @@ fn folders(app: &App) -> El<'_> {
     };
     let artists = app.data::<Vec<Artist>>(&app.route).into_iter().flatten();
     let artists = artists.map(|x| dir(&x.id, &x.name));
-    let songs = app.data::<Vec<Song>>(&app.route);
-    let songs = songs.map_or(&[][..], |v| &v[..]);
+    let dir_data = app.data::<(String, Vec<Song>)>(&app.route);
+    let (name, songs) = dir_data.map_or(("Folders", &[][..]), |(n, v)| (n.as_str(), &v[..]));
     let c = cols(app, false, false, songs.len());
     let songs = songs.iter().enumerate().map(|(n, s)| match s.is_dir {
         true => dir(&s.id, &s.title),
         false => track(app, s, n, &app.route, c),
     });
     let list = Column::new().extend(artists).extend(songs);
-    let title = container(bold("Folders", 32.0)).padding(PAD);
+    let title = container(ell(name, app.main_w() - 2.0 * PAD, 32.0, Bold)).padding(PAD);
     column![title, container(list).padding(Padding::new(PAD).top(0))].into()
 }
 
@@ -1710,7 +1710,7 @@ pub fn login(app: &App) -> El<'_> {
     let saved = app.cfg.servers.iter().map(|s| -> El<'_> {
         let first = s.user.chars().next().unwrap_or('?').to_ascii_uppercase();
         let avatar = container(bold(first, 16.0).color(BG).center()).center(40);
-        let avatar = avatar.style(fill(theme::color_of(&first.to_string()), 20.0));
+        let avatar = avatar.style(fill(theme::hue(first as usize), 20.0));
         let drop = Message::DropServer(s.id.clone());
         let drop = focusable(icon_btn(i::X, 14.0, drop.clone()), Some(drop), 14.0, None);
         let body = media(avatar.into(), &s.name, &s.user, W - 120.0, TEXT).push(drop);

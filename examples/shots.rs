@@ -17,7 +17,7 @@ fn main() {
     let app = application(App::boot, App::update, App::view)
         .subscription(App::subscription)
         .style(|_, _| iced::theme::Style {
-            background_color: iced::Color::BLACK,
+            background_color: navify::theme::PANEL,
             text_color: iced::Color::WHITE,
         })
         .default_font(Font::with_name("Figtree"));

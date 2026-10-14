@@ -36,7 +36,8 @@ async fn read_suite(s: &Session) -> Result<()> {
     let word = album.artist.split(' ').next().unwrap_or_default();
     let found = s.search(word, 20).await?.1;
     assert!(found.iter().any(|a| a.artist_id == album.artist_id));
-    assert!(!s.directory(&s.indexes().await?[0].id).await?.is_empty());
+    let (name, kids) = s.directory(&s.indexes().await?[0].id).await?;
+    assert!(!name.is_empty() && !kids.is_empty());
     s.genres().await?;
     s.lyrics(&songs[0].id).await?;
     s.similar_songs(&songs[0].id, 3).await?;
