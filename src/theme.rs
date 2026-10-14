@@ -171,7 +171,8 @@ pub fn btn(bg: [Color; 3], fg: [Color; 3], r: f32) -> impl Fn(&Theme, Status) ->
 }
 
 pub fn link(c: Color) -> impl Fn(&Theme, Status) -> BtnStyle {
-    btn([CLEAR; 3], [c, TEXT, TEXT], 0.0)
+    let h = if c == ACCENT { color!(0x3be477) } else { TEXT };
+    btn([CLEAR; 3], [c, h, h], 0.0)
 }
 
 pub fn track(sel: bool) -> impl Fn(&Theme, Status) -> BtnStyle {
