@@ -404,9 +404,9 @@ impl Session {
             }
         };
         let mut v: Value = res.json().await.map_err(bad)?;
-        let mut v = v["subsonic-response"].take();
-        ensure!(!v.is_null(), http());
-        let e = v["error"].take();
+        let mut v = take(&mut v, "subsonic-response");
+        ensure!(v.is_object(), http());
+        let e = take(&mut v, "error");
         let msg = match e["code"].as_u64().unwrap_or_default() {
             40 => "Wrong username or password.",
             41 => "The server does not allow token authentication.",
@@ -457,19 +457,23 @@ impl Session {
         let method = format!("get{}{}", kind[..1].to_uppercase(), &kind[1..]);
         let ptr = format!("/{kind}");
         let mut v: Value = self.get(&method, json!({"id": id}), &ptr).await?;
-        let list = parse(v[key].take())?;
+        let list = parse(take(&mut v, key))?;
         Ok((parse(v)?, list))
     }
 
     async fn index(&self, method: &str, ptr: &str) -> Result<Vec<Artist>> {
         let v: Vec<Value> = self.get(method, (), ptr).await?;
-        let lists = v.into_iter().map(|mut i| parse(i["artist"].take()));
+        let lists = v.into_iter().map(|mut i| parse(take(&mut i, "artist")));
         Ok(lists.collect::<Result<Vec<Vec<_>>>>()?.concat())
     }
 
     async fn trio(&self, method: &str, q: Value, ptr: &str) -> Result<Trio> {
         let mut v: Value = self.get(method, q, ptr).await?;
-        let (ar, al, so) = (v["artist"].take(), v["album"].take(), v["song"].take());
+        let (ar, al, so) = (
+            take(&mut v, "artist"),
+            take(&mut v, "album"),
+            take(&mut v, "song"),
+        );
         Ok((parse(ar)?, parse(al)?, parse(so)?))
     }
 
@@ -656,7 +660,7 @@ impl Session {
             .get("getMusicDirectory", json!({"id": id}), "/directory")
             .await?;
         let name = d["name"].as_str().unwrap_or_default().to_string();
-        Ok((name, parse(d["child"].take())?))
+        Ok((name, parse(take(&mut d, "child"))?))
     }
 
     pub async fn similar_songs(&self, id: &str, n: usize) -> Result<Vec<Song>> {
@@ -704,13 +708,17 @@ impl Session {
         let mut v: Value = self.get("getPlayQueue", (), "/playQueue").await?;
         let current = v["current"].as_str().unwrap_or_default().to_string();
         let pos = v["position"].as_u64().unwrap_or_default();
-        Ok((parse(v["entry"].take())?, current, pos))
+        Ok((parse(take(&mut v, "entry"))?, current, pos))
     }
 
     pub async fn save_play_queue(&self, ids: &[String], current: &str, pos: u64) -> Result<()> {
         let q = json!({"id": ids, "current": current, "position": pos});
         self.act("savePlayQueue", q).await
     }
+}
+
+fn take(v: &mut Value, k: &str) -> Value {
+    v.get_mut(k).map(Value::take).unwrap_or_default()
 }
 
 pub fn cache_dir(kind: &str) -> PathBuf {
