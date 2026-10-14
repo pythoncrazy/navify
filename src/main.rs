@@ -31,7 +31,16 @@ mod linux {
     pub fn install() -> std::io::Result<()> {
         let data = navify::config::dir("data");
         let exe = std::env::var_os("APPIMAGE").map_or_else(std::env::current_exe, |p| Ok(p.into()));
-        let exe = format!("Exec=\"{}\"", exe?.display());
+        let exe = exe?
+            .display()
+            .to_string()
+            .replace('\\', r"\\")
+            .replace('"', r#"\""#);
+        let exe = exe
+            .replace('`', r"\`")
+            .replace('$', r"\$")
+            .replace('\\', r"\\");
+        let exe = format!("Exec=\"{}\"", exe.replace('%', "%%"));
         let desktop = include_str!("../assets/navify.desktop").replace("Exec=navify", &exe);
         let svg = include_bytes!("../assets/navify.svg");
         for (path, bytes) in [

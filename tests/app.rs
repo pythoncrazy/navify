@@ -242,3 +242,13 @@ fn library_collapses_when_the_main_panel_is_too_narrow() {
     let _ = app.update(Message::Panel(2));
     assert!(app.lib_mini() && app.main_w() >= 400.0);
 }
+
+#[test]
+fn settings_check_rejects_values_out_of_range() {
+    let mut s = navify::config::Settings::default();
+    assert!(s.check().is_ok());
+    s.crossfade_secs = 60.0;
+    assert!(s.check().is_err());
+    s = serde_json::from_value(json!({"zoom": 3.0})).expect("settings");
+    assert!(s.check().is_err());
+}

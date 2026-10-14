@@ -149,7 +149,11 @@ pub fn width(s: &str, size: f32, w: Weight) -> f32 {
 }
 
 pub fn ell<'a>(s: impl Into<std::borrow::Cow<'a, str>>, px: f32, size: f32, w: Weight) -> Txt<'a> {
-    let s = s.into();
+    let (s, breaks) = (s.into(), ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}']);
+    let s = match s.contains(breaks) {
+        true => s.replace(breaks, " ").into(),
+        false => s,
+    };
     let g = glyphs(&s, size, w);
     let room = px - width("\u{2026}", size, w);
     let cut = g.iter().take_while(|g| g.0 <= room).last();

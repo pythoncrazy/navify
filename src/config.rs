@@ -59,6 +59,31 @@ pub struct Settings {
     pub smooth: bool,
 }
 
+impl Settings {
+    pub fn check(&self) -> Result<(), &'static str> {
+        let within = |v: f32, lo: f32, hi: f32| (lo..=hi).contains(&v);
+        let ok = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5].contains(&self.zoom)
+            && ["off", "track", "album"].contains(&self.replaygain.as_str())
+            && self.lib_sort < 3
+            && self.play_mode < 4
+            && self.lyrics_align < 3
+            && within(self.volume, 0.0, 1.0)
+            && within(self.crossfade_secs, 0.0, 12.0)
+            && within(self.preamp_db, -15.0, 15.0)
+            && within(self.fallback_db, -15.0, 15.0)
+            && within(self.seek_secs, 1.0, 30.0)
+            && within(self.vol_step, 1.0, 25.0)
+            && within(self.lyrics_offset, -5.0, 5.0)
+            && within(self.lyrics_size, 20.0, 48.0)
+            && within(self.scrobble_pct, 10.0, 100.0)
+            && within(self.scrobble_secs, 10.0, 600.0)
+            && within(self.panels.0, 280.0, 480.0)
+            && within(self.panels.1, 280.0, 420.0);
+        ok.then_some(())
+            .ok_or("A value in the settings is out of range.")
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {

@@ -391,18 +391,21 @@ impl Source {
             let net = Arc::new(Net::default());
             let head = rt.block_on(async {
                 let (t, get) = (Instant::now(), http.get(url.clone()));
+                let w = reqwest::Error::without_url;
                 if track.transcoded {
-                    return Ok::<_, Box<dyn Error>>(get.send().await?.error_for_status()?);
+                    let r = get.send().await.and_then(Response::error_for_status);
+                    return Ok::<_, Box<dyn Error>>(r.map_err(w)?);
                 }
                 let tail = http
                     .get(url.clone())
                     .header(RANGE, format!("bytes=-{TAIL}"));
-                let (head, tail) =
-                    tokio::try_join!(get.header(RANGE, "bytes=0-").send(), tail.send())?;
-                let (head, tail) = (head.error_for_status()?, tail.error_for_status()?);
+                let both = tokio::try_join!(get.header(RANGE, "bytes=0-").send(), tail.send());
+                let (head, tail) = both.map_err(w)?;
+                let (head, tail) = (head.error_for_status(), tail.error_for_status());
+                let (head, tail) = (head.map_err(w)?, tail.map_err(w)?);
                 let (ttfb, len) = (t.elapsed().as_secs_f64(), range(&head).map(|r| r.1));
                 let tail = match range(&tail).filter(|_| len.is_some()) {
-                    Some((at, _)) => (at, tail.bytes().await?.to_vec()),
+                    Some((at, _)) => (at, tail.bytes().await.map_err(w)?.to_vec()),
                     None => Default::default(),
                 };
                 let mut st = net.st();

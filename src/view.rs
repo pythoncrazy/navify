@@ -181,7 +181,7 @@ mod wrap {
             }
             let ring = t.state.downcast_mut::<Ring>();
             match e {
-                Event::Keyboard(ModifiersChanged(m)) => ring.4 = m.shift(),
+                Event::Keyboard(ModifiersChanged(m)) => ring.4 = !m.is_empty(),
                 Event::Mouse(WheelScrolled {
                     delta: ScrollDelta::Lines { x, y },
                 }) if self.3 && *x == 0.0 && !ring.4 && c.position().is_some() => {
