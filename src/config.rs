@@ -101,9 +101,37 @@ impl Default for Settings {
     }
 }
 
+pub fn dir(kind: &str) -> PathBuf {
+    let env = |k: &str| {
+        std::env::var_os(k)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let home = || std::env::home_dir().expect("The system has no home directory.");
+    let (xdg, unix, mac, win) = match kind {
+        "config" => (
+            "XDG_CONFIG_HOME",
+            ".config",
+            "Library/Application Support",
+            "APPDATA",
+        ),
+        "cache" => ("XDG_CACHE_HOME", ".cache", "Library/Caches", "LOCALAPPDATA"),
+        _ => (
+            "XDG_DATA_HOME",
+            ".local/share",
+            "Library/Application Support",
+            "APPDATA",
+        ),
+    };
+    match () {
+        _ if cfg!(windows) => env(win).expect("The system has no application data directory."),
+        _ if cfg!(target_os = "macos") => home().join(mac),
+        _ => env(xdg).unwrap_or_else(|| home().join(unix)),
+    }
+}
+
 fn path() -> PathBuf {
-    let dir = dirs::config_dir().expect("The system has no configuration directory.");
-    dir.join("navify/config.json")
+    dir("config").join("navify/config.json")
 }
 
 impl Config {

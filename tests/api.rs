@@ -3,8 +3,15 @@ use navify::api::{self, Album, Server, Session, Song};
 use serde_json::json;
 
 async fn session(prefix: &str, keys: [&str; 3]) -> Session {
-    let _ = dotenvy::dotenv();
-    let [h, u, p] = keys.map(|k| std::env::var(format!("{prefix}{k}")).expect(k));
+    let file = std::fs::read_to_string(".env").unwrap_or_default();
+    let [h, u, p] = keys.map(|k| {
+        let k = format!("{prefix}{k}");
+        let line = || file.lines().find_map(|l| l.strip_prefix(&format!("{k}=")));
+        let v = std::env::var(&k)
+            .ok()
+            .or_else(|| line().map(|v| v.trim().trim_matches('"').into()));
+        v.unwrap_or_else(|| panic!("{k} is not set"))
+    });
     Session::login(&h, &u, &p).await.expect("login")
 }
 

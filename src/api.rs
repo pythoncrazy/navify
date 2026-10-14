@@ -377,8 +377,9 @@ impl Session {
         let (s, url) = (&self.server, format!("{}/rest/{method}", self.server.url));
         let auth = json!({"u": s.user, "t": s.token, "s": s.salt,
             "v": "1.16.1", "c": "navify", "f": "json"});
-        let req = self.http.get(url).query(&auth).query(&pairs(q)).build();
-        req.expect("the server URL is valid").url().to_string()
+        let all = pairs(&auth).into_iter().chain(pairs(q));
+        let url = reqwest::Url::parse_with_params(&url, all);
+        url.expect("the server URL is valid").to_string()
     }
 
     pub async fn rest<T: Data>(&self, method: &str, q: &Q<'_>, ptr: &str) -> Result<T> {
@@ -414,10 +415,13 @@ impl Session {
     }
 
     async fn nd<T: Data>(&self, path: &str, q: impl Into<Value>) -> Result<(T, usize)> {
-        let listed = usize::from(matches!(path, "album" | "song" | "artist"));
-        let url = format!("{}/api/{path}", self.server.url);
-        let req = self.http.get(url).query(&pairs(&q.into()));
-        let req = req.query(&[("missing", false)][..listed]);
+        let (url, mut q) = (format!("{}/api/{path}", self.server.url), q.into());
+        if matches!(path, "album" | "song" | "artist") {
+            q["missing"] = false.into();
+        }
+        let req = self
+            .http
+            .get(reqwest::Url::parse_with_params(&url, pairs(&q))?);
         let req = req.header("x-nd-authorization", format!("Bearer {}", self.jwt()));
         let res = req.send().await.map_err(net_err)?;
         let header = |k| res.headers().get(k).and_then(|v| v.to_str().ok());
@@ -579,8 +583,8 @@ impl Session {
             Some(m) => ("artist-mb", "i", m),
             None => ("search", "s", q),
         };
-        let req = self.http.get(format!("{base}/{path}.php")).query(&[(k, v)]);
-        let res = req.send().await.map_err(net_err)?;
+        let url = reqwest::Url::parse_with_params(&format!("{base}/{path}.php"), [(k, v)])?;
+        let res = self.http.get(url).send().await.map_err(net_err)?;
         let status = res.status().as_u16();
         ensure!(status < 300, "TheAudioDB returned HTTP {status}.");
         let v: Value = serde_json::from_slice(&res.bytes().await.map_err(net_err)?)?;
@@ -706,8 +710,7 @@ impl Session {
 }
 
 pub fn cache_dir(kind: &str) -> PathBuf {
-    let dir = dirs::cache_dir().expect("The system has no cache directory.");
-    dir.join("navify").join(kind)
+    crate::config::dir("cache").join("navify").join(kind)
 }
 
 pub fn cache_files(dir: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
