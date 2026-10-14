@@ -227,7 +227,7 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                 st.rate = n as f64 / (t.elapsed().as_secs_f64() + st.ttfb);
                 let cut = st.want.saturating_sub(BACK).saturating_sub(st.start);
                 let cut = cut.min(st.data.len() as u64);
-                if cut > AHEAD {
+                if cut > BACK {
                     st.data.drain(..cut as usize);
                     st.start += cut;
                 }
