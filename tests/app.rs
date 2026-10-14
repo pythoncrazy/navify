@@ -176,3 +176,12 @@ fn cover_cache_drops_large_covers_over_the_limit() {
     }
     assert!(app.covers.bytes <= 8 << 20 && app.covers.get("c3", 640).is_some());
 }
+
+#[test]
+fn library_collapses_when_the_main_panel_is_too_narrow() {
+    let mut app = app();
+    let _ = app.update(Message::Resize(1000.0, 800.0));
+    assert!(!app.lib_mini() && app.lib_w() == 300.0);
+    let _ = app.update(Message::Panel(2));
+    assert!(app.lib_mini() && app.main_w() >= 400.0);
+}

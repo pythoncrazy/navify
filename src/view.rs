@@ -322,7 +322,7 @@ pub fn lib_rows(app: &App) -> (usize, Vec<LibRow<'_>>, std::ops::Range<usize>) {
 }
 
 fn lib_panel(app: &App) -> El<'_> {
-    let (w, f, mini) = (app.lib_w(), app.lib_filter, app.cfg.settings.lib_collapsed);
+    let (w, f, mini) = (app.lib_w(), app.lib_filter, app.lib_mini());
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| name.to_lowercase().contains(&q);
     let sort = app.cfg.settings.lib_sort;
