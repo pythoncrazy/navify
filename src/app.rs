@@ -510,14 +510,14 @@ impl App {
         (n, w / n as f32)
     }
 
-    fn songs_of(&self, key: &str) -> Option<(Vec<Song>, String)> {
+    fn songs_of(&self, key: &str) -> Option<(&[Song], String)> {
         if let Some(id) = key.strip_prefix("artist:") {
             let top = self.data::<Vec<Song>>(&format!("top:{id}"))?;
-            return Some((top.clone(), self.find_artist(id)?.name));
+            return Some((top, self.find_artist(id)?.name));
         }
         let (s, name) = song_list(&self.cache.get(key)?.1)?;
         let name = if key == "liked" { "Liked Songs" } else { name };
-        Some((s.to_vec(), name.to_string()))
+        Some((s, name.to_string()))
     }
 
     fn edit<T: Clone + Send + Sync + 'static>(&mut self, key: &str, f: impl FnOnce(&mut T)) {
@@ -1443,7 +1443,7 @@ impl App {
                     self.ctx = route.clone();
                 }
                 if let Some((v, src)) = self.songs_of(&route).filter(|(v, _)| !v.is_empty()) {
-                    return self.play_songs(v, src, mode);
+                    return self.play_songs(v.to_vec(), src, mode);
                 }
                 let load = |s: Session| async move {
                     let (kind, id) = route.split_once(':').unwrap_or((&route, ""));
@@ -1482,9 +1482,9 @@ impl App {
                 return self.update(Message::Menu(Box::new(kind)));
             }
             Message::SelectAll => {
-                if let Some((list, _)) = self.songs_of(&self.route) {
+                if let Some(n) = self.songs_of(&self.route).map(|(l, _)| l.len()) {
                     self.sel = Some((self.route.clone(), 0));
-                    (self.picked, self.anchor) = ((0..list.len()).collect(), 0);
+                    (self.picked, self.anchor) = ((0..n).collect(), 0);
                 }
             }
             Message::DeleteSel => {
@@ -1499,7 +1499,7 @@ impl App {
                 };
                 let head = &list[..n.min(list.len())];
                 let n = n - head.iter().filter(|s| s.is_dir).count();
-                let list = list.into_iter().filter(|s| !s.is_dir).collect();
+                let list = list.iter().filter(|s| !s.is_dir).cloned().collect();
                 let t = self.update(Message::Play(list, n, src));
                 self.ctx = key;
                 return t;
@@ -1528,15 +1528,15 @@ impl App {
                 let list = self.songs_of(&key).expect("a selected row has its list").0;
                 let last = list.len().saturating_sub(1);
                 let n = if up { n.max(1) - 1 } else { (n + 1).min(last) };
+                let multi = list.iter().any(|s| s.disc != list[0].disc);
+                let pairs = list[..=n].windows(2);
+                let discs = pairs.filter(|w| w[0].disc != w[1].disc).count();
                 self.pick(key.clone(), n);
                 let (kind, _) = key.split_once(':').unwrap_or((&key, ""));
                 if key != self.route || !matches!(kind, "album" | "playlist" | "liked" | "songs") {
                     return Task::none();
                 }
-                let multi = kind == "album" && list.iter().any(|s| s.disc != list[0].disc);
-                let pairs = list[..=n].windows(2);
-                let discs = pairs.filter(|w| w[0].disc != w[1].disc).count();
-                let discs = if multi { 1 + discs } else { 0 };
+                let discs = (1 + discs) * usize::from(multi && kind == "album");
                 let top = crate::pages::art_px(self) + 2.0 * PAD + BAR + HEAD;
                 let top = top + (n + discs) as f32 * ROW;
                 let (off, view) = self.scroll();
