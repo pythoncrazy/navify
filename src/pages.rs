@@ -1333,6 +1333,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         line("Zoom", zoom),
         on!(banners_label, banners),
         on!("Show the rating column", ratings),
+        on!("Smooth scrolling", smooth),
         on!("Scroll the lyrics with the track", lyrics_follow),
         line("Lyrics offset (positive shows the lines later)", lag),
         line("Lyrics text size", size),
