@@ -1186,12 +1186,12 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let art = cover(app, &s.cover, w, false);
     let body = column![art, info].push(preview).push(about).push(next);
     let body = body.spacing(16).padding(Padding::new(16.0).top(0));
-    let head = panel_head(app, &app.source, 1, None);
+    let head = panel_head(ell(&app.source, app.right_w() - 64.0, 16.0, Bold), 1, None);
     column![head, scrollable(body).style(theme::scroll)].into()
 }
 
-fn panel_head<'a>(app: &App, title: &str, n: u8, extra: Option<El<'a>>) -> El<'a> {
-    let title = ell(title, app.right_w() - 64.0, 16.0, Bold).width(Fill);
+fn panel_head<'a>(title: impl Into<El<'a>>, n: u8, extra: Option<El<'a>>) -> El<'a> {
+    let title = container(title).width(Fill);
     let x = icon_btn(i::X, 16.0, Message::Panel(n));
     let r = row![title].push(extra).push(x).spacing(8).align_y(Center);
     r.padding(Padding::new(8.0).left(16)).into()
@@ -1227,8 +1227,44 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let list = list.push((more > 0).then(|| note(format!("{more} more songs"))));
     let empty = app.queue.is_empty();
     let list = list.push(empty.then(|| note("The queue is empty.".into())));
+    let tab = |t: &'static str, on: bool| {
+        let edge = container(Space::new().width(Fill).height(2));
+        let edge = edge.style(fill([CLEAR, ACCENT][usize::from(on)], 1.0));
+        let b = column![bold(t, 16.0).wrapping(text::Wrapping::None), edge].spacing(4);
+        let b = button(b)
+            .padding(0)
+            .style(theme::link([SUB, TEXT][usize::from(on)]));
+        b.on_press(act(move |a| a.recent_tab = t != "Queue"))
+    };
+    let past = app.recent.iter().map(|s| {
+        let play = Message::Play(vec![s.clone()], 0, "Recently played".into());
+        let r = media(
+            cover(app, &s.cover, 48.0, false),
+            &s.title,
+            &s.artist,
+            w - 100.0,
+            TEXT,
+        );
+        let menu = Message::Menu(Box::new(MenuKind::Song(vec![s.clone()])));
+        let r = mouse_area(container(r).padding(8)).on_double_click(play);
+        r.on_right_press(menu).into()
+    });
+    let past = Column::with_children(past).padding(Padding::new(8.0).top(0));
+    let past = past.push(
+        app.recent
+            .is_empty()
+            .then(|| note("You did not play a track.".into())),
+    );
+    let tabs = row![
+        tab("Queue", !app.recent_tab),
+        tab("Recently played", app.recent_tab)
+    ];
     let clear = link_btn(bold("Clear queue", 14.0), SUB, Message::QClear);
-    let head = panel_head(app, "Queue", 2, (!empty).then(|| clear.into()));
+    let clear = (!empty && !app.recent_tab).then(|| clear.into());
+    let head = panel_head(tabs.spacing(24), 2, clear);
+    if app.recent_tab {
+        return column![head, scrollable(past).style(theme::scroll)].into();
+    }
     let list = list.padding(Padding::new(8.0).top(0));
     column![head, scrollable(list).style(theme::scroll)].into()
 }

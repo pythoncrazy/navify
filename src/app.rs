@@ -299,6 +299,8 @@ pub struct App {
     pub disc_chip: u8,
     pub disc_old: bool,
     pub seek_preview: Option<f32>,
+    pub recent: Vec<Song>,
+    pub recent_tab: bool,
 }
 
 fn shot_key(shot: Option<&str>) -> Option<String> {
@@ -745,6 +747,9 @@ impl App {
         let Some(song) = self.current_song().cloned() else {
             return Task::none();
         };
+        self.recent.retain(|s| s.id != song.id);
+        self.recent.insert(0, song.clone());
+        self.recent.truncate(50);
         let lyr = self.request(&format!("lyrics:{}", song.id), 0);
         let now = |s: Session| async move { s.scrobble(&song.id, false).await };
         let now = self.send(now, "Could not send the playing track to the server.");
