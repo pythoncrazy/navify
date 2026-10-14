@@ -78,11 +78,15 @@ fn rule<'a>() -> El<'a> {
     line.style(fill(theme::tint(0.1), 0.0)).into()
 }
 
-fn play_btn<'a>(app: &App, px: f32, ctx: &str, m: Message) -> El<'a> {
+fn play_btn<'a>(app: &App, px: f32, ctx: &str) -> El<'a> {
     let on = app.ctx == ctx && app.current_song().is_some();
     let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(on && app.playing)];
     let b = theme::sq(theme::filled(g, px * 0.4).color(BG).center(), px);
-    let m = if on { Message::Toggle } else { m };
+    let m = if on {
+        Message::Toggle
+    } else {
+        Message::PlayCtx(ctx.into(), 0)
+    };
     b.style(theme::accent).on_press(m).into()
 }
 
@@ -126,7 +130,7 @@ fn card<'a>(app: &App, cid: &str, title: &str, sub: String, route: String, round
     let cw = app.grid().1;
     let img = cw - 24.0;
     let art = cover(app, cid, img, round);
-    let play = play_btn(app, 48.0, &route, Message::PlayCtx(route.clone(), 0));
+    let play = play_btn(app, 48.0, &route);
     let play = container(play).align_right(Fill).align_bottom(Fill);
     let over = |art| play_over(app, art, play.padding(8).into(), &route);
     let art = if round { art } else { over(art) };
@@ -461,7 +465,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
     let on = app.is_starred(&al.id, al.starred);
     let open = Message::Nav(key.clone());
     let art = link_btn(cover(app, &al.cover, 136.0, false), TEXT, open.clone());
-    let play = play_btn(app, 40.0, &key, Message::PlayCtx(key.clone(), 0));
+    let play = play_btn(app, 40.0, &key);
     let menu = dots(MenuKind::Album(Box::new(al.clone())));
     let acts = row![play, heart_btn(&al.id, on, 24.0), menu].spacing(16);
     let name = link_btn(name, TEXT, open);
@@ -545,7 +549,7 @@ fn home(app: &App) -> Option<El<'_>> {
         let b = button(body.align_y(Center)).padding(0).width(tw).height(56);
         let b = b.clip(true).style(style);
         let b = b.on_press(Message::Nav(route.clone()));
-        let play = play_btn(app, 32.0, &route, Message::PlayCtx(route.clone(), 0));
+        let play = play_btn(app, 32.0, &route);
         let play = container(play).align_right(Fill).center_y(56);
         let play = play.padding([0, 8]);
         play_over(app, b.into(), play.into(), &route)
@@ -628,12 +632,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         hero.height(px + 2.0 * PAD).style(bg).into()
     };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
-    let play = play_btn(
-        app,
-        56.0,
-        &app.route,
-        Message::PlayCtx(app.route.clone(), 0),
-    );
+    let play = play_btn(app, 56.0, &app.route);
     let compact = app.cfg.settings.compact;
     let tables = ["album", "playlist", "liked", "songs"];
     let view = tables
@@ -857,12 +856,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     };
     let top = art_px(app) + 2.0 * PAD;
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
-    let play = play_btn(
-        app,
-        48.0,
-        &app.route,
-        Message::PlayCtx(app.route.clone(), 0),
-    );
+    let play = play_btn(app, 48.0, &app.route);
     let head = row![play, title].spacing(8).align_y(Center);
     let head = bar(head.into(), theme::shade(color, 0.5));
     let cols = cols
@@ -1022,7 +1016,11 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let pls = pls.iter().filter(|p| p.name.to_lowercase().contains(&ql));
     let pls = pls.take(k);
     let albums = r.albums.iter().take(k);
-    let albums = albums.map(|a| album_card(app, a, format!("{}{DOT}{}", a.year, a.artist)));
+    let by = |a: &Album| match a.year {
+        0 => a.artist.clone(),
+        y => format!("{y}{DOT}{}", a.artist),
+    };
+    let albums = albums.map(|a| album_card(app, a, by(a)));
     let artists = r.artists.iter().take(k).map(|a| artist_card(app, a));
     let best = container(row![top, songs].spacing(PAD)).padding([0.0, PAD]);
     let col = column![
