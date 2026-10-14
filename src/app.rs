@@ -47,6 +47,8 @@ pub struct SearchRes {
 pub type AnyData = Arc<dyn Any + Send + Sync>;
 type Decoded = (Color, image::Handle, usize);
 type Slot = Option<(u64, image::Handle, usize)>;
+type Rows = (Vec<Song>, Vec<usize>);
+type Stamp = (Option<String>, u8, usize);
 type Run = dyn Fn(&mut App) -> Task<Message> + Send + Sync;
 
 macro_rules! pager {
@@ -312,6 +314,9 @@ pub struct App {
     pub recent: Vec<Song>,
     pub recent_tab: bool,
     pub full: bool,
+    pub pl_find: Option<String>,
+    pub pl_sort: u8,
+    pl_view: (String, Stamp, Option<Rows>),
 }
 
 fn shot_key(shot: Option<&str>) -> Option<String> {
@@ -523,14 +528,47 @@ impl App {
         (n, w / n as f32)
     }
 
-    fn songs_of(&self, key: &str) -> Option<(&[Song], String)> {
+    pub(crate) fn songs_of(&self, key: &str) -> Option<(&[Song], String)> {
         if let Some(id) = key.strip_prefix("artist:") {
             let top = self.data::<Vec<Song>>(&format!("top:{id}"))?;
             return Some((top, self.find_artist(id)?.name));
         }
         let (s, name) = song_list(&self.cache.get(key)?.1)?;
+        let s = self.pl_rows(key).map_or(s, |v| &v.0[..]);
         let name = if key == "liked" { "Liked Songs" } else { name };
         Some((s, name.to_string()))
+    }
+
+    fn pl_rows(&self, key: &str) -> Option<&Rows> {
+        self.pl_view.2.as_ref().filter(|_| self.pl_view.0 == key)
+    }
+
+    fn orig(&self, key: &str, i: usize) -> usize {
+        self.pl_rows(key).map_or(i, |v| v.1[i])
+    }
+
+    fn pl_view_of(&self) -> Option<Rows> {
+        let q = self.pl_find.as_deref().unwrap_or("").to_lowercase();
+        if q.is_empty() && self.pl_sort == 0 {
+            return None;
+        }
+        let songs = &self.data::<(Playlist, Vec<Song>)>(&self.route)?.1;
+        let hit = |s: &Song| {
+            [&s.title, &s.artist, &s.album]
+                .iter()
+                .any(|f| f.to_lowercase().contains(&q))
+        };
+        let mut idx: Vec<usize> = (0..songs.len()).filter(|&n| hit(&songs[n])).collect();
+        let low = |s: &String| s.to_lowercase();
+        match self.pl_sort {
+            1 => idx.sort_by_cached_key(|&n| low(&songs[n].title)),
+            2 => idx.sort_by_cached_key(|&n| low(&songs[n].artist)),
+            3 => idx.sort_by_cached_key(|&n| low(&songs[n].album)),
+            4 => idx.sort_by_key(|&n| &songs[n].created),
+            5 => idx.sort_by_key(|&n| (songs[n].duration * 1000.0) as u32),
+            _ => {}
+        }
+        Some((idx.iter().map(|&n| songs[n].clone()).collect(), idx))
     }
 
     fn edit<T: Clone + Send + Sync + 'static>(&mut self, key: &str, f: impl FnOnce(&mut T)) {
@@ -908,7 +946,7 @@ impl App {
 
     fn show(&mut self) -> Task<Message> {
         let route = self.history[self.hi].clone();
-        self.route = route.clone();
+        (self.route, self.pl_find) = (route.clone(), None);
         (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
         (self.popular_all, self.disc_chip) = (false, 0);
         let key = self.key_of(&route);
@@ -995,6 +1033,21 @@ impl App {
         use souvlaki::MediaPlayback as P;
         let seek = matches!(m, Message::Seek(_));
         let mut t = self.handle(m);
+        let data = self
+            .cache
+            .get(&self.route)
+            .map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
+        let stamp = (self.pl_find.clone(), self.pl_sort, data);
+        if (&self.pl_view.0, &self.pl_view.1) != (&self.route, &stamp) {
+            if self.sel.as_ref().is_some_and(|s| s.0 == self.route) && self.pl_view.0 == self.route
+            {
+                (self.sel, self.picked) = (None, BTreeSet::new());
+            }
+            let rows = self
+                .pl_view_of()
+                .filter(|_| self.route.starts_with("playlist:"));
+            self.pl_view = (self.route.clone(), stamp, rows);
+        }
         let follow = self.lyric.1.is_some() && self.route == "lyrics";
         let line = crate::pages::lyric_scroll(self).filter(|l| follow && l.0 != self.lyric.0);
         if let Some((n, y)) = line {
@@ -1501,7 +1554,9 @@ impl App {
                 let idx: Vec<usize> = idx.collect();
                 let songs = idx.iter().map(|&i| list[i].clone()).collect();
                 let kind = match key.starts_with("playlist:") {
-                    true => MenuKind::SongIn(songs, idx),
+                    true => {
+                        MenuKind::SongIn(songs, idx.iter().map(|&i| self.orig(&key, i)).collect())
+                    }
                     false => MenuKind::Song(songs),
                 };
                 return self.update(Message::Menu(Box::new(kind)));
@@ -1515,7 +1570,12 @@ impl App {
             Message::DeleteSel => {
                 let mine = self.sel.as_ref().is_some_and(|s| s.0 == self.route);
                 if mine && self.route.starts_with("playlist:") {
-                    return self.update(Message::PlRemove(self.picked.iter().copied().collect()));
+                    let idx = self
+                        .picked
+                        .iter()
+                        .map(|&i| self.orig(&self.route, i))
+                        .collect();
+                    return self.update(Message::PlRemove(idx));
                 }
             }
             Message::PlayAt(key, n) => {
@@ -1733,6 +1793,7 @@ impl App {
             big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
             small.push(a.artists.first().map_or(&a.artist_id, |x| &x.id));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
+            let s = self.songs_of(key).map_or(&s[..], |x| x.0);
             head.push(&p.cover);
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if let Some(s) = self.data::<Pager<Song>>(key).map(|p| &p.items) {

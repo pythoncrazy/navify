@@ -8,7 +8,7 @@ use iced::widget::{
 use iced::{Center, Color, Fill, Padding, Right, color, padding};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Server, Song};
-use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, act, set};
+use crate::app::{App, Home, Lib, Menu, MenuKind, Message, Pager, SearchRes, act, set, task};
 use crate::config::Settings;
 use crate::theme::{
     self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
@@ -648,6 +648,50 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     if let Some((p, songs)) = app.data::<(Playlist, Vec<Song>)>(key) {
         let len = fmt_long(p.duration);
         let rest = format!("{DOT}{} songs, {len}", p.song_count);
+        const ORDER: [&str; 6] = [
+            "Custom order",
+            "Title",
+            "Artist",
+            "Album",
+            "Date added",
+            "Duration",
+        ];
+        let find: El = match &app.pl_find {
+            None => {
+                let open = task(|a| {
+                    a.pl_find = Some(String::new());
+                    iced::widget::operation::focus("plfind")
+                });
+                let b = theme::sq(i(i::SEARCH, 20.0).center(), 32.0);
+                b.style(theme::link(SUB)).on_press(open).into()
+            }
+            Some(q) => {
+                let style = theme::input([ELEVATED; 2], [BG; 2], [0.0; 2], 4.0);
+                let t = text_input("Search in playlist", q)
+                    .id("plfind")
+                    .width(220)
+                    .size(14);
+                let t = t.on_input(|v| act(move |a| a.pl_find = Some(v.clone())));
+                let glass = text_input::Icon {
+                    font: theme::LUCIDE,
+                    code_point: i::SEARCH,
+                    size: Some(16.0.into()),
+                    spacing: 8.0,
+                    side: text_input::Side::Left,
+                };
+                let t = t.icon(glass);
+                t.style(style)
+                    .font(theme::fw(Normal))
+                    .padding([8, 12])
+                    .into()
+            }
+        };
+        let to = |l: &str| ORDER.iter().position(|x| *x == l).expect("an order label") as u8;
+        let sort = pick_list(ORDER, Some(ORDER[app.pl_sort as usize]), move |l| {
+            act(move |a| a.pl_sort = to(l))
+        });
+        let sort = sort.text_size(14).font(theme::fw(Normal)).padding([8, 12]);
+        let sort = sort.style(theme::pick(true)).menu_style(theme::pick_menu);
         let comment = (!p.comment.is_empty()).then(|| sub(&p.comment, 14.0));
         let meta = column![comment, meta(bold(&p.owner, 14.0), rest)];
         let page = Page {
@@ -656,9 +700,15 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             title: &p.name,
             meta: meta.spacing(8).into(),
             color: head_color(app, &p.cover),
-            extra: vec![dots(MenuKind::Playlist(p.clone()))],
+            extra: vec![
+                dots(MenuKind::Playlist(p.clone())),
+                Space::new().width(Fill).into(),
+                find,
+                sort.into(),
+            ],
             banner: None,
         };
+        let songs = app.songs_of(key).map_or(&songs[..], |x| x.0);
         return Some((page, songs, cols(app, true, true, songs.len())));
     }
     let liked = key == "liked";
