@@ -1010,7 +1010,8 @@ impl App {
                 let px = if wide { 1280 } else { size };
                 static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
                 let _one = ONE.acquire().await.expect("the decode semaphore is open");
-                let d = tokio::task::spawn_blocking(move || decode(b, px, wide));
+                let round = k.starts_with("o:");
+                let d = tokio::task::spawn_blocking(move || decode(b, px, wide, round));
                 d.await.expect("decode task")
             };
             let done = move |r| Message::Cover(id.clone(), size, r);
@@ -2116,7 +2117,7 @@ impl App {
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
             big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
-            small.push(a.artists.first().map_or(&a.artist_id, |x| &x.id));
+            small.push(a.artists.first().map_or(&a.artist_id, |x| &x.cover));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             let s = self.songs_of(key).map_or(&s[..], |x| x.0);
             head.push(&p.cover);
@@ -2327,7 +2328,7 @@ pub const KEYS: [KeyAction; 23] = [
     ("quit", "Quit", "C+Q", || Message::Close),
 ];
 
-fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
+fn decode(raw: bytes::Bytes, size: u32, wide: bool, round: bool) -> Result<Decoded, String> {
     use ::image::imageops::FilterType;
     let mut img = ::image::load_from_memory(&raw).map_err(|e| e.to_string())?;
     let h = (img.width() / 3).min(img.height());
@@ -2363,12 +2364,21 @@ fn decode(raw: bytes::Bytes, size: u32, wide: bool) -> Result<Decoded, String> {
         true => Color::from_rgb(l, l, l),
         false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
     };
-    if !wide && !big {
+    if !wide && !big && !round {
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
-    let (w, h, px) = (img.width(), img.height(), img.into_rgba8().into_raw());
-    let n = (w * h * 4) as usize;
-    Ok((color, image::Handle::from_rgba(w, h, px), n))
+    let mut img = img.into_rgba8();
+    let (w, h) = img.dimensions();
+    let r = w.min(h) as f32 / 2.0;
+    for (x, y, p) in img.enumerate_pixels_mut().filter(|_| round) {
+        let d = (x as f32 + 0.5 - w as f32 / 2.0).hypot(y as f32 + 0.5 - h as f32 / 2.0);
+        p.0[3] = (p.0[3] as f32 * (r - d + 0.5).clamp(0.0, 1.0)) as u8;
+    }
+    Ok((
+        color,
+        image::Handle::from_rgba(w, h, img.into_raw()),
+        (w * h * 4) as usize,
+    ))
 }
 
 fn pager<T: Send + Sync + 'static>((items, total): (Vec<T>, usize), offset: usize) -> AnyData {

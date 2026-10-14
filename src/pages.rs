@@ -664,11 +664,12 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         if names.is_empty() {
             names.push((&a.artist_id, &a.artist));
         }
+        let face = a.artists.first().map_or(&a.artist_id, |x| &x.cover);
         let links = names.iter().enumerate().map(|(n, (id, name))| {
             let name = format!("{}{name}", if n > 0 { ", " } else { "" });
             link_btn(bold(name, 14.0), TEXT, go("artist", id)).into()
         });
-        let face = cover(app, names[0].0, 24.0, true);
+        let face = cover(app, face, 24.0, true);
         let lead = row![face, Row::with_children(links)].spacing(8);
         let year = (a.year > 0).then(|| format!("{DOT}{}", a.year));
         let (year, len) = (year.unwrap_or_default(), fmt_long(a.duration));
