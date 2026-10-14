@@ -43,20 +43,53 @@ pub fn icon_btn<'a>(c: char, size: f32, msg: Message) -> Btn<'a, Message> {
     b.on_press(msg).style(theme::link(SUB))
 }
 
+pub fn tool_btn<'a>(c: char, lit: bool, msg: Message) -> Btn<'a, Message> {
+    let b = theme::sq(i(c, 20.0).center(), 32.0);
+    b.style(theme::link([SUB, TEXT][usize::from(lit)]))
+        .on_press(msg)
+}
+
 pub fn focusable<'a>(
     c: impl Into<El<'a>>,
     msg: Option<Message>,
     radius: f32,
     id: Option<&'static str>,
 ) -> El<'a> {
+    let id = id.map(iced::advanced::widget::Id::from);
+    Element::new(wrap::Wrap(c.into(), Some((msg, radius, id)), None))
+}
+
+pub fn live<'a>(
+    clock: Box<dyn Fn() -> f32>,
+    run: bool,
+    build: impl Fn(f32) -> El<'a> + 'a,
+) -> El<'a> {
+    let p = clock();
+    Element::new(wrap::Wrap(
+        build(p),
+        None,
+        Some((clock, Box::new(build), run, p)),
+    ))
+}
+
+mod wrap {
+    use super::{El, Message, TEXT};
     use iced::advanced::renderer::{Quad, Style};
     use iced::advanced::widget::{Id, Operation, Tree, Widget, operation::Focusable, tree};
     use iced::advanced::{Clipboard, Layout, Renderer, Shell, layout};
     use iced::keyboard::{Event::KeyPressed, Key, key::Named};
-    use iced::{Event, Length, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction};
+    use iced::window::Event::RedrawRequested;
+    use iced::{Color, Event, Length, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction};
     type R = iced::Renderer;
     type T = iced::Theme;
-    struct Focus<'a>(El<'a>, Option<Message>, f32, Option<Id>);
+    type Live<'a> = (
+        Box<dyn Fn() -> f32>,
+        Box<dyn Fn(f32) -> El<'a> + 'a>,
+        bool,
+        f32,
+    );
+    type Focus = (Option<Message>, f32, Option<Id>);
+    pub struct Wrap<'a>(pub El<'a>, pub Option<Focus>, pub Option<Live<'a>>);
     #[derive(Default)]
     struct Ring(bool);
     impl Focusable for Ring {
@@ -70,7 +103,7 @@ pub fn focusable<'a>(
             self.0 = false;
         }
     }
-    impl Widget<Message, T, R> for Focus<'_> {
+    impl Widget<Message, T, R> for Wrap<'_> {
         fn size(&self) -> Size<Length> {
             self.0.as_widget().size()
         }
@@ -79,10 +112,12 @@ pub fn focusable<'a>(
         }
         fn draw(&self, t: &Tree, r: &mut R, th: &T, s: &Style, l: Layout, c: Cursor, v: &Rect) {
             self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
-            let (e, mut q) = (self.2.min(4.0), Quad::default());
-            q.border = iced::border::rounded(self.2 + e).color(TEXT).width(2);
-            q.bounds = l.bounds().expand(e);
-            if t.state.downcast_ref::<Ring>().0 {
+            if let Some((_, rad, _)) = self.1
+                && t.state.downcast_ref::<Ring>().0
+            {
+                let (e, mut q) = (rad.min(4.0), Quad::default());
+                q.border = iced::border::rounded(rad + e).color(TEXT).width(2);
+                q.bounds = l.bounds().expand(e);
                 r.fill_quad(q, Color::TRANSPARENT);
             }
         }
@@ -99,7 +134,9 @@ pub fn focusable<'a>(
             t.diff_children(std::slice::from_ref(&self.0));
         }
         fn operate(&mut self, t: &mut Tree, l: Layout, r: &R, op: &mut dyn Operation) {
-            op.focusable(self.3.as_ref(), l.bounds(), t.state.downcast_mut::<Ring>());
+            if let Some((_, _, id)) = &self.1 {
+                op.focusable(id.as_ref(), l.bounds(), t.state.downcast_mut::<Ring>());
+            }
             op.traverse(&mut |op| self.0.as_widget_mut().operate(&mut t.children[0], l, r, op));
         }
         fn update(
@@ -113,8 +150,25 @@ pub fn focusable<'a>(
             sh: &mut Shell<Message>,
             v: &Rect,
         ) {
+            if let (Event::Window(RedrawRequested(now)), Some((clock, build, true, last))) =
+                (e, &mut self.2)
+            {
+                let p = clock();
+                if p.floor() != last.floor() {
+                    (self.0, *last) = (build(p), p);
+                    t.diff_children(std::slice::from_ref(&self.0));
+                    let size = l.bounds().size();
+                    let limits = layout::Limits::new(size, size);
+                    self.0
+                        .as_widget_mut()
+                        .layout(&mut t.children[0], r, &limits);
+                }
+                let wait = p.floor() + 1.15 - p;
+                sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
+            }
             let w = self.0.as_widget_mut();
             w.update(&mut t.children[0], e, l, c, r, cb, sh, v);
+            let Some((msg, _, _)) = &self.1 else { return };
             let ring = t.state.downcast_mut::<Ring>();
             let key = |k| matches!(e, Event::Keyboard(KeyPressed { key, .. }) if *key == k);
             let go = key(Key::Named(Named::Enter)) || key(Key::Named(Named::Space));
@@ -123,7 +177,7 @@ pub fn focusable<'a>(
                 Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => ring.0 = false,
                 _ if key(Key::Named(Named::Escape)) => ring.0 = false,
                 _ if go && !sh.is_event_captured() => {
-                    self.1.iter().for_each(|m| sh.publish(m.clone()));
+                    msg.iter().for_each(|m| sh.publish(m.clone()));
                 }
                 _ => return,
             }
@@ -144,86 +198,6 @@ pub fn focusable<'a>(
             w.mouse_interaction(&t.children[0], l, c, v, r)
         }
     }
-    Element::new(Focus(c.into(), msg, radius, id.map(Id::from)))
-}
-
-pub fn live<'a>(
-    clock: Box<dyn Fn() -> f32>,
-    run: bool,
-    build: impl Fn(f32) -> El<'a> + 'a,
-) -> El<'a> {
-    use iced::advanced::renderer::Style;
-    use iced::advanced::widget::{Operation, Tree, Widget};
-    use iced::advanced::{Clipboard, Layout, Shell, layout};
-    use iced::window::Event::RedrawRequested;
-    use iced::{Event, Length, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction};
-    type R = iced::Renderer;
-    type T = iced::Theme;
-    type Build<'a> = Box<dyn Fn(f32) -> El<'a> + 'a>;
-    struct Live<'a>(El<'a>, Box<dyn Fn() -> f32>, Build<'a>, bool, f32);
-    impl Widget<Message, T, R> for Live<'_> {
-        fn size(&self) -> Size<Length> {
-            self.0.as_widget().size()
-        }
-        fn layout(&mut self, t: &mut Tree, r: &R, l: &layout::Limits) -> layout::Node {
-            self.0.as_widget_mut().layout(&mut t.children[0], r, l)
-        }
-        fn draw(&self, t: &Tree, r: &mut R, th: &T, s: &Style, l: Layout, c: Cursor, v: &Rect) {
-            self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
-        }
-        fn children(&self) -> Vec<Tree> {
-            vec![Tree::new(&self.0)]
-        }
-        fn diff(&self, t: &mut Tree) {
-            t.diff_children(std::slice::from_ref(&self.0));
-        }
-        fn operate(&mut self, t: &mut Tree, l: Layout, r: &R, op: &mut dyn Operation) {
-            self.0.as_widget_mut().operate(&mut t.children[0], l, r, op);
-        }
-        fn update(
-            &mut self,
-            t: &mut Tree,
-            e: &Event,
-            l: Layout,
-            c: Cursor,
-            r: &R,
-            cb: &mut dyn Clipboard,
-            sh: &mut Shell<Message>,
-            v: &Rect,
-        ) {
-            if let (Event::Window(RedrawRequested(now)), true) = (e, self.3) {
-                let p = (self.1)();
-                if p.floor() != self.4.floor() {
-                    (self.0, self.4) = ((self.2)(p), p);
-                    t.diff_children(std::slice::from_ref(&self.0));
-                    let size = l.bounds().size();
-                    let limits = layout::Limits::new(size, size);
-                    self.0
-                        .as_widget_mut()
-                        .layout(&mut t.children[0], r, &limits);
-                }
-                let wait = p.floor() + 1.15 - p;
-                sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
-            }
-            self.0
-                .as_widget_mut()
-                .update(&mut t.children[0], e, l, c, r, cb, sh, v);
-        }
-        fn mouse_interaction(
-            &self,
-            t: &Tree,
-            l: Layout,
-            c: Cursor,
-            v: &Rect,
-            r: &R,
-        ) -> Interaction {
-            self.0
-                .as_widget()
-                .mouse_interaction(&t.children[0], l, c, v, r)
-        }
-    }
-    let p = clock();
-    Element::new(Live(build(p), clock, Box::new(build), run, p))
 }
 
 pub fn art<'a>(px: f32, glyph: Txt<'a>, bg: impl Into<Background>) -> El<'a> {
@@ -370,7 +344,7 @@ fn top_bar(app: &App) -> El<'_> {
 
 type LibRow<'a> = (&'a String, &'a String, String, String, &'a String);
 
-pub fn lib_rows(app: &App) -> (usize, Vec<LibRow<'_>>, std::ops::Range<usize>) {
+pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     let f = app.lib_filter;
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| name.to_lowercase().contains(&q);
@@ -395,22 +369,25 @@ pub fn lib_rows(app: &App) -> (usize, Vec<LibRow<'_>>, std::ops::Range<usize>) {
         2 => rows.sort_by_cached_key(|r| (r.4.to_lowercase(), r.1.to_lowercase())),
         _ => {}
     }
-    let pins = [
-        (f < 2, "Liked Songs"),
-        (f == 0, "Songs"),
-        (f == 2, "All albums"),
-    ];
-    let pins = pins
-        .into_iter()
-        .chain([(f == 3, "All artists"), (f == 0, "Folders")]);
-    let k = pins.filter(|p| p.0 && hit(p.1)).count();
+    let k = PINS
+        .iter()
+        .filter(|p| p.0 >> f & 1 == 1 && hit(p.3))
+        .count();
     let (off, view) = app.lib_scroll;
     let lo = ((off / 64.0) as usize)
         .saturating_sub(k + 4)
         .min(rows.len());
     let hi = (lo + (view.max(600.0) / 64.0) as usize + 8).min(rows.len());
-    (k, rows, lo..hi)
+    (rows, lo..hi)
 }
+
+const PINS: [(u8, char, bool, &str, &str); 5] = [
+    (3, i::MUSIC, false, "Liked Songs", "liked"),
+    (1, i::MUSIC, true, "Songs", "songs"),
+    (4, i::ALBUM, false, "All albums", "albums"),
+    (8, i::USER, false, "All artists", "artists"),
+    (1, i::FOLDER, false, "Folders", "folders"),
+];
 
 fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.lib_mini());
@@ -449,19 +426,20 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         theme::chip_btn(name, f == n, m)
     });
     let chips = Row::with_children(chips).spacing(8);
-    let (green, dim) = ((SONGS_BG, ACCENT), (ELEVATED, SUB));
-    let pins = [
-        (f == 0, i::MUSIC, green, "Songs", "songs"),
-        (f == 2, i::ALBUM, dim, "All albums", "albums"),
-        (f == 3, i::USER, dim, "All artists", "artists"),
-        (f == 0, i::FOLDER, dim, "Folders", "folders"),
-    ];
-    let pins = pins.into_iter().filter(|p| p.0 && hit(p.3));
-    let pins = pins.map(|(_, c, (bg, fg), t, r)| {
-        let art = art(48.0, i(c, 0.0).color(fg), bg);
-        item(art, t, "Library".into(), r.into())
+    let pins = PINS.iter().filter(|p| p.0 >> f & 1 == 1 && hit(p.3));
+    let pins = pins.map(|&(_, c, green, t, r)| {
+        let (bg, fg) = [(ELEVATED, SUB), (SONGS_BG, ACCENT)][usize::from(green)];
+        let (liked, route) = (r == "liked", r.into());
+        let pic = liked.then(|| liked_art(48.0));
+        let pic = pic.unwrap_or_else(|| art(48.0, i(c, 0.0).color(fg), bg));
+        item(
+            pic,
+            t,
+            ["Library", "Playlist"][usize::from(liked)].into(),
+            route,
+        )
     });
-    let (_, rows, span) = lib_rows(app);
+    let (rows, span) = lib_rows(app);
     let gap = |n: usize| Space::new().height(n as f32 * 64.0);
     let (top, bottom) = (gap(span.start), gap(rows.len() - span.end));
     let rows = rows.into_iter().take(span.end).skip(span.start);
@@ -469,16 +447,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let round = r.starts_with("artist:");
         item(cover(app, c, 48.0, round), n, s.into(), r)
     });
-    let liked = || {
-        item(
-            liked_art(48.0),
-            "Liked Songs",
-            "Playlist".into(),
-            "liked".into(),
-        )
-    };
-    let liked = (f < 2 && hit("Liked Songs")).then(liked);
-    let list = column![liked].extend(pins).push(top);
+    let list = column(pins).push(top);
     let list = list.extend(rows).push(bottom);
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
     let find = task(|a| {
@@ -587,13 +556,11 @@ fn player_bar(app: &App) -> El<'_> {
     let vol_icon = ic([i::MUTE, i::VOL1, i::VOL2][level]);
     let lyrics = app.route == "lyrics";
     let volume = slider(0.0..=1.0, vol, Message::Vol).step(0.01f32).width(93);
-    let k = app.cfg.settings.vol_step / 100.0;
-    let volume = mouse_area(volume.style(theme::seek)).on_scroll(move |d| {
-        let step = match d {
-            iced::mouse::ScrollDelta::Lines { y, .. } => y.clamp(-1.0, 1.0) * k,
-            iced::mouse::ScrollDelta::Pixels { y, .. } => y.clamp(-120.0, 120.0) / 120.0 * k,
-        };
-        Message::Vol((vol + step).clamp(0.0, 1.0))
+    let volume = mouse_area(volume.style(theme::seek)).on_scroll(|d| match d {
+        iced::mouse::ScrollDelta::Lines { y, .. } => Message::Step(true, y.clamp(-1.0, 1.0)),
+        iced::mouse::ScrollDelta::Pixels { y, .. } => {
+            Message::Step(true, y.clamp(-120.0, 120.0) / 120.0)
+        }
     });
     let words = [Message::Nav("lyrics".into()), Message::Back];
     let words = words[usize::from(lyrics)].clone();

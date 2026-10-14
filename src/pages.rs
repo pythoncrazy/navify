@@ -15,7 +15,7 @@ use crate::theme::{
 };
 use crate::view::{
     El, SONGS_BG, art, artists_line, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, go, icon_btn,
-    liked_art, media,
+    liked_art, media, tool_btn,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -421,11 +421,7 @@ fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
         let label = if *g == "all" { "All" } else { l };
         theme::chip_btn(label, f == *g, go("discography", &format!("{id}:{g}")))
     });
-    let tool = |c: char, on: bool| {
-        let b = theme::sq(i(c, 20.0).center(), 32.0);
-        let b = b.style(theme::link(if on == grid_on { TEXT } else { SUB }));
-        b.on_press(set(|s, b| s.disc_grid = b, on))
-    };
+    let tool = |c, on: bool| tool_btn(c, on == grid_on, set(|s, b| s.disc_grid = b, on));
     let arrow = i(if app.disc_old { i::UP } else { i::DOWN }, 16.0);
     let order = row![txt("Release date", 14.0), arrow].spacing(4);
     let order = link_btn(
@@ -650,11 +646,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let tables = ["album", "playlist", "liked", "songs"];
     let view = tables
         .contains(&app.route.split(':').next().unwrap_or(""))
-        .then(|| {
-            let b = theme::sq(i(i::LIST, 20.0).center(), 32.0);
-            let b = b.style(theme::link([SUB, TEXT][usize::from(compact)]));
-            b.on_press(set(|s, b| s.compact = b, !compact))
-        });
+        .then(|| tool_btn(i::LIST, compact, set(|s, b| s.compact = b, !compact)));
     let bar = row![play, shuffle].extend(p.extra).push(view).spacing(PAD);
     let bar = container(bar.align_y(Center)).height(BAR);
     let bar = bar.padding(Padding::new(PAD).top(12).bottom(16));
@@ -721,8 +713,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                     a.pl_find = Some(String::new());
                     iced::widget::operation::focus("plfind")
                 });
-                let b = theme::sq(i(i::SEARCH, 20.0).center(), 32.0);
-                b.style(theme::link(SUB)).on_press(open).into()
+                tool_btn(i::SEARCH, false, open).into()
             }
             Some(q) => {
                 let style = theme::input([ELEVATED; 2], [BG; 2], [0.0; 2], 4.0);
@@ -1437,7 +1428,10 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let next = app.queue.get(app.real_at(app.index + 1)).map(|n| {
         let open = link_btn(bold("Open queue", 14.0), SUB, Message::Panel(2));
         let head = row![bold("Next in queue", 16.0).width(Fill), open];
-        card(column![head, queue_row(app, n, app.index + 1, w - 32.0)])
+        card(column![
+            head,
+            queue_row(app, n, Some(app.index + 1), w - 32.0)
+        ])
     });
     let lines = column![title, artists_line(&s.artists, 16.0, w - 40.0)].spacing(4);
     let info = row![lines.width(Fill), heart_btn(&s.id, starred, 20.0)].align_y(Center);
@@ -1461,25 +1455,29 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let art = cover(app, &s.cover, w, false);
     let body = column![art, info].push(preview).push(about).push(next);
     let body = body.spacing(16).padding(Padding::new(16.0).top(0));
-    let head = panel_head(ell(&app.source, app.right_w() - 64.0, 16.0, Bold), 1, None);
+    let head = panel_head(ell(&app.source, app.right_w() - 64.0, 16.0, Bold), 1);
     column![head, scrollable(body).style(theme::scroll)].into()
 }
 
-fn panel_head<'a>(title: impl Into<El<'a>>, n: u8, extra: Option<El<'a>>) -> El<'a> {
+fn panel_head<'a>(title: impl Into<El<'a>>, n: u8) -> El<'a> {
     let title = container(title).width(Fill);
     let x = icon_btn(i::X, 16.0, Message::Panel(n));
-    let r = row![title].push(extra).push(x).spacing(8).align_y(Center);
+    let r = row![title, x].spacing(8).align_y(Center);
     r.padding(Padding::new(8.0).left(16)).into()
 }
 
-fn queue_row<'a>(app: &'a App, s: &'a Song, n: usize, w: f32) -> El<'a> {
-    let cur = n == app.index;
+fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> {
+    let cur = n == Some(app.index);
     let art = cover(app, &s.cover, 48.0, false);
-    let x = (!cur).then(|| icon_btn(i::X, 14.0, Message::QDel(n)));
+    let x = n
+        .filter(|_| !cur)
+        .map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
     let fg = if cur { ACCENT } else { TEXT };
     let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);
     let menu = Message::Menu(Box::new(MenuKind::Song(vec![s.clone()])));
-    let r = mouse_area(container(r).padding(8)).on_double_click(Message::PlayQueue(n));
+    let play = || Message::Play(vec![s.clone()], 0, "Recently played".into());
+    let r = mouse_area(container(r).padding(8));
+    let r = r.on_double_click(n.map_or_else(play, Message::PlayQueue));
     r.on_right_press(menu).into()
 }
 
@@ -1487,7 +1485,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let w = app.right_w() - 16.0;
     let next = (app.index + 1..app.queue.len()).take(100);
     let next = next.filter_map(|n| app.queue.get(app.real_at(n)).map(|s| (n, s)));
-    let next: Vec<El> = next.map(|(n, s)| queue_row(app, s, n, w)).collect();
+    let next: Vec<El> = next.map(|(n, s)| queue_row(app, s, Some(n), w)).collect();
     let more = app.queue.len().saturating_sub(app.index + 101);
     let title = |t: String| {
         let t = container(ell(t, w - 16.0, 16.0, Bold));
@@ -1498,7 +1496,9 @@ pub fn queue_panel(app: &App) -> El<'_> {
         true => "Next up".into(),
         false => format!("Next from: {}", app.source),
     };
-    let now = app.current_song().map(|s| queue_row(app, s, app.index, w));
+    let now = app
+        .current_song()
+        .map(|s| queue_row(app, s, Some(app.index), w));
     let now = now.map(|r| column![title("Now playing".into()), r]);
     let clear = link_btn(bold("Clear queue", 14.0), SUB, task(App::q_clear));
     let from = row![ell(from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
@@ -1516,19 +1516,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
             .style(theme::link([SUB, TEXT][usize::from(on)]));
         b.on_press(act(move |a| a.recent_tab = t != "Queue"))
     };
-    let past = app.recent.iter().map(|s| {
-        let play = Message::Play(vec![s.clone()], 0, "Recently played".into());
-        let r = media(
-            cover(app, &s.cover, 48.0, false),
-            &s.title,
-            &s.artist,
-            w - 100.0,
-            TEXT,
-        );
-        let menu = Message::Menu(Box::new(MenuKind::Song(vec![s.clone()])));
-        let r = mouse_area(container(r).padding(8)).on_double_click(play);
-        r.on_right_press(menu).into()
-    });
+    let past = app.recent.iter().map(|s| queue_row(app, s, None, w));
     let past = Column::with_children(past).padding(Padding::new(8.0).top(0));
     let past = past.push(
         app.recent
@@ -1539,7 +1527,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
         tab("Queue", !app.recent_tab),
         tab("Recently played", app.recent_tab)
     ];
-    let head = panel_head(tabs.spacing(24), 2, None);
+    let head = panel_head(tabs.spacing(24), 2);
     if app.recent_tab {
         return column![head, scrollable(past).style(theme::scroll)].into();
     }
