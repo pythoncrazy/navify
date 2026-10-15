@@ -318,7 +318,11 @@ pub fn artists_line<'a>(artists: &[Artist], size: f32, w: f32) -> El<'a> {
 }
 
 pub fn fmt_dur(s: f32) -> String {
-    format!("{}:{:02}", s as u64 / 60, s as u64 % 60)
+    let s = s as u64;
+    match s / 3600 {
+        0 => format!("{}:{:02}", s / 60, s % 60),
+        h => format!("{h}:{:02}:{:02}", s / 60 % 60, s % 60),
+    }
 }
 
 pub fn fmt_n(n: usize) -> String {
@@ -434,10 +438,11 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         .filter(|p| p.0 >> f & 1 == 1 && hit(p.3))
         .count();
     let (off, view) = app.lib_scroll;
+    let span = (view.max(600.0) / 64.0) as usize + 8;
     let lo = ((off / 64.0) as usize)
         .saturating_sub(k + 4)
-        .min(rows.len());
-    let hi = (lo + (view.max(600.0) / 64.0) as usize + 8).min(rows.len());
+        .min(rows.len().saturating_sub(span));
+    let hi = (lo + span).min(rows.len());
     (rows, lo..hi)
 }
 
@@ -520,6 +525,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let style = theme::input([CHIP, CHIP], [CHIP, CHIP], [0.0, 0.0], 4.0);
         let t = text_input("Search in Your Library", v).id("libfind");
         let t = t.on_input(|v| act(move |a| a.lib_find = Some(v.clone())));
+        let t = t.on_submit(Message::Noop);
         let t = t.style(style).font(theme::fw(Normal)).size(14);
         t.padding([6, 8]).width(Fill)
     });
