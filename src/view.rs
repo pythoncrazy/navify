@@ -709,6 +709,65 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
         let body = column![head.align_y(Center), hint, list].spacing(16);
         return container(body.width(480).padding(24)).style(style).into();
     }
+    if kind == 5 {
+        let key = format!("song:{id}");
+        let v = app.data::<serde_json::Value>(&key);
+        let val = |k: &str| -> Option<String> {
+            let x = v?.get(k)?;
+            let s = match k {
+                "size" => format!("{:.1} MB", x.as_f64()? / 1e6),
+                "duration" => fmt_dur(x.as_f64()? as f32),
+                "created" | "played" => x.as_str()?.get(..16)?.replace('T', " "),
+                _ => x.as_str().map_or_else(|| x.to_string(), String::from),
+            };
+            (!s.is_empty() && s != "0").then_some(s)
+        };
+        let fields = [
+            ("Title", "title", ""),
+            ("Artist", "displayArtist", ""),
+            ("Album", "album", ""),
+            ("Album artist", "displayAlbumArtist", ""),
+            ("Composer", "displayComposer", ""),
+            ("Genre", "genre", ""),
+            ("Year", "year", ""),
+            ("Disc", "discNumber", ""),
+            ("Track", "track", ""),
+            ("Duration", "duration", ""),
+            ("Format", "suffix", ""),
+            ("Bit rate", "bitRate", " kbps"),
+            ("Sample rate", "samplingRate", " Hz"),
+            ("Bit depth", "bitDepth", " bits"),
+            ("Channels", "channelCount", ""),
+            ("Size", "size", ""),
+            ("BPM", "bpm", ""),
+            ("Track gain", "trackGain", " dB"),
+            ("Album gain", "albumGain", " dB"),
+            ("Plays", "playCount", ""),
+            ("Last played", "played", ""),
+            ("Added", "created", ""),
+            ("Comment", "comment", ""),
+            ("Path", "path", ""),
+        ];
+        let rows = fields.into_iter().filter_map(|(label, k, unit)| {
+            let t = text(val(k)? + unit).size(14).font(theme::fw(Normal));
+            let t = t.wrapping(text::Wrapping::WordOrGlyph).width(Fill);
+            Some(row![sub(label, 14.0).width(120), t].spacing(16).into())
+        });
+        let note = match app.data::<String>(&key) {
+            Some(e) => Some(sub(e.clone(), 14.0)),
+            None => v.is_none().then(|| sub("Loading the song details.", 14.0)),
+        };
+        let list = iced::widget::Column::with_children(rows)
+            .push(note)
+            .spacing(12);
+        let list = scrollable(list.padding(padding::right(16)))
+            .height(iced::Shrink)
+            .style(theme::scroll);
+        let head = row![bold("Song details", 24.0).width(Fill), close];
+        let body = column![head.align_y(Center), list].spacing(16);
+        let body = container(body.width(560).padding(24)).max_height(600.0);
+        return body.style(style).into();
+    }
     if kind == 2 || kind == 4 {
         let name = pl.map_or("", |p| p.name.as_str()).to_string();
         let b = theme::fw(iced::font::Weight::Bold);

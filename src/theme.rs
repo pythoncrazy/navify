@@ -120,6 +120,7 @@ pub mod icon {
     pub const GRID: char = '\u{e0ff}';
     pub const DOWN: char = '\u{e06d}';
     pub const UP: char = '\u{e070}';
+    pub const INFO: char = '\u{e0f9}';
 }
 
 fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
