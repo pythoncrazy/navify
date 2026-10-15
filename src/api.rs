@@ -243,6 +243,9 @@ fn normalize(v: &mut Value) {
             if let Some(c) = m.remove("coverArt").filter(|c| c != "").or(id) {
                 let nd = |c: &str| {
                     let (k, rest) = c.split_once('-')?;
+                    if k == "dc" {
+                        return rest.split(':').next().map(Value::from);
+                    }
                     let (id, h) = rest.rsplit_once('_')?;
                     matches!(k, "al" | "ar" | "mf" | "pl").then(|| format!("{id}#{h}").into())
                 };
@@ -298,7 +301,7 @@ fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
         json!({"_sort": sort_row(sort)[col], "_order": order, "_start": off, "_end": off + n});
     let only = match (sort, col) {
         ("starred", _) => "starred",
-        ("rating", 2) => "has_rating",
+        ("rating", _) => "has_rating",
         ("recent" | "frequent", 2) => "recently_played",
         _ => return q,
     };
@@ -359,8 +362,15 @@ impl Session {
         let url = url.trim().split(['#', '?']).next().unwrap_or_default();
         let url = url.trim_end_matches('/');
         let url = url.strip_suffix("/app").unwrap_or(url);
-        let url = format!("{}{url}", if url.contains("://") { "" } else { "https://" });
-        let parsed = reqwest::Url::parse(&url).ok();
+        let mut url = format!("{}{url}", if url.contains("://") { "" } else { "https://" });
+        let mut parsed = reqwest::Url::parse(&url).ok();
+        if let Some(u) = parsed
+            .as_mut()
+            .filter(|u| u.has_authority() && u.username() != "")
+        {
+            let _ = (u.set_username(""), u.set_password(None));
+            url = u.as_str().trim_end_matches('/').into();
+        }
         let host = parsed.as_ref().and_then(reqwest::Url::host_str);
         let name = host.ok_or_else(|| anyhow!("The server address is not valid."))?;
         let [a, b] = [1, 2].map(|n| RandomState::new().hash_one(n));
@@ -654,7 +664,15 @@ impl Session {
 
     pub async fn songs(&self, sort: &str, off: usize, n: usize) -> Paged<Song> {
         if self.server.native {
-            return self.nd("song", sorted(sort, 3, off, n)).await;
+            let (mut list, total): (Vec<Song>, _) =
+                self.nd("song", sorted(sort, 3, off, n)).await?;
+            let played = matches!(sort, "recent" | "frequent");
+            return Ok(
+                match list.iter().position(|s| played && s.play_count == 0) {
+                    Some(i) => (list.drain(..i).collect(), off + i),
+                    None => (list, total),
+                },
+            );
         }
         if sort == "starred" {
             let all = self.starred().await?.2;
