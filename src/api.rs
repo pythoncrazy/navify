@@ -394,25 +394,36 @@ impl Session {
             ..Server::default()
         });
         let ping: Value = s.get("ping", (), "").await?;
-        if ping["openSubsonic"] == true {
+        let ext = async {
+            if ping["openSubsonic"] != true {
+                return Ok(Vec::new());
+            }
             let ptr = "/openSubsonicExtensions";
-            let ext: Vec<Value> = s.get("getOpenSubsonicExtensions", (), ptr).await?;
-            let names = ext.iter().filter_map(|e| e["name"].as_str());
-            s.server.ext = names.map(str::to_string).collect();
-        }
-        if ping["type"] != "navidrome" {
+            s.get::<Vec<Value>>("getOpenSubsonicExtensions", (), ptr)
+                .await
+        };
+        let native = async {
+            if ping["type"] != "navidrome" {
+                return Ok(Value::Null);
+            }
+            let body = json!({"username": user, "password": pass});
+            let req = s.http.post(format!("{}/auth/login", s.server.url));
+            let res = req.json(&body).send().await.map_err(net_err)?;
+            let (ok, status) = (res.status().is_success(), res.status().as_u16());
+            if !ok && status != 401 {
+                return Ok(Value::Null);
+            }
+            let body: Value = res.json().await.unwrap_or_default();
+            let refused = "The server refused the login. Check the username and password.";
+            ensure!(ok, "{}", body["message"].as_str().unwrap_or(refused));
+            Ok(body)
+        };
+        let (ext, body) = tokio::try_join!(ext, native)?;
+        let names = ext.iter().filter_map(|e| e["name"].as_str());
+        s.server.ext = names.map(str::to_string).collect();
+        if body.is_null() {
             return Ok(s);
         }
-        let body = json!({"username": user, "password": pass});
-        let req = s.http.post(format!("{}/auth/login", s.server.url));
-        let res = req.json(&body).send().await.map_err(net_err)?;
-        let (ok, status) = (res.status().is_success(), res.status().as_u16());
-        if !ok && status != 401 {
-            return Ok(s);
-        }
-        let body: Value = res.json().await.unwrap_or_default();
-        let refused = "The server refused the login. Check the username and password.";
-        ensure!(ok, "{}", body["message"].as_str().unwrap_or(refused));
         let get = |k: &str| match body[k].as_str() {
             Some(t) if !t.is_empty() => Ok(t.to_string()),
             _ => Err(anyhow!("The server login response has no {k}.")),
