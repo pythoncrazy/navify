@@ -2310,6 +2310,11 @@ impl App {
             huge.extend(banner.filter(|u| self.cfg.settings.banners && !u.is_empty()));
             small.extend(top.iter().flat_map(|v| v.iter().take(10)).map(|s| &s.cover));
             big.extend(shelf.iter().map(|x| &x.cover));
+            big.extend(
+                crate::pages::by_date(albums.iter())
+                    .first()
+                    .map(|x| &x.cover),
+            );
             let similar = info.map_or(&[][..], |i| &i.similar);
             big.extend(similar.iter().take(cols).map(|x| &x.cover));
             let appears = appears.map_or(&[][..], |v| &v[..]);
