@@ -135,12 +135,16 @@ fn gain_follows_the_replaygain_settings() {
 #[tokio::test]
 async fn log_out_clears_the_play_state() {
     let mut app = app();
-    let songs = items::<Vec<Song>>(["a", "b", "c"].map(String::from));
+    let songs = ["a", "b", "c"].map(|id| json!({"id": id, "duration": 1, "playCount": 4}));
+    let songs: Vec<Song> = parse(songs.into()).expect("songs");
+    let _ = app.update(Message::Play(songs.clone(), 1, "t".into()));
     let _ = app.update(Message::Play(songs, 1, "t".into()));
+    assert_eq!(app.plays.get("b"), Some(&6));
     let _ = app.update(Message::Shuffle);
     app.starred.insert("a".into(), true);
     let _ = app.update(Message::LogOut);
     assert!(app.queue.is_empty() && app.shuffle.is_none() && app.starred.is_empty());
+    assert!(app.plays.is_empty());
     assert!(app.current_song().is_none() && app.route == "login");
 }
 

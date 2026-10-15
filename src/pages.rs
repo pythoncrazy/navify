@@ -237,7 +237,8 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
             .into(),
         false => column![name].push(by).spacing(2).into(),
     };
-    let plays = || (s.play_count > 0).then(|| fmt_n(s.play_count as usize));
+    let count = app.plays.get(&s.id).copied().unwrap_or(0).max(s.play_count);
+    let plays = || (count > 0).then(|| fmt_n(count as usize));
     let album = ell(&s.album, c.1, 14.0, Normal);
     let album = link_btn(album, SUB, go("album", &s.album_id));
     let second: El = match pop {
