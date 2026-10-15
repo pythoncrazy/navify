@@ -718,6 +718,10 @@ impl Session {
         self.get("getInternetRadioStations", (), ptr).await
     }
 
+    pub async fn song(&self, id: &str) -> Result<Value> {
+        self.get("getSong", json!({"id": id}), "/song").await
+    }
+
     pub async fn indexes(&self) -> Result<Vec<Artist>> {
         self.index("getIndexes", "/indexes/index").await
     }

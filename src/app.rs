@@ -1949,6 +1949,11 @@ impl App {
             }
             Message::Modal(id, kind) => {
                 self.menu = None;
+                if kind == 5 {
+                    let load = self.request(&format!("song:{id}"), 0);
+                    self.modal = Some((id, kind));
+                    return load;
+                }
                 let Some(p) = self.playlist(&id) else {
                     return self.toast("The playlist is not available.");
                 };
@@ -2565,6 +2570,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             "radio" => Arc::new(s.radios().await?),
             "folder" => Arc::new(s.directory(arg).await?),
             "lyrics" => Arc::new(s.lyrics(arg).await?),
+            "song" => Arc::new(s.song(arg).await?),
             "search" => Arc::new(s.search(arg, 20).await?),
             _ => anyhow::bail!("unknown key {k}"),
         })

@@ -1739,7 +1739,12 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             if let [s] = &songs[..] {
                 let radio = Message::Radio(s.id.clone());
                 let radio = it(i::RADIO, "Go to song radio", radio);
-                v.extend([open(2, i::STAR, "Rate"), None, radio]);
+                let info = it(
+                    i::INFO,
+                    "Show song details",
+                    Message::Modal(s.id.clone(), 5),
+                );
+                v.extend([open(2, i::STAR, "Rate"), info, None, radio]);
                 let links = [("artist", &s.artist_id), ("album", &s.album_id)];
                 let links = links.into_iter().filter(|(_, id)| !id.is_empty());
                 v.extend(links.map(|(k, id)| {

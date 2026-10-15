@@ -64,3 +64,4 @@ circle-plus 0xe081
 maximize 0xe112
 minimize 0xe11a
 monitor-speaker 0xe210
+info 0xe0f9
