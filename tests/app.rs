@@ -73,6 +73,14 @@ async fn shuffle_keeps_the_current_song() {
     let _ = app.update(Message::Next(true));
     let _ = app.update(Message::Next(false));
     assert!(cur(&app) == "a" && !app.playing && app.position == 0.0);
+    let _ = app.update(Message::Play(songs("abcd"), 0, "t".into()));
+    app.qmove = Some((1, 3));
+    let _ = app.q_drop();
+    let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids == "acdb" && app.qmove.is_none());
+    app.qmove = Some((0, 2));
+    let _ = app.q_drop();
+    assert_eq!(app.queue[0].id, "a");
 }
 
 #[tokio::test]

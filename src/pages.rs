@@ -1507,8 +1507,28 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
     let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);
     let menu = Message::Menu(Box::new(MenuKind::Song(vec![s.clone()])));
     let play = || Message::Play(vec![s.clone()], 0, "Recently played".into());
-    let r = mouse_area(container(r).padding(8));
-    let r = r.on_double_click(n.map_or_else(play, Message::PlayQueue));
+    let movable = n.filter(|&n| n > app.index);
+    let to = app.qmove.filter(|&(f, t)| f != t && Some(t) == movable);
+    let line = |on: bool| {
+        let l = container(Space::new().width(Fill).height(2));
+        on.then(|| l.style(fill(ACCENT, 1.0)))
+    };
+    let (up, down) = to.map_or((false, false), |(f, t)| (t < f, t > f));
+    let pad = Padding::new(8.0)
+        .top(8.0 - 2.0 * f32::from(up))
+        .bottom(8.0 - 2.0 * f32::from(down));
+    let r = column![line(up), container(r).padding(pad), line(down)];
+    let r = mouse_area(r).on_double_click(n.map_or_else(play, Message::PlayQueue));
+    let r = match movable {
+        Some(n) => r
+            .on_press(act(move |a| a.qmove = Some((n, n))))
+            .on_enter(act(move |a| {
+                if let Some(m) = &mut a.qmove {
+                    m.1 = n;
+                }
+            })),
+        None => r,
+    };
     r.on_right_press(menu).into()
 }
 
