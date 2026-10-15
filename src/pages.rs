@@ -1649,7 +1649,12 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     };
     let it = |c: char, l: &str, m: Message| Some((c, l.to_string(), m, false));
     let open = |n: u8, c: char, l: &str| {
-        let m = act(move |a| a.menu.iter_mut().for_each(|m| m.sub = n));
+        let m = act(move |a| {
+            let (x, y) = crate::app::cursor();
+            a.menu
+                .iter_mut()
+                .for_each(|m| (m.sub, m.x, m.y) = (n, x, y));
+        });
         Some((c, l.to_string(), m, true))
     };
     let user = app.session.as_ref().map(|s| &s.server);

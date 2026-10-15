@@ -1586,9 +1586,7 @@ impl App {
                 return self.save_later();
             }
             Message::Menu(kind) => {
-                let bits = CURSOR.load(Relaxed);
-                let x = f32::from_bits((bits >> 32) as u32);
-                let y = f32::from_bits(bits as u32);
+                let (x, y) = cursor();
                 let scan = matches!(*kind, MenuKind::Device).then(scan_devices);
                 self.menu = Some(Menu {
                     x,
@@ -2302,14 +2300,6 @@ impl App {
         use iced::{Event, event, window::Event as W};
         let mut subs = vec![
             event::listen_with(|e, status, _| match e {
-                Event::Mouse(M::CursorMoved { position: p }) => {
-                    CURSOR.store((p.x.to_bits() as u64) << 32 | p.y.to_bits() as u64, Relaxed);
-                    None
-                }
-                Event::Keyboard(K::ModifiersChanged(m)) => {
-                    MODS.store(m.bits(), Relaxed);
-                    None
-                }
                 Event::Window(W::Focused) => Some(act(|a| a.hidden = false)),
                 Event::Window(W::Unfocused) => Some(task(|_| {
                     let min = |m: Option<bool>| {
@@ -2655,7 +2645,15 @@ fn shuffle(r: std::ops::Range<usize>, first: usize) -> Vec<usize> {
 }
 
 pub static CURSOR: AtomicU64 = AtomicU64::new(0);
-static MODS: AtomicU32 = AtomicU32::new(0);
+
+pub fn cursor() -> (f32, f32) {
+    let bits = CURSOR.load(Relaxed);
+    (
+        f32::from_bits((bits >> 32) as u32),
+        f32::from_bits(bits as u32),
+    )
+}
+pub static MODS: AtomicU32 = AtomicU32::new(0);
 
 type Rx = Mutex<Option<UnboundedReceiver<Message>>>;
 static CH: LazyLock<(UnboundedSender<Message>, Rx)> = LazyLock::new(|| {
