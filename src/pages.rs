@@ -265,7 +265,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let count = sub(plays().unwrap_or_default(), 14.0)
         .width(64)
         .align_x(Right);
-    let count = app.cfg.settings.plays.then_some(count);
+    let count = (app.cfg.settings.plays && !pop).then_some(count);
     let r = r
         .push(added)
         .push(stars)
@@ -912,7 +912,8 @@ fn artist(app: &App) -> Option<El<'_>> {
     let on = app.is_starred(&a.id, a.starred);
     let all = app.popular_all;
     let n = if all { 10 } else { 5 }.min(top.len());
-    let c3 = cols(app, true, false, n);
+    let mut c3 = cols(app, true, false, n);
+    c3.0 += 80.0 * f32::from(app.cfg.settings.plays);
     let more = (top.len() > 5).then(|| {
         let label = bold(if all { "Show less" } else { "See more" }, 14.0);
         let b = button(label).padding(16).style(theme::link(SUB));
