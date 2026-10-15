@@ -83,7 +83,7 @@ mod wrap {
     use iced::advanced::widget::{Id, Operation, Tree, Widget, operation::Focusable, tree};
     use iced::advanced::{Clipboard, Layout, Renderer, Shell, layout};
     use iced::keyboard::{Event::KeyPressed, Event::ModifiersChanged, Key, key::Named};
-    use iced::mouse::{Event::WheelScrolled, ScrollDelta};
+    use iced::mouse::{Event::CursorMoved, Event::WheelScrolled, ScrollDelta};
     use iced::window::Event::RedrawRequested;
     use iced::{
         Color, Event, Length, Point, Rectangle as Rect, Size, mouse::Cursor, mouse::Interaction,
@@ -178,6 +178,17 @@ mod wrap {
                 }
                 let wait = p.floor() + 1.15 - p;
                 sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
+            }
+            use std::sync::atomic::Ordering::Relaxed;
+            match (e, &self.1, &self.2) {
+                (Event::Mouse(CursorMoved { position: p }), None, None) => {
+                    let bits = (p.x.to_bits() as u64) << 32 | p.y.to_bits() as u64;
+                    crate::app::CURSOR.store(bits, Relaxed);
+                }
+                (Event::Keyboard(ModifiersChanged(m)), None, None) => {
+                    crate::app::MODS.store(m.bits(), Relaxed);
+                }
+                _ => {}
             }
             let ring = t.state.downcast_mut::<Ring>();
             match e {
