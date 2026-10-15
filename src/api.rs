@@ -557,7 +557,11 @@ impl Session {
         let url = match id.starts_with("https://") {
             true => id.to_string(),
             false => {
-                let id = id.trim_start_matches("o:").split('#').next();
+                let id = ["o:", "w:"]
+                    .iter()
+                    .find_map(|p| id.strip_prefix(p))
+                    .unwrap_or(id);
+                let id = id.split('#').next();
                 self.url("getCoverArt", &json!({"id": id, "size": size}))
             }
         };

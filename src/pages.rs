@@ -970,6 +970,12 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     (off > top - 64.0).then(|| column![head].push(cols).into())
 }
 
+fn plain(html: &str) -> String {
+    let parts = html.split('<').enumerate();
+    let parts = parts.map(|(n, p)| [p, p.split_once('>').map_or("", |x| x.1)][usize::from(n > 0)]);
+    parts.collect::<String>().trim().to_string()
+}
+
 fn artist(app: &App) -> Option<El<'_>> {
     let key = app.route.as_str();
     let (a, albums) = app.data::<(Artist, Vec<Album>)>(key)?;
@@ -1027,9 +1033,7 @@ fn artist(app: &App) -> Option<El<'_>> {
     let appears = appears.into_iter().flatten().take(k);
     let appears = appears.map(|x| album_card(app, x, year_kind(x)));
     let about = info.filter(|i| !i.biography.is_empty()).map(|info| {
-        let bio = info.biography.split('<').enumerate();
-        let bio = bio.map(|(n, p)| [p, p.split_once('>').map_or("", |x| x.1)][usize::from(n > 0)]);
-        let bio = txt(bio.collect::<String>().trim().to_string(), 16.0).color(SUB);
+        let bio = txt(plain(&info.biography), 16.0).color(SUB);
         let bio = container(bio).padding(PAD).max_width(672);
         let bio = container(bio.style(fill(ELEVATED, 8.0))).padding([0.0, PAD]);
         column![heading("About", None), bio].spacing(8)
@@ -1583,7 +1587,36 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let lines = column![title, artists_line(&s.artists, 16.0, w - 40.0)].spacing(4);
     let heart = (!radio).then(|| heart_btn(&s.id, starred, 20.0));
     let info = row![lines.width(Fill), heart].align_y(Center);
-    let about = (!radio).then(|| card(column![bold("About the artist", 16.0), artist]));
+    let about = app.lead_artist().map(|id| {
+        let head = || container(bold("About the artist", 16.0)).padding(16);
+        let pic = app
+            .covers
+            .get(&format!("w:{}", app.artist_cover(id)), app.bucket(w));
+        let pic = pic.map(|h| {
+            let r = iced::border::Radius::new(8.0).bottom(0.0);
+            let img = image(h).width(Fill).height(w * 0.6).border_radius(r);
+            let img = img.content_fit(iced::ContentFit::Cover);
+            let shade = head().width(Fill).style(|_| {
+                let g = iced::gradient::Linear::new(std::f32::consts::PI);
+                let g = g.add_stop(0.0, Color::BLACK.scale_alpha(0.5));
+                container::Style::default().background(g.add_stop(1.0, Color::TRANSPARENT))
+            });
+            stack![img, shade]
+        });
+        let bio = app
+            .data::<Info>(&format!("info:{id}"))
+            .map(|i| plain(&i.biography));
+        let bio = bio.filter(|b| !b.is_empty()).map(|b| {
+            container(txt(b, 14.0).color(SUB))
+                .max_height(58.0)
+                .clip(true)
+        });
+        let body = column![artist].push(bio).spacing(12).width(Fill);
+        let body = body.padding(Padding::new(16.0).top([0.0, 16.0][usize::from(pic.is_some())]));
+        let top = pic.map_or_else(|| El::from(head()), El::from);
+        let c = container(column![top, body]);
+        c.style(fill(ELEVATED, 8.0))
+    });
     let preview = lyric_at(app, s).map(|(l, cur, _)| {
         let lines = l.lines[cur.unwrap_or(0)..]
             .iter()
