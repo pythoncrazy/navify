@@ -2432,7 +2432,13 @@ pub const KEYS: [KeyAction; 23] = [
 ];
 
 fn decode(raw: bytes::Bytes, size: u32, wide: bool, round: bool) -> Result<Decoded, String> {
-    use ::image::imageops::FilterType;
+    use {::image::imageops::FilterType, std::hash::BuildHasher};
+    static BIG: std::sync::Mutex<Vec<(u64, Decoded)>> = std::sync::Mutex::new(Vec::new());
+    let hash = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
+    let key = hash.hash_one((&raw[..], size, round));
+    if let Some((_, d)) = BIG.lock().expect("cover lock").iter().find(|e| e.0 == key) {
+        return Ok(d.clone());
+    }
     let mut img = ::image::load_from_memory(&raw).map_err(|e| e.to_string())?;
     let h = (img.width() / 3).min(img.height());
     if wide {
@@ -2477,11 +2483,17 @@ fn decode(raw: bytes::Bytes, size: u32, wide: bool, round: bool) -> Result<Decod
         let d = (x as f32 + 0.5 - w as f32 / 2.0).hypot(y as f32 + 0.5 - h as f32 / 2.0);
         p.0[3] = (p.0[3] as f32 * (r - d + 0.5).clamp(0.0, 1.0)) as u8;
     }
-    Ok((
+    let d = (
         color,
         image::Handle::from_rgba(w, h, img.into_raw()),
         (w * h * 4) as usize,
-    ))
+    );
+    if big && !wide && size <= 300 {
+        let mut all = BIG.lock().expect("cover lock");
+        all.truncate(3);
+        all.insert(0, (key, d.clone()));
+    }
+    Ok(d)
 }
 
 fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {

@@ -199,7 +199,11 @@ mod wrap {
             }
             let w = self.0.as_widget_mut();
             w.update(&mut t.children[0], e, l, c, r, cb, sh, v);
+            let frame = std::time::Duration::from_millis(16);
             if let (Event::Window(RedrawRequested(now)), true) = (e, ring.1 != 0.0) {
+                if let Some(due) = ring.2.map(|t| t + frame).filter(|d| d > now) {
+                    return sh.request_redraw_at(due);
+                }
                 let dt = ring.2.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
                 let step = match ring.1.abs() < 1.5 {
                     true => ring.1,
@@ -213,7 +217,7 @@ mod wrap {
                 w.update(&mut t.children[0], &wheel, l, at, r, cb, sh, v);
                 match free && !sh.is_event_captured() {
                     true => ring.1 = 0.0,
-                    false if ring.1 != 0.0 => sh.request_redraw(),
+                    false if ring.1 != 0.0 => sh.request_redraw_at(*now + frame),
                     false => {}
                 }
             }
@@ -811,14 +815,19 @@ pub fn view(app: &App) -> El<'_> {
         let body = column![body.padding(48).height(Fill), player_bar(app)];
         let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];
         let body = container(body).style(theme::down(&bg));
-        return stack![body, modal, menu, toast].into();
+        let top = [modal, menu]
+            .into_iter()
+            .flatten()
+            .map(El::from)
+            .chain(toast.map(El::from));
+        return stack![body].extend(top).into();
     }
     let scroll = scrollable(pages::route(app)).id(SCROLL).on_scroll(|v| {
         let (b, c) = (v.bounds().height, v.content_bounds().height);
         Message::Scrolled(v.absolute_offset().y, b, c)
     });
     let scroll = scroll.style(theme::scroll).height(Fill);
-    let main = stack![scroll].push(pages::sticky(app));
+    let main = stack![scroll].extend(pages::sticky(app));
     let main = container(main).width(Fill).height(Fill).clip(true);
     let gap = || container(Space::new().width(8).height(Fill)).style(fill(BG, 0.0));
     let grip = |n| {
@@ -845,5 +854,10 @@ pub fn view(app: &App) -> El<'_> {
     let caps = row![gap(), caps(app.lib_w()), gap(), caps(app.main_w())].push(right);
     let pad = |h| Space::new().height(h);
     let caps = column![pad(64), caps.height(Fill), pad(72)];
-    stack![base, caps, modal, menu, toast].into()
+    let top = [modal, menu]
+        .into_iter()
+        .flatten()
+        .map(El::from)
+        .chain(toast.map(El::from));
+    stack![base, caps].extend(top).into()
 }
