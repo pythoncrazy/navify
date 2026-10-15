@@ -775,7 +775,7 @@ impl App {
     }
 
     fn save_queue(&self) -> Task<Message> {
-        if !self.cfg.settings.queue_sync {
+        if !self.cfg.settings.queue_sync || self.queue.iter().any(|s| !s.url.is_empty()) {
             return Task::none();
         }
         let ids: Vec<String> = self.queue.iter().map(|x| x.id.clone()).collect();
@@ -925,14 +925,17 @@ impl App {
         self.recent.retain(|s| s.id != song.id);
         self.recent.insert(0, song.clone());
         self.recent.truncate(50);
-        let lyr = self.request(&format!("lyrics:{}", song.id), 0);
-        let now = |s: Session| async move { s.scrobble(&song.id, false).await };
+        let song_id = song.id.clone();
+        let now = |s: Session| async move { s.scrobble(&song_id, false).await };
         let now = self.send(
             now,
             "Could not send the playing track to the server.",
             |_| Task::none(),
         );
-        let now = Task::batch(self.cfg.settings.scrobble.then_some(now));
+        let radio = !song.url.is_empty();
+        let now = Task::batch((self.cfg.settings.scrobble && !radio).then_some(now));
+        let lyr = (!radio).then(|| self.request(&format!("lyrics:{}", song.id), 0));
+        let lyr = Task::batch(lyr);
         #[cfg(all(unix, not(target_os = "macos")))]
         let files = self
             .session
@@ -2419,7 +2422,7 @@ pub const KEYS: [KeyAction; 23] = [
     ("repeat", "Repeat", "C+R", || act(App::repeat)),
     ("like", "Like the current song", "Alt+Shift+B", || {
         task(|a| {
-            let s = a.current_song();
+            let s = a.current_song().filter(|s| s.url.is_empty());
             let s = s.map(|s| (s.id.clone(), !a.is_starred(&s.id, s.starred)));
             Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
         })
@@ -2559,6 +2562,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             "genre" => Arc::new(s.albums("newest", &[("genre", arg)], offset, PAGE).await?),
             "genres" => Arc::new(s.genres().await?),
             "folders" => Arc::new(s.indexes().await?),
+            "radio" => Arc::new(s.radios().await?),
             "folder" => Arc::new(s.directory(arg).await?),
             "lyrics" => Arc::new(s.lyrics(arg).await?),
             "search" => Arc::new(s.search(arg, 20).await?),

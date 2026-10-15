@@ -450,12 +450,13 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     (rows, lo..hi)
 }
 
-const PINS: [(u8, char, bool, &str, &str); 5] = [
+const PINS: [(u8, char, bool, &str, &str); 6] = [
     (3, i::MUSIC, false, "Liked Songs", "liked"),
     (1, i::MUSIC, true, "Songs", "songs"),
     (4, i::ALBUM, false, "All albums", "albums"),
     (8, i::USER, false, "All artists", "artists"),
     (1, i::FOLDER, false, "Folders", "folders"),
+    (1, i::RADIO, false, "Radio stations", "radio"),
 ];
 
 fn lib_panel<'a>(app: &'a App) -> El<'a> {
@@ -561,12 +562,18 @@ fn player_bar(app: &App) -> El<'_> {
     let left = song.filter(|_| !app.full).map(|s| {
         let on = app.is_starred(&s.id, s.starred);
         let title = theme::ell(&s.title, 200.0, 14.0, Normal);
-        let title = btn(title, Message::Nav(format!("album:{}", s.album_id)));
+        let radio = !s.url.is_empty();
+        let home = if radio {
+            "radio".into()
+        } else {
+            format!("album:{}", s.album_id)
+        };
+        let title = btn(title, Message::Nav(home));
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));
         let lines = column![title, artists_line(&s.artists, 12.0, 200.0)].spacing(2);
-        let heart = side(theme::saved(on, 16.0), false, label, like);
+        let heart = (!radio).then(|| side(theme::saved(on, 16.0), false, label, like));
         row![art, lines, heart].spacing(12).align_y(Center)
     });
     let dur = song.map_or(0.0, |s| s.duration).max(1.0);
@@ -591,7 +598,7 @@ fn player_bar(app: &App) -> El<'_> {
         row![at, seek, total].spacing(8).align_y(Center).into()
     };
     let run = app.playing && !app.hidden && app.seek_preview.is_none();
-    let progress: El = match song {
+    let progress: El = match song.filter(|s| s.url.is_empty()) {
         None => {
             let rail = Space::new().width(Fill).height(4);
             let rail = container(rail).style(fill(theme::TRACK, 2.0));

@@ -46,6 +46,7 @@ async fn read_suite(s: &Session) -> Result<()> {
     let (name, kids) = s.directory(&s.indexes().await?[0].id).await?;
     assert!(!name.is_empty() && !kids.is_empty());
     s.genres().await?;
+    s.radios().await?;
     s.lyrics(&songs[0].id).await?;
     s.similar_songs(&songs[0].id, 3).await?;
     let cover = s.cover(&album.id, 128).await?;
@@ -80,6 +81,9 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     assert_eq!(api::parse::<Song>(sub)?.cover, "al1#h");
     let disc = json!({"id": "s", "coverArt": "dc-al1:2"});
     assert_eq!(api::parse::<Song>(disc)?.cover, "al1");
+    let fm = json!({"id": "r1", "name": "FM", "streamUrl": "http://x/s", "coverArt": ""});
+    let fm = api::parse::<Song>(fm)?;
+    assert_eq!((&*fm.title, &*fm.url, &*fm.cover), ("FM", "http://x/s", ""));
     assert!(api::parse::<Song>(json!({"title": 5})).is_err());
     assert!(api::parse::<Vec<Song>>(serde_json::Value::Null)?.is_empty());
     let native = json!({"id": "al1", "maxYear": 2015, "tags": {"recordlabel": ["L"], "releasetype": ["ep"]}});

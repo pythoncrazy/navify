@@ -544,7 +544,7 @@ pub fn route(app: &App) -> El<'_> {
         "discography" => discography(app),
         "search" | "genres" => search(app, arg),
         "albums" | "genre" | "artists" => Some(library(app, kind, arg)),
-        "folders" | "folder" => Some(folders(app)),
+        "folders" | "folder" | "radio" => Some(folders(app)),
         "lyrics" => Some(lyrics(app)),
         "settings" => Some(settings(app)),
         _ => Some(missing().into()),
@@ -1093,24 +1093,48 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
 
 fn folders<'a>(app: &'a App) -> El<'a> {
     let (w, rh) = (app.main_w() - 2.0 * PAD - 80.0, app.row_h());
-    let dir = |id: &str, name: &'a str| -> El<'a> {
-        let ic = container(i(i::FOLDER, 20.0).color(SUB).center()).center(rh - 16.0);
-        let row = media(ic.style(fill(ELEVATED, 4.0)).into(), name, "", w, TEXT);
+    let dir = |c: char, name: &'a str, url: &'a str, m: Message| -> El<'a> {
+        let fg = if app.current_song().is_some_and(|s| s.url == url) {
+            ACCENT
+        } else {
+            TEXT
+        };
+        let ic = container(i(c, 20.0).color(SUB).center()).center(rh - 16.0);
+        let row = media(ic.style(fill(ELEVATED, 4.0)).into(), name, url, w, fg);
         let b = button(row).padding([8, 16]).width(Fill).height(rh);
-        let b = b.style(theme::track(false));
-        b.on_press(go("folder", id)).into()
+        b.style(theme::track(false)).on_press(m).into()
     };
     let artists = app
         .data::<Vec<Artist>>(&app.route)
         .map_or(&[][..], |v| &v[..]);
+    let radio = app
+        .data::<Vec<Song>>(&app.route)
+        .map(|v| ("Radio stations", &v[..]));
     let dir_data = app.data::<(String, Vec<Song>)>(&app.route);
-    let (name, songs) = dir_data.map_or(("Folders", &[][..]), |(n, v)| (n.as_str(), &v[..]));
+    let dir_data = dir_data.map(|(n, v)| (n.as_str(), &v[..])).or(radio);
+    let (name, songs) = dir_data.unwrap_or(("Folders", &[][..]));
     let c = cols(app, false, false, songs.len());
     let (n, (off, view)) = (artists.len() + songs.len(), app.scroll());
     let (lo, hi) = span(off - DIR_Y, off - DIR_Y + view, rh, n, 6);
     let items = (lo..hi).map(|k| match k.checked_sub(artists.len()) {
-        None => dir(&artists[k].id, &artists[k].name),
-        Some(j) if songs[j].is_dir => dir(&songs[j].id, &songs[j].title),
+        None => dir(
+            i::FOLDER,
+            &artists[k].name,
+            "",
+            go("folder", &artists[k].id),
+        ),
+        Some(j) if songs[j].is_dir => {
+            dir(i::FOLDER, &songs[j].title, "", go("folder", &songs[j].id))
+        }
+        Some(j) if !songs[j].url.is_empty() => {
+            let s = &songs[j];
+            dir(
+                i::RADIO,
+                &s.title,
+                &s.url,
+                Message::Play(vec![s.clone()], 0, s.title.clone()),
+            )
+        }
         Some(j) => track(app, &songs[j], j, &app.route, c),
     });
     let list = gaps(lo, hi, n, rh, items);
@@ -1455,7 +1479,13 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let artist = bold(lead.map_or(&s.artist, |a| &a.name), 16.0);
     let artist = btn(artist, go("artist", lead.map_or(&s.artist_id, |a| &a.id)));
     let title = ell(&s.title, w - 40.0, 24.0, Bold);
-    let title = btn(title, go("album", &s.album_id));
+    let radio = !s.url.is_empty();
+    let home = if radio {
+        Message::Nav("radio".into())
+    } else {
+        go("album", &s.album_id)
+    };
+    let title = btn(title, home);
     let next = app.queue.get(app.real_at(app.index + 1)).map(|n| {
         let open = link_btn(bold("Open queue", 14.0), SUB, Message::Panel(2));
         let head = row![bold("Next in queue", 16.0).width(Fill), open];
@@ -1465,8 +1495,9 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
         ])
     });
     let lines = column![title, artists_line(&s.artists, 16.0, w - 40.0)].spacing(4);
-    let info = row![lines.width(Fill), heart_btn(&s.id, starred, 20.0)].align_y(Center);
-    let about = card(column![bold("About the artist", 16.0), artist]);
+    let heart = (!radio).then(|| heart_btn(&s.id, starred, 20.0));
+    let info = row![lines.width(Fill), heart].align_y(Center);
+    let about = (!radio).then(|| card(column![bold("About the artist", 16.0), artist]));
     let preview = lyric_at(app, s).map(|(l, cur, _)| {
         let lines = l.lines[cur.unwrap_or(0)..]
             .iter()
@@ -1505,7 +1536,10 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         .map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
     let fg = if cur { ACCENT } else { TEXT };
     let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);
-    let menu = Message::Menu(Box::new(MenuKind::Song(vec![s.clone()])));
+    let menu = match s.url.is_empty() {
+        true => Message::Menu(Box::new(MenuKind::Song(vec![s.clone()]))),
+        false => Message::Noop,
+    };
     let play = || Message::Play(vec![s.clone()], 0, "Recently played".into());
     let movable = n.filter(|&n| n > app.index);
     let to = app.qmove.filter(|&(f, t)| f != t && Some(t) == movable);
