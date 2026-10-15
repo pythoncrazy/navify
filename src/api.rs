@@ -130,6 +130,8 @@ pub struct Song {
     pub cover: String,
     pub is_dir: bool,
     pub artists: Vec<Artist>,
+    #[serde(alias = "streamUrl")]
+    pub url: String,
     #[serde(flatten)]
     pub rg: Rg,
 }
@@ -235,6 +237,11 @@ fn normalize(v: &mut Value) {
                 for l in lines.iter_mut().filter(|l| l.is_object()) {
                     *l = json!([l["start"], l["value"].as_str().unwrap_or_default()]);
                 }
+            }
+            if m.contains_key("streamUrl")
+                && let Some(n) = m.remove("name")
+            {
+                m.extend([("title".into(), n), ("cover".into(), "".into())]);
             }
             let has = m.get("hasCoverArt") != Some(&false.into());
             let id = m.get(["albumId", "id"][usize::from(has)]).cloned();
@@ -516,6 +523,9 @@ impl Session {
     }
 
     pub fn stream_url(&self, song: &Song, format: Option<&str>, br: u32) -> (String, bool) {
+        if !song.url.is_empty() {
+            return (song.url.clone(), true);
+        }
         let q = json!({"id": song.id, "format": format, "maxBitRate": (br > 0).then_some(br)});
         let transcoded = br > 0 || format.is_some_and(|f| f != "raw");
         (self.url("stream", &q), transcoded)
@@ -701,6 +711,11 @@ impl Session {
     pub async fn lyrics(&self, id: &str) -> Result<Vec<Lyrics>> {
         let ptr = "/lyricsList/structuredLyrics";
         self.get("getLyricsBySongId", json!({"id": id}), ptr).await
+    }
+
+    pub async fn radios(&self) -> Result<Vec<Song>> {
+        let ptr = "/internetRadioStations/internetRadioStation";
+        self.get("getInternetRadioStations", (), ptr).await
     }
 
     pub async fn indexes(&self) -> Result<Vec<Artist>> {
