@@ -399,13 +399,25 @@ fn top_bar(app: &App) -> El<'_> {
     let search = search.id("search").on_input(Message::Search);
     let search = search.on_submit(Message::SearchGo(app.search_seq));
     let search = search.style(style).icon(glass).width(474).size(16);
-    let search = search.font(theme::fw(Normal)).padding([13, 16]);
+    let search = search.font(theme::fw(Normal));
+    let search = search.padding(iced::Padding::new(13.0).left(16.0).right(48.0));
     let search = search.line_height(text::LineHeight::Absolute(22.0.into()));
     let browse = match app.route.starts_with("search") {
         true => Message::Noop,
         false => Message::Nav("search".into()),
     };
-    let search = mouse_area(search).on_release(browse);
+    let clear = (!app.search_q.is_empty()).then(|| {
+        let x = tip(
+            icon_btn(i::X, 20.0, Message::Search(String::new())),
+            "Clear",
+            Bottom,
+        );
+        container(x)
+            .padding(padding::right(14))
+            .align_right(474)
+            .center_y(48)
+    });
+    let search = stack![mouse_area(search).on_release(browse)].push(clear);
     let fwd = app.hi + 1 < app.history.len();
     let settings = Message::Nav("settings".into());
     let menu = Message::Menu(Box::new(MenuKind::User));
