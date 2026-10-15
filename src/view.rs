@@ -340,7 +340,8 @@ pub fn fmt_n(n: usize) -> String {
 pub fn fmt_long(s: f32) -> String {
     match s as u64 {
         s @ 3600.. => format!("{} hr {} min", s / 3600, s % 3600 / 60),
-        s => format!("{} min {} sec", s / 60, s % 60),
+        s @ 60.. => format!("{} min {} sec", s / 60, s % 60),
+        s => format!("{s} sec"),
     }
 }
 
