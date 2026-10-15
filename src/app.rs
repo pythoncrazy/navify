@@ -668,26 +668,39 @@ impl App {
     ) -> Task<Message> {
         self.menu = None;
         let done = format!("{verb} {}.", self.playlist(&pid).map_or("", |p| &p.name));
-        let (undo, id) = (reload(&pid), pid.clone());
+        let old = self
+            .playlist(&pid)
+            .map_or(String::new(), |p| p.cover.clone());
+        let fresh = self.pl_fresh(pid.clone(), old, 3);
+        let undo = reload(&pid);
         let f = |s: Session| async move { s.playlist_update(&pid, None, None, &add, &rm).await };
-        let fresh = move |p: Vec<Playlist>| {
-            let id = id.clone();
-            task(move |a| {
-                if let Some(new) = p.iter().find(|x| x.id == id) {
-                    let key = format!("playlist:{id}");
-                    a.edit::<(Playlist, Vec<Song>)>(&key, |(x, _)| x.cover = new.cover.clone());
-                }
-                a.edit::<Lib>("lib", |l| l.playlists = p.clone());
-                a.covers_now()
-            })
-        };
-        let load = |s: Session| async move { s.playlists().await };
-        let fresh = self.call(load, "Could not load the playlists.", fresh);
         Task::batch([
             self.send(f, "Could not change the playlist.", undo)
                 .chain(fresh),
             self.toast(&done),
         ])
+    }
+
+    fn pl_fresh(&self, id: String, old: String, n: u8) -> Task<Message> {
+        let ok = move |p: Vec<Playlist>| {
+            let (id, old) = (id.clone(), old.clone());
+            task(move |a| {
+                let new = p.iter().find(|x| x.id == id).map(|x| x.cover.clone());
+                if let Some(c) = &new {
+                    let key = format!("playlist:{id}");
+                    a.edit::<(Playlist, Vec<Song>)>(&key, |(x, _)| x.cover.clone_from(c));
+                }
+                a.edit::<Lib>("lib", |l| l.playlists = p.clone());
+                let hash = |c: &str| c.split_once('#').map_or("", |x| x.1).to_string();
+                let same = n > 0 && new.as_deref().map(hash) == Some(hash(&old));
+                let (id, old) = (id.clone(), old.clone());
+                let again = move |a: &mut App| a.pl_fresh(id.clone(), old.clone(), n - 1);
+                let again = same.then(|| later(2.0, task(again)));
+                Task::batch([a.covers_now()].into_iter().chain(again))
+            })
+        };
+        let load = |s: Session| async move { s.playlists().await };
+        self.call(load, "Could not load the playlists.", ok)
     }
 
     fn find_song(&self, id: &str) -> Option<Song> {
