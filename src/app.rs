@@ -326,6 +326,7 @@ pub struct App {
     pub seek_preview: Option<f32>,
     pub recent: Vec<Song>,
     pub recent_tab: bool,
+    pub qmove: Option<(usize, usize)>,
     pub full: bool,
     pub pl_find: Option<String>,
     pub pl_sort: u8,
@@ -1973,6 +1974,28 @@ impl App {
         Task::none()
     }
 
+    pub fn q_drop(&mut self) -> Task<Message> {
+        let ok = |&(f, t): &(usize, usize)| {
+            f != t && f.min(t) > self.index && f.max(t) < self.queue.len()
+        };
+        let Some((f, t)) = self.qmove.take().filter(ok) else {
+            return Task::none();
+        };
+        let v = self.shuffle.as_mut();
+        match v {
+            Some(o) => {
+                let x = o.remove(f);
+                o.insert(t, x);
+            }
+            None => {
+                let x = self.queue.remove(f);
+                self.queue.insert(t, x);
+            }
+        }
+        self.queue_next_refresh();
+        self.save_later()
+    }
+
     pub fn q_clear(&mut self) -> Task<Message> {
         let done = self.halt();
         (self.queue, self.index) = (Vec::new(), 0);
@@ -2331,6 +2354,11 @@ impl App {
                 })),
                 Event::Mouse(M::ButtonReleased(_)) => Some(Message::Drag(None)),
                 _ => None,
+            }));
+        }
+        if self.qmove.is_some() {
+            subs.push(event::listen_with(|e, _, _| {
+                matches!(e, Event::Mouse(M::ButtonReleased(_))).then(|| task(App::q_drop))
             }));
         }
         if self.playing && !self.hidden && (self.route == "lyrics" || self.panel == 1) {
