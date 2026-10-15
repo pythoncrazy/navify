@@ -144,7 +144,17 @@ async fn local_reads_and_writes_with_both_apis() -> Result<()> {
     let kind = e.downcast_ref::<std::io::Error>().map(std::io::Error::kind);
     assert_eq!(kind, Some(std::io::ErrorKind::PermissionDenied));
     read_suite(&s).await?;
+    let same = async |s: &Session| {
+        let n = |v: (Vec<Album>, usize)| v.0.len();
+        Ok::<_, Error>((
+            s.artists(0, 500).await?.1,
+            n(s.albums("recent", &[], 0, 500).await?),
+            n(s.albums("newest", &[("genre", "Jazz")], 0, 500).await?),
+        ))
+    };
+    let native = same(&s).await?;
     s.server.native = false;
+    assert_eq!(native, same(&s).await?);
     read_suite(&s).await?;
     let songs = s.songs("name", 0, 4).await?.0;
     let ids: Vec<String> = songs.into_iter().map(|x| x.id).collect();
