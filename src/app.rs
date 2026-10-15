@@ -293,6 +293,7 @@ pub struct App {
     pub loaded: bool,
     pub starred: HashMap<String, bool>,
     pub ratings: HashMap<String, u8>,
+    pub plays: HashMap<String, u32>,
     pub search_q: String,
     pub search_seq: u64,
     pub menu: Option<Menu>,
@@ -999,9 +1000,11 @@ impl App {
             .min(song.duration - st.crossfade_secs - 1.0)
             .max(0.0);
         let left = at - self.heard;
-        let id = song.id.clone();
+        let (id, base) = (song.id.clone(), song.play_count);
         if left <= 0.0 {
             self.scrobbled = true;
+            let n = self.plays.get(&id).map_or(base, |&n| n.max(base));
+            self.plays.insert(id.clone(), n + 1);
             let done = |s: Session| async move { s.scrobble(&id, true).await };
             return self.send(
                 done,
@@ -1265,7 +1268,7 @@ impl App {
     fn reset(&mut self) -> Task<Message> {
         let h = self.halt();
         (self.queue, self.shuffle, self.index, self.position) = (Vec::new(), None, 0, 0.0);
-        (self.starred, self.ratings, self.recent) = Default::default();
+        (self.starred, self.ratings, self.plays, self.recent) = Default::default();
         (self.cache, self.seeds, self.pending) = Default::default();
         (self.covers, self.ctx, self.history, self.hi) = Default::default();
         (self.route, self.expired.0, self.save_seq) =
