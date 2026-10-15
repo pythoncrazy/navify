@@ -109,6 +109,8 @@ async fn play_button_keeps_shuffle_and_shuffle_starts_anywhere() {
     });
     assert!(first.collect::<std::collections::HashSet<_>>().len() > 1);
     assert_eq!(navify::view::fmt_dur(3725.0), "1:02:05");
+    let long = [36.0, 96.0, 3725.0].map(navify::view::fmt_long);
+    assert_eq!(long, ["36 sec", "1 min 36 sec", "1 hr 2 min"]);
 }
 
 #[test]
