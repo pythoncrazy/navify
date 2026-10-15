@@ -294,9 +294,16 @@ fn sort_row(sort: &str) -> &'static [&'static str; 4] {
 fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
     let asc = matches!(sort, "name" | "artist" | "album" | "genre" | "year");
     let order = if asc { "ASC" } else { "DESC" };
-    let field = sort_row(sort)[col];
-    let starred = (sort == "starred").then_some(true);
-    json!({"_sort": field, "_order": order, "_start": off, "_end": off + n, "starred": starred})
+    let mut q =
+        json!({"_sort": sort_row(sort)[col], "_order": order, "_start": off, "_end": off + n});
+    let only = match (sort, col) {
+        ("starred", _) => "starred",
+        ("rating", 2) => "has_rating",
+        ("recent" | "frequent", 2) => "recently_played",
+        _ => return q,
+    };
+    q[only] = true.into();
+    q
 }
 
 impl std::fmt::Debug for Session {
@@ -568,7 +575,9 @@ impl Session {
 
     pub async fn artists(&self, off: usize, n: usize) -> Paged<Artist> {
         if self.server.native {
-            return self.nd("artist", sorted("name", 2, off, n)).await;
+            let mut q = sorted("name", 2, off, n);
+            q["role"] = "albumartist".into();
+            return self.nd("artist", q).await;
         }
         let all = self.index("getArtists", "/artists/index").await?;
         Ok((all.iter().skip(off).take(n).cloned().collect(), all.len()))
