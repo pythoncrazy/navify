@@ -535,7 +535,7 @@ fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
     });
     let hero = row![blk(px, px, 6.0), lines.spacing(12)].spacing(PAD);
     let col = column![hero.align_y(iced::Bottom), blk(56.0, 56.0, 28.0)].extend(rows);
-    Some(col.spacing(PAD).padding(PAD).into())
+    Some(col.spacing(PAD).padding(PAD).width(Fill).into())
 }
 
 pub fn route(app: &App) -> El<'_> {
