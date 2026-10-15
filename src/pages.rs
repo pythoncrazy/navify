@@ -43,6 +43,10 @@ pub fn art_px(app: &App) -> f32 {
     (128.0 + (app.main_w() - 600.0) * 104.0 / 424.0).clamp(128.0, 232.0)
 }
 
+pub fn hero_h(app: &App) -> f32 {
+    art_px(app) + PAD + 64.0
+}
+
 fn plural(n: u32, word: &str) -> String {
     let s = if n == 1 { "" } else { "s" };
     format!("{} {word}{s}", fmt_n(n as usize))
@@ -650,8 +654,10 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
         let info = column![kind, title(app.main_w() - 3.0 * PAD - px), p.meta].spacing(8);
         let hero = row![p.art, info].spacing(PAD).align_y(iced::Bottom);
-        let hero = container(hero).padding(PAD).width(Fill);
-        hero.height(px + 2.0 * PAD).style(bg).into()
+        let hero = container(hero)
+            .padding(Padding::new(PAD).top(64.0))
+            .width(Fill);
+        hero.height(hero_h(app)).style(bg).into()
     };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
     let play = play_btn(app, 56.0, &app.route);
@@ -903,7 +909,7 @@ pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
 
 fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
-    let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
+    let y0 = hero_h(app) + BAR + HEAD;
     let pl = app.data::<(Playlist, Vec<Song>)>(&app.route);
     let pl = pl.filter(|(p, _)| app.owns(p));
     let empty = pl.is_some_and(|x| x.1.is_empty());
@@ -958,7 +964,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         }
         None => detail_of(app).map(|(p, _, c)| (p.title, p.color, Some(c), false))?,
     };
-    let top = [art_px(app) + 2.0 * PAD, app.main_w() / 3.0][usize::from(banner)];
+    let top = [hero_h(app), app.main_w() / 3.0][usize::from(banner)];
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
     let play = play_btn(app, 48.0, &app.route);
     let head = row![play, title].spacing(8).align_y(Center);

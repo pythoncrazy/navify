@@ -1953,7 +1953,7 @@ impl App {
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
             Message::Arrow(up) => {
-                use crate::pages::{BAR, DIR_Y, HEAD, PAD};
+                use crate::pages::{BAR, DIR_Y, HEAD};
                 let Some((key, n)) = self.sel.clone() else {
                     return Task::none();
                 };
@@ -1979,7 +1979,7 @@ impl App {
                 let discs = (1 + discs) * usize::from(multi && kind == "album");
                 let top = match kind {
                     "folder" => DIR_Y,
-                    _ => crate::pages::art_px(self) + 2.0 * PAD + BAR + HEAD,
+                    _ => crate::pages::hero_h(self) + BAR + HEAD,
                 };
                 let top = top + (n + discs) as f32 * self.row_h();
                 let (off, view) = self.scroll();
@@ -2268,7 +2268,7 @@ impl App {
             let lo = ((off - y0) / h).max(0.0) as usize;
             (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
         };
-        let y0 = crate::pages::art_px(self) + 2.0 * PAD + BAR + HEAD;
+        let y0 = crate::pages::hero_h(self) + BAR + HEAD;
         let rows = |v: &[Song]| span(v.len(), self.row_h(), 1, y0);
         let tiles = |n: usize| span(n, cw + 52.0, cols, GRID_Y);
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
