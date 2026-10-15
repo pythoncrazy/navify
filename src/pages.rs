@@ -8,7 +8,7 @@ use iced::widget::{
 use iced::{Center, Color, Fill, Padding, Right, color, padding};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Server, Song, Trio};
-use crate::app::{App, Home, Lib, Menu, MenuKind, Message, act, set, task};
+use crate::app::{App, Home, Lib, Menu, MenuKind, Message, act, later, set, task};
 use crate::config::Settings;
 use crate::theme::{
     self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
@@ -824,6 +824,67 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     Some((page, items, cols(app, true, true, n)))
 }
 
+fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
+    let Some(q) = app.pl_more.as_deref().or(empty.then_some("")) else {
+        let open = act(|a| a.pl_more = Some(String::new()));
+        let open = link_btn(bold("Find more", 14.0), TEXT, open);
+        return container(open).padding([16.0, PAD]).into();
+    };
+    let title = bold("Find songs for your playlist", 24.0);
+    let close = (!empty).then(|| icon_btn(i::X, 20.0, act(|a| a.pl_more = None)));
+    let head = row![title, Space::new().width(Fill)]
+        .push(close)
+        .align_y(Center);
+    let style = theme::input([ELEVATED; 2], [ELEVATED; 2], [0.0; 2], 4.0);
+    let field = text_input("Search for songs", q)
+        .id("plmore")
+        .width(360)
+        .size(14);
+    let field = field.on_input(|v| {
+        task(move |a| {
+            a.pl_more = Some(v.clone());
+            let v = v.trim().to_string();
+            let go = task(
+                move |a| match a.pl_more.as_deref().map(str::trim) == Some(&v) {
+                    true if !v.is_empty() => a.request(&format!("search:{v}"), 0),
+                    _ => iced::Task::none(),
+                },
+            );
+            later(0.25, go)
+        })
+    });
+    let glass = text_input::Icon {
+        font: theme::LUCIDE,
+        code_point: i::SEARCH,
+        size: Some(16.0.into()),
+        spacing: 8.0,
+        side: text_input::Side::Left,
+    };
+    let field = field.icon(glass).style(style).font(theme::fw(Normal));
+    let q = q.trim();
+    let hits = app
+        .data::<Trio>(&format!("search:{q}"))
+        .filter(|_| !q.is_empty());
+    let w = (app.main_w() - 2.0 * PAD - 200.0) / 2.0;
+    let rows = hits.into_iter().flat_map(|t| t.2.iter().take(10)).map(|s| {
+        let art = cover(app, &s.cover, 40.0, false);
+        let add = theme::pill_btn("Add", Message::PlAdd(p.id.clone(), vec![s.id.clone()]));
+        let album = container(theme::ell(&s.album, w - 16.0, 14.0, Normal).color(SUB)).width(w);
+        let r = row![
+            media(art, &s.title, &s.artist, w - 52.0, TEXT),
+            album,
+            Space::new().width(Fill),
+            add
+        ];
+        container(r.spacing(12).align_y(Center))
+            .padding([4.0, 0.0])
+            .into()
+    });
+    let col = column![head, field.padding([10, 12])].spacing(16);
+    let col = col.push(Column::with_children(rows));
+    container(col.spacing(16)).padding([16.0, PAD]).into()
+}
+
 pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
     let key = format!("artist:{}", a.artist_id);
     let all = app
@@ -837,9 +898,14 @@ pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
 fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
     let y0 = art_px(app) + 2.0 * PAD + BAR + HEAD;
-    let body = column![table_head(app, c), vlist(app, songs, &app.route, c, y0)];
+    let pl = app.data::<(Playlist, Vec<Song>)>(&app.route);
+    let pl = pl.filter(|(p, _)| app.owns(p));
+    let empty = pl.is_some_and(|x| x.1.is_empty());
+    let body = column![(!empty).then(|| table_head(app, c))];
+    let body = body.push(vlist(app, songs, &app.route, c, y0));
     let none = container(sub("There are no songs to show.", 16.0)).padding(PAD);
-    let body = body.push(songs.is_empty().then_some(none));
+    let body = body.push((songs.is_empty() && !empty).then_some(none));
+    let body = body.push(pl.map(|(p, _)| finder(app, p, empty)));
     let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
         let day = Some(date(&a.release_date)).filter(|d| !d.is_empty());
         let day = day.or((a.year > 0).then(|| a.year.to_string()));
