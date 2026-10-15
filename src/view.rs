@@ -496,7 +496,11 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let plus = row![i(i::PLUS, 16.0), bold("Create", 14.0)].spacing(8);
         let plus = button(container(plus.align_y(Center)).center_y(32)).padding([0, 16]);
         let plus = plus
-            .style(theme::round(CHIP))
+            .style(theme::btn(
+                [CHIP, color!(0x333333), color!(0x333333)],
+                [TEXT; 3],
+                500.0,
+            ))
             .on_press(Message::PlNew(String::new(), Vec::new()));
         let plus = tip(plus, "Create playlist", Bottom);
         let title = tip(title, "Collapse Your Library", Bottom);
