@@ -105,9 +105,17 @@ pub fn spawn(tx: UnboundedSender<Message>) -> Result<Box<dyn Any>, String> {
     cr.insert("/StatusNotifierItem", &[sni], ());
     cr.insert("/Menu", &[menu], ());
     let (w, p) = ("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher");
-    let reg = dbus::Message::new_method_call(w, p, w, "RegisterStatusNotifierItem");
-    c.send(reg.expect("the D-Bus names are valid").append1(&name))
-        .map_err(|()| "Cannot register the tray icon.".to_string())?;
+    let reg = move |c: &dbus::blocking::Connection| {
+        let m = dbus::Message::new_method_call(w, p, w, "RegisterStatusNotifierItem");
+        c.send(m.expect("the D-Bus names are valid").append1(&name))
+    };
+    reg(&c).map_err(|()| "Cannot register the tray icon.".to_string())?;
+    let owner = dbus::message::MatchRule::new_signal(d, "NameOwnerChanged").with_sender(d);
+    let again = move |(who, _, new): (String, String, String), c: &_, _: &_| {
+        let _ = (who == w && !new.is_empty()).then(|| reg(c));
+        true
+    };
+    c.add_match(owner, again).map_err(err)?;
     let rule = dbus::message::MatchRule::new_method_call();
     c.start_receive(rule, Box::new(move |m, c| cr.handle_message(m, c).is_ok()));
     std::thread::Builder::new()
