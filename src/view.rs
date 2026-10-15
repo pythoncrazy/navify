@@ -181,11 +181,11 @@ mod wrap {
             }
             let ring = t.state.downcast_mut::<Ring>();
             match e {
-                Event::Keyboard(ModifiersChanged(m)) => ring.4 = m.shift(),
+                Event::Keyboard(ModifiersChanged(m)) => ring.4 = !m.is_empty(),
                 Event::Mouse(WheelScrolled {
                     delta: ScrollDelta::Lines { x, y },
-                }) if self.3 && *x == 0.0 && !ring.4 => {
-                    ring.3 = c.position().unwrap_or(ring.3);
+                }) if self.3 && *x == 0.0 && !ring.4 && c.position().is_some() => {
+                    ring.3 = c.position().expect("the cursor is on the window");
                     if ring.1 * y < 0.0 {
                         ring.1 = 0.0;
                     }

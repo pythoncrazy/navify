@@ -198,6 +198,14 @@ fn normalize(v: &mut Value) {
                     m.extend(p.remove(role).map(|l| (key.to_string(), l)));
                 }
             }
+            if !m.contains_key("artists")
+                && let (Some(id), Some(name)) = (m.get("artistId"), m.get("artist"))
+                && id.is_string()
+                && name.is_string()
+            {
+                let one = json!([{"id": id, "name": name}]);
+                m.insert("artists".into(), one);
+            }
             if let Some(Value::Object(rg)) = m.remove("replayGain") {
                 m.extend(rg);
             }
@@ -306,7 +314,15 @@ impl Session {
                 concat!("navify/", env!("CARGO_PKG_VERSION")),
                 Duration::from_secs,
             );
-            let b = reqwest::Client::builder().user_agent(ua);
+            let same = reqwest::redirect::Policy::custom(|a| {
+                let first = &a.previous()[0];
+                let native = ["/api/", "/auth/"].iter().any(|p| first.path().contains(p));
+                match native && first.origin() != a.url().origin() {
+                    true => a.stop(),
+                    false => a.follow(),
+                }
+            });
+            let b = reqwest::Client::builder().user_agent(ua).redirect(same);
             let b = b.connect_timeout(t(10)).read_timeout(t(30));
             b.build().expect("HTTP client")
         })
@@ -333,7 +349,9 @@ impl Session {
     }
 
     pub async fn login(url: &str, user: &str, pass: &str) -> Result<Session> {
-        let url = url.trim().trim_end_matches('/');
+        let url = url.trim().split(['#', '?']).next().unwrap_or_default();
+        let url = url.trim_end_matches('/');
+        let url = url.strip_suffix("/app").unwrap_or(url);
         let url = format!("{}{url}", if url.contains("://") { "" } else { "https://" });
         let parsed = reqwest::Url::parse(&url).ok();
         let host = parsed.as_ref().and_then(reqwest::Url::host_str);
@@ -364,7 +382,10 @@ impl Session {
         let body = json!({"username": user, "password": pass});
         let req = s.http.post(format!("{}/auth/login", s.server.url));
         let res = req.json(&body).send().await.map_err(net_err)?;
-        let ok = res.status().is_success();
+        let (ok, status) = (res.status().is_success(), res.status().as_u16());
+        if !ok && status != 401 {
+            return Ok(s);
+        }
         let body: Value = res.json().await.unwrap_or_default();
         let refused = "The server refused the login. Check the username and password.";
         ensure!(ok, "{}", body["message"].as_str().unwrap_or(refused));
@@ -506,6 +527,10 @@ impl Session {
         let status = res.status().as_u16();
         let http = format!("The server returned HTTP {status} for cover art.");
         ensure!(status < 300, http);
+        let kind = res.headers().get(reqwest::header::CONTENT_TYPE);
+        let kind = kind.and_then(|k| k.to_str().ok()).unwrap_or_default();
+        let text = ["json", "xml", "text"].iter().any(|t| kind.contains(t));
+        ensure!(!text, "The server did not return a cover image.");
         let b = res.bytes().await.map_err(net_err)?;
         ensure!(!b.is_empty(), "The server returned an empty cover image.");
         static N: AtomicUsize = AtomicUsize::new(0);

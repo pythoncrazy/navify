@@ -927,7 +927,11 @@ fn artist(app: &App) -> Option<El<'_>> {
     let discog = column![heading("Discography", Some(all)), chips];
     let discog = discog.push(container(Row::with_children(shelf_cards)).padding([0, 12]));
     let similar = info.map_or(&[][..], |i| &i.similar[..]).iter().take(k);
-    let similar = shelf("Fans also like", None, similar.map(|x| artist_card(app, x)));
+    let similar = shelf(
+        "Similar artists",
+        None,
+        similar.map(|x| artist_card(app, x)),
+    );
     let appears = app.data::<Vec<Album>>(&format!("appears:{id}"));
     let appears = appears.into_iter().flatten().take(k);
     let appears = appears.map(|x| album_card(app, x, year_kind(x)));
@@ -981,7 +985,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let (artists_res, albums_res, songs_res) = app.data::<Trio>(&app.route)?;
     if artists_res.is_empty() && albums_res.is_empty() && songs_res.is_empty() {
         let title = bold(format!("No results found for \u{201c}{q}\u{201d}"), 24.0);
-        let hint = "Check the spelling, or use fewer or different keywords.";
+        let hint = "Make sure that the spelling is correct. Use fewer words or different words.";
         let hint = sub(hint, 16.0);
         let col = column![title, hint].spacing(16).align_x(Center);
         return Some(container(col).center_x(Fill).padding(80).into());
@@ -1120,13 +1124,13 @@ fn lyrics(app: &App) -> El<'_> {
         return t.height(app.scroll().1).style(bg).into();
     };
     let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
-    let at = |t: u64| t as i64 + l.offset + lag;
+    let at = |t: u64| t as i64 - l.offset + lag;
     use iced::alignment::Horizontal as H;
     let align = [H::Left, H::Center, H::Right][usize::from(app.cfg.settings.lyrics_align.min(2))];
     let lines = l.lines.iter().enumerate().map(|(n, (t, line))| -> El<'_> {
         let fg = match n {
-            _ if !synced || n == cur => TEXT,
-            n if n < cur => theme::tint(0.7),
+            _ if !synced || Some(n) == cur => TEXT,
+            n if cur.is_some_and(|c| n < c) => theme::tint(0.7),
             _ => BG.scale_alpha(0.8),
         };
         let size = app.cfg.settings.lyrics_size;
@@ -1150,27 +1154,35 @@ fn lyrics(app: &App) -> El<'_> {
 
 pub fn lyric_scroll(app: &App) -> Option<(usize, f32)> {
     let (l, cur, _) = lyric_at(app, app.current_song()?)?;
-    let w = (app.main_w() - 4.0 * PAD).min(900.0);
-    let rows = |s: &str| (s.chars().count() as f32 * 17.6 / w).ceil().max(1.0);
-    let ys = l.lines[..cur].iter().map(|x| rows(&x.1) * 41.6 + 16.0);
+    let (w, px, cur) = (
+        (app.main_w() - 4.0 * PAD).min(900.0),
+        app.cfg.settings.lyrics_size,
+        cur.unwrap_or(0),
+    );
+    let rows = |s: &str| (s.chars().count() as f32 * px * 0.55 / w).ceil().max(1.0);
+    let ys = l.lines[..cur].iter().map(|x| rows(&x.1) * px * 1.3 + 16.0);
     Some((
         cur,
         (48.0 + ys.sum::<f32>() - app.scroll().1 * 0.3).max(0.0),
     ))
 }
 
-fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, usize, bool)> {
+fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, Option<usize>, bool)> {
     let all = app.data::<Vec<Lyrics>>(&format!("lyrics:{}", song.id))?;
-    let l = all.iter().find(|l| !l.lines.is_empty())?;
+    let any = |synced: bool| {
+        all.iter()
+            .find(move |l| !l.lines.is_empty() && l.synced >= synced)
+    };
+    let l = any(true).or_else(|| any(false))?;
     let ms = (app.position * 1000.0) as i64;
     let end = (song.duration * 1000.0) as i64;
     let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
-    let at = |t: u64| t as i64 + l.offset + lag;
+    let at = |t: u64| t as i64 - l.offset + lag;
     let fits = l.lines.iter().filter_map(|x| x.0).all(|t| at(t) <= end);
     let synced = l.synced && (end <= 0 || fits);
     let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
     let cur = l.lines.iter().rposition(past).filter(|_| synced);
-    Some((l, cur.unwrap_or(0), synced))
+    Some((l, cur, synced))
 }
 
 fn pick<'a, T: Clone + Send + Sync + 'static>(
@@ -1381,10 +1393,13 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let paste = task(|_| {
         iced::clipboard::read().map(|t| {
             task(move |a| {
-                match serde_json::from_str::<Settings>(t.as_deref().unwrap_or_default()) {
+                let new = serde_json::from_str::<Settings>(t.as_deref().unwrap_or_default());
+                let new = new.map_err(|e| e.to_string());
+                match new.and_then(|n| n.check().map(|()| n).map_err(String::from)) {
                     Ok(mut new) => {
                         let s = &a.cfg.settings;
                         (new.window, new.device) = (s.window, s.device.clone());
+                        a.volume = new.volume;
                         let old = std::mem::replace(&mut a.cfg.settings, new);
                         iced::Task::batch([
                             a.settings(old),
@@ -1413,7 +1428,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
 pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let w = app.right_w() - 32.0;
     let Some(s) = app.current_song() else {
-        let t = sub("Nothing is playing.", 14.0);
+        let t = sub("No song plays now.", 14.0);
         return container(t).padding(16).into();
     };
     let starred = app.is_starred(&s.id, s.starred);
@@ -1438,7 +1453,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let info = row![lines.width(Fill), heart_btn(&s.id, starred, 20.0)].align_y(Center);
     let about = card(column![bold("About the artist", 16.0), artist]);
     let preview = lyric_at(app, s).map(|(l, cur, _)| {
-        let lines = l.lines[cur..]
+        let lines = l.lines[cur.unwrap_or(0)..]
             .iter()
             .filter(|x| !x.1.is_empty())
             .take(3)
@@ -1731,7 +1746,7 @@ pub fn login(app: &App) -> El<'_> {
     let remember = row![remember, txt("Remember password", 14.0)].spacing(12);
     let remember = btn(remember.align_y(Center), flip());
     let go = (!l.busy).then_some(Message::LSubmit);
-    let label = bold(if l.busy { "Logging in" } else { "Log In" }, 16.0).color(BG);
+    let label = bold(if l.busy { "Wait…" } else { "Log In" }, 16.0).color(BG);
     let submit = button(label.center().width(Fill)).style(theme::accent);
     let submit = submit.width(Fill).padding(14).on_press_maybe(go.clone());
     let form = column![

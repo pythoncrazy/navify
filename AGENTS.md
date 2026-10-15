@@ -105,7 +105,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
   - Icons: 16/20/24 px scale. No emoji. No borders where Spotify has none. Static skeletons for loading. Short STE messages for empty and error states.
   - Login page: the Spotify login layout (gradient background, centered #121212 card, 48 px heading, labels above 48 px inputs, green pill button, "Remember password" toggle, saved servers as rows).
   - Main layout: top bar (back/forward, home, search pill, settings, avatar), left "Your Library" panel (chips, Liked Songs first, collapsible), main panel, right panel (Now Playing view or Queue), player bar (72 px).
-  - Pages: Home (greeting tiles and shelves), album/playlist/liked (gradient header, action bar, track table, disc separators), artist (header, Popular, Discography, Fans also like, About), search (Browse all genre tiles, then Top result, Songs, Artists, Albums), lyrics (synced highlight, click to seek), library grids with sort pickers, folders, settings, and a context menu.
+  - Pages: Home (greeting tiles and shelves), album/playlist/liked (gradient header, action bar, track table, disc separators), artist (header, Popular, Discography, Similar artists, About), search (Browse all genre tiles, then Top result, Songs, Artists, Albums), lyrics (synced highlight, click to seek), library grids with sort pickers, folders, settings, and a context menu.
 - Resource budget applies to all effects: no timers, no continuous redraws.
 
 ### Phase C: integration and release
