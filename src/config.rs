@@ -183,7 +183,9 @@ impl Config {
         o.write(true).create(true).truncate(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-        std::io::Write::write_all(&mut o.open(&tmp)?, &serde_json::to_vec_pretty(self)?)?;
+        let mut f = o.open(&tmp)?;
+        std::io::Write::write_all(&mut f, &serde_json::to_vec_pretty(self)?)?;
+        f.sync_all()?;
         Ok(std::fs::rename(&tmp, &path)?)
     }
 }

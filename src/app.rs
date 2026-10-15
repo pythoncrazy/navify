@@ -392,6 +392,7 @@ impl App {
             && !app.shot.as_deref().is_some_and(|s| s.starts_with("login"))
             && let Some(((u, n), p)) = creds
         {
+            app.login.busy = true;
             login(u, n, p)
         } else if app.session.is_some() || app.route != "login" {
             let r = std::mem::take(&mut app.route);
@@ -990,7 +991,9 @@ impl App {
         };
         let st = &self.cfg.settings;
         let pct = (song.duration * st.scrobble_pct / 100.0).min(240.0);
-        let at = [pct, st.scrobble_secs.min(song.duration)][usize::from(st.scrobble_by_time)];
+        let at = [pct, st.scrobble_secs][usize::from(st.scrobble_by_time)]
+            .min(song.duration - st.crossfade_secs - 1.0)
+            .max(0.0);
         let left = at - self.heard;
         let id = song.id.clone();
         if left <= 0.0 {
@@ -1063,8 +1066,12 @@ impl App {
         };
         let mut tasks = Vec::new();
         for (id, size) in ids {
-            let e = self.covers.map.get(bare(&id));
-            let have = e.is_some_and(|e| e[slot(size)].is_some());
+            self.covers.tick += 1;
+            let (t, e) = (self.covers.tick, self.covers.map.get_mut(bare(&id)));
+            let have = e
+                .and_then(|e| e[slot(size)].as_mut())
+                .map(|s| s.0 = t)
+                .is_some();
             let bad = self.covers.failed.contains(bare(&id));
             if id.is_empty() || have || bad || !self.covers.want.insert((bare(&id).into(), size)) {
                 continue;
@@ -1507,8 +1514,18 @@ impl App {
             }
             Message::Star(ids, on) => {
                 (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
+                let was = |id: &String| {
+                    let s = self.starred.get(id).copied();
+                    s.or_else(|| self.find_song(id).map(|s| s.starred))
+                        .or_else(|| self.find_album(id).map(|a| a.starred))
+                        .or_else(|| self.find_artist(id).map(|a| a.starred))
+                };
+                let back: Vec<String> = ids
+                    .iter()
+                    .filter(|id| was(id) != Some(on))
+                    .cloned()
+                    .collect();
                 self.star(&ids, on);
-                let back = ids.clone();
                 let star = |s: Session| async move { s.star(&ids, on).await };
                 return self.send(star, "Could not update Your Library.", move |a| {
                     a.star(&back, !on);
@@ -1707,10 +1724,11 @@ impl App {
                     self.cfg.servers.retain(|s| s.id != id);
                     blocking("", move || config::forget(&id))
                 });
+                let q = Task::batch(self.loaded.then(|| self.save_queue()));
                 let h = self.reset();
                 self.session = None;
                 let (t, n) = (self.persist(), self.nav("login".into()));
-                return Task::batch([h, t, n].into_iter().chain(gone));
+                return Task::batch([q, h, t, n].into_iter().chain(gone));
             }
             Message::UseServer(id) => {
                 let Some(srv) = self.cfg.servers.iter().find(|s| s.id == id).cloned() else {
@@ -1872,7 +1890,7 @@ impl App {
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
             Message::Arrow(up) => {
-                use crate::pages::{BAR, HEAD, PAD};
+                use crate::pages::{BAR, DIR_Y, HEAD, PAD};
                 let Some((key, n)) = self.sel.clone() else {
                     return Task::none();
                 };
@@ -1890,11 +1908,16 @@ impl App {
                 let discs = pairs.filter(|w| w[0].disc != w[1].disc).count();
                 self.pick(key.clone(), n);
                 let (kind, _) = key.split_once(':').unwrap_or((&key, ""));
-                if key != self.route || !matches!(kind, "album" | "playlist" | "liked" | "songs") {
+                if key != self.route
+                    || !matches!(kind, "album" | "playlist" | "liked" | "songs" | "folder")
+                {
                     return Task::none();
                 }
                 let discs = (1 + discs) * usize::from(multi && kind == "album");
-                let top = crate::pages::art_px(self) + 2.0 * PAD + BAR + HEAD;
+                let top = match kind {
+                    "folder" => DIR_Y,
+                    _ => crate::pages::art_px(self) + 2.0 * PAD + BAR + HEAD,
+                };
                 let top = top + (n + discs) as f32 * self.row_h();
                 let (off, view) = self.scroll();
                 let to = match () {
@@ -2024,10 +2047,11 @@ impl App {
         Task::perform(again, move |r| {
             let r = r.map_err(|e| e.to_string());
             task(move |a| {
-                let keys = std::mem::take(&mut a.expired.0);
-                let Some(cur) = a.session.as_mut().filter(|s| s.server.id == id) else {
+                if a.session.as_ref().is_none_or(|s| s.server.id != id) {
                     return Task::none();
-                };
+                }
+                let keys = std::mem::take(&mut a.expired.0);
+                let cur = a.session.as_mut().expect("a session");
                 let note = match r.clone() {
                     Ok(Some(s)) => {
                         cur.renew(s.server);
@@ -2142,18 +2166,21 @@ impl App {
         if mode >= 2 {
             return self.update(Message::Queue(songs, mode == 3));
         }
-        self.start(songs, src, 0, mode == 1)
+        let sh = mode == 1 || self.shuffle.is_some();
+        self.start(songs, src, if sh { usize::MAX } else { 0 }, sh)
     }
 
     fn visible_covers(&self) -> Vec<(String, u32)> {
         let (off, view) = self.scroll();
         let (cols, cw) = self.grid();
-        let span = |n: usize, h: f32, per: usize| {
-            let lo = (off / h).max(0.0) as usize;
+        use crate::pages::{BAR, DIR_Y, GRID_Y, HEAD, PAD};
+        let span = |n: usize, h: f32, per: usize, y0: f32| {
+            let lo = ((off - y0) / h).max(0.0) as usize;
             (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
         };
-        let rows = |v: &[Song]| span(v.len(), self.row_h(), 1);
-        let tiles = |n: usize| span(n, cw + 52.0, cols);
+        let y0 = crate::pages::art_px(self) + 2.0 * PAD + BAR + HEAD;
+        let rows = |v: &[Song]| span(v.len(), self.row_h(), 1, y0);
+        let tiles = |n: usize| span(n, cw + 52.0, cols, GRID_Y);
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
         let (mut huge, mut head): (Vec<&String>, Vec<&String>) = Default::default();
@@ -2168,7 +2195,11 @@ impl App {
         } else if let Some((s, _)) = self.data::<Page<Song>>(key) {
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if let Some((_, s)) = self.data::<(String, Vec<Song>)>(key) {
-            small.extend(s[rows(s)].iter().map(|s| &s.cover));
+            small.extend(
+                s[span(s.len(), self.row_h(), 1, DIR_Y)]
+                    .iter()
+                    .map(|s| &s.cover),
+            );
         } else if key.starts_with("discography:") {
             big.extend(crate::pages::disc_view(self).iter().map(|a| &a.cover));
         } else if let Some((a, albums)) = self.data::<(Artist, Vec<Album>)>(key) {

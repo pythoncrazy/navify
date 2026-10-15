@@ -75,6 +75,31 @@ async fn shuffle_keeps_the_current_song() {
     assert!(cur(&app) == "a" && !app.playing && app.position == 0.0);
 }
 
+#[tokio::test]
+async fn play_button_keeps_shuffle_and_shuffle_starts_anywhere() {
+    let mut app = app();
+    let key = "album:a1".to_string();
+    let album: Album = parse(json!({"id": "a1"})).expect("album");
+    let songs = items::<Vec<Song>>("abcdef".chars().map(String::from));
+    let _ = app.update(Message::Loaded(
+        key.clone(),
+        0,
+        Ok(Arc::new((album, songs))),
+    ));
+    let _ = app.update(Message::PlayCtx(key.clone(), 0));
+    assert!(app.shuffle.is_none());
+    let _ = app.update(Message::Shuffle);
+    let _ = app.update(Message::PlayCtx(key.clone(), 0));
+    assert!(app.shuffle.is_some());
+    let _ = app.update(Message::Shuffle);
+    let first = (0..30).map(|_| {
+        let _ = app.update(Message::PlayCtx(key.clone(), 1));
+        app.current_song().expect("a song plays").id.clone()
+    });
+    assert!(first.collect::<std::collections::HashSet<_>>().len() > 1);
+    assert_eq!(navify::view::fmt_dur(3725.0), "1:02:05");
+}
+
 #[test]
 fn gain_follows_the_replaygain_settings() {
     let mut app = app();

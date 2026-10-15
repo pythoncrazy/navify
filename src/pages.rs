@@ -22,6 +22,7 @@ type Cols = (f32, f32, f32, f32);
 
 pub const PAD: f32 = 24.0;
 pub const GRID_Y: f32 = 136.0;
+pub const DIR_Y: f32 = 90.0;
 pub const BAR: f32 = 84.0;
 pub const HEAD: f32 = 53.0;
 const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
@@ -722,6 +723,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                     .width(220)
                     .size(14);
                 let t = t.on_input(|v| act(move |a| a.pl_find = Some(v.clone())));
+                let t = t.on_submit(Message::Noop);
                 let glass = text_input::Icon {
                     font: theme::LUCIDE,
                     code_point: i::SEARCH,
@@ -850,7 +852,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let b = container(c).padding([0.0, PAD]).center_y(64).width(Fill);
         b.style(fill(bg, 0.0))
     };
-    if app.route == "lyrics" && app.lyric.1.is_none() {
+    if app.route == "lyrics" && app.cfg.settings.lyrics_follow && app.lyric.1.is_none() {
         let t = bold("Show the current line", 14.0);
         let b = button(t)
             .padding([10, 20])
@@ -864,11 +866,15 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         return (off > GRID_Y - 64.0).then(|| bar(tools, theme::PANEL).into());
     }
     let artist = app.data::<(Artist, Vec<Album>)>(&app.route);
-    let (title, color, cols) = match artist {
-        Some((a, _)) => (&a.name[..], head_color(app, &a.cover), None),
-        None => detail_of(app).map(|(p, _, c)| (p.title, p.color, Some(c)))?,
+    let (title, color, cols, banner) = match artist {
+        Some((a, _)) => {
+            let b = app.data::<String>(&a.banner_key());
+            let b = b.is_some_and(|u| app.cfg.settings.banners && !u.is_empty());
+            (&a.name[..], head_color(app, &a.cover), None, b)
+        }
+        None => detail_of(app).map(|(p, _, c)| (p.title, p.color, Some(c), false))?,
     };
-    let top = art_px(app) + 2.0 * PAD;
+    let top = [art_px(app) + 2.0 * PAD, app.main_w() / 3.0][usize::from(banner)];
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
     let play = play_btn(app, 48.0, &app.route);
     let head = row![play, title].spacing(8).align_y(Center);
@@ -1086,25 +1092,30 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
 }
 
 fn folders<'a>(app: &'a App) -> El<'a> {
-    let w = app.main_w() - 2.0 * PAD - 80.0;
+    let (w, rh) = (app.main_w() - 2.0 * PAD - 80.0, app.row_h());
     let dir = |id: &str, name: &'a str| -> El<'a> {
-        let ic = container(i(i::FOLDER, 20.0).color(SUB).center()).center(40);
+        let ic = container(i(i::FOLDER, 20.0).color(SUB).center()).center(rh - 16.0);
         let row = media(ic.style(fill(ELEVATED, 4.0)).into(), name, "", w, TEXT);
-        let b = button(row).padding([8, 16]).width(Fill);
+        let b = button(row).padding([8, 16]).width(Fill).height(rh);
         let b = b.style(theme::track(false));
         b.on_press(go("folder", id)).into()
     };
-    let artists = app.data::<Vec<Artist>>(&app.route).into_iter().flatten();
-    let artists = artists.map(|x| dir(&x.id, &x.name));
+    let artists = app
+        .data::<Vec<Artist>>(&app.route)
+        .map_or(&[][..], |v| &v[..]);
     let dir_data = app.data::<(String, Vec<Song>)>(&app.route);
     let (name, songs) = dir_data.map_or(("Folders", &[][..]), |(n, v)| (n.as_str(), &v[..]));
     let c = cols(app, false, false, songs.len());
-    let songs = songs.iter().enumerate().map(|(n, s)| match s.is_dir {
-        true => dir(&s.id, &s.title),
-        false => track(app, s, n, &app.route, c),
+    let (n, (off, view)) = (artists.len() + songs.len(), app.scroll());
+    let (lo, hi) = span(off - DIR_Y, off - DIR_Y + view, rh, n, 6);
+    let items = (lo..hi).map(|k| match k.checked_sub(artists.len()) {
+        None => dir(&artists[k].id, &artists[k].name),
+        Some(j) if songs[j].is_dir => dir(&songs[j].id, &songs[j].title),
+        Some(j) => track(app, &songs[j], j, &app.route, c),
     });
-    let list = Column::new().extend(artists).extend(songs);
-    let title = container(ell(name, app.main_w() - 2.0 * PAD, 32.0, Bold)).padding(PAD);
+    let list = gaps(lo, hi, n, rh, items);
+    let title = ell(name, app.main_w() - 2.0 * PAD, 32.0, Bold);
+    let title = container(title).padding(PAD).height(DIR_Y);
     column![title, container(list).padding(Padding::new(PAD).top(0))].into()
 }
 
@@ -1178,7 +1189,11 @@ fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, Option<usize>,
     let end = (song.duration * 1000.0) as i64;
     let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
     let at = |t: u64| t as i64 - l.offset + lag;
-    let fits = l.lines.iter().filter_map(|x| x.0).all(|t| at(t) <= end);
+    let fits = l
+        .lines
+        .iter()
+        .filter_map(|x| x.0)
+        .all(|t| at(t) <= end + 1000);
     let synced = l.synced && (end <= 0 || fits);
     let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
     let cur = l.lines.iter().rposition(past).filter(|_| synced);
