@@ -141,7 +141,7 @@ fn bare(id: &str) -> &str {
     id.split_once('#').map_or(id, |x| x.0)
 }
 
-fn later(secs: f32, m: Message) -> Task<Message> {
+pub(crate) fn later(secs: f32, m: Message) -> Task<Message> {
     Task::future(tokio::time::sleep(Duration::from_secs_f32(secs))).map(move |()| m.clone())
 }
 
@@ -338,6 +338,7 @@ pub struct App {
     pub qmove: Option<(usize, usize)>,
     pub full: bool,
     pub pl_find: Option<String>,
+    pub pl_more: Option<String>,
     pub pl_sort: u8,
     pl_view: (String, Stamp, Option<Rows>),
 }
@@ -779,7 +780,7 @@ impl App {
         })
     }
 
-    fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
+    pub(crate) fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
         let fresh = |(t, v): &(Instant, AnyData)| t.elapsed() < STALE && !v.is::<String>();
         if offset == 0 && self.cache.get(key).is_some_and(fresh) {
             return Task::none();
@@ -1215,7 +1216,7 @@ impl App {
 
     fn show(&mut self) -> Task<Message> {
         let route = self.history[self.hi].clone();
-        (self.route, self.pl_find) = (route.clone(), None);
+        (self.route, self.pl_find, self.pl_more) = (route.clone(), None, None);
         (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
         (self.popular_all, self.disc_chip) = (false, 0);
         let q = route.strip_prefix("search:").unwrap_or("");
@@ -2259,6 +2260,13 @@ impl App {
             small.push(a.artists.first().map_or(&a.artist_id, |x| &x.cover));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             let s = self.songs_of(key).map_or(&s[..], |x| x.0);
+            let q = self.pl_more.as_deref().unwrap_or("").trim();
+            let hits = self.data::<Trio>(&format!("search:{q}"));
+            small.extend(
+                hits.iter()
+                    .flat_map(|t| t.2.iter().take(10))
+                    .map(|s| &s.cover),
+            );
             head.push(&p.cover);
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if let Some((s, _)) = self.data::<Page<Song>>(key) {
