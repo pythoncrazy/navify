@@ -98,6 +98,10 @@ fn render_gives_exact_length_and_gain() {
     };
     let ratio = peak(0.25) / peak(1.0);
     assert!((ratio - 0.25).abs() <= 0.001, "gain ratio {ratio}");
+    let (io, t) = setup("Five", None);
+    let pcm = render(io, t, RATE, 0.0, 0.0).expect("render 5.1");
+    let side = |j| pcm.iter().skip(j).step_by(2).fold(0f32, |m, s| m.max(s.abs()));
+    assert!(side(0) > 0.02 && side(1) > 0.02, "5.1 center is missing");
 }
 
 #[cfg(target_os = "linux")]

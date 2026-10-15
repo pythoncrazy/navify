@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::error::Error;
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -18,8 +18,9 @@ use rubato::{
     WindowFunction,
 };
 use rusty_opus::OpusDecoder;
+use symphonia::core::audio::Channels;
 use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
-use symphonia::core::errors::Error as SymError;
+use symphonia::core::errors::{Error as SymError, SeekErrorKind};
 use symphonia::core::formats::{FormatReader, SeekMode, SeekTo, TrackType, probe::Hint};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::packet::Packet;
@@ -463,7 +464,7 @@ impl Source {
                 Some(p) => {
                     let mut d = symphonia::default::get_codecs()
                         .make_audio_decoder(&p, &Default::default())?;
-                    let mut buf: Vec<f32> = Vec::new();
+                    let (mut buf, mut w) = (Vec::<f32>::new(), Vec::<[f32; 2]>::new());
                     Box::new(move |p, out| {
                         let Some(p) = p else {
                             d.reset();
@@ -471,8 +472,37 @@ impl Source {
                         };
                         let b = d.decode(p)?;
                         let ch = b.spec().channels().count().max(1);
+                        if w.len() != ch {
+                            const L: u64 = 1 | 1 << 4 | 1 << 6 | 1 << 9 | 1 << 12 | 1 << 15;
+                            const R: u64 = 2 | 1 << 5 | 1 << 7 | 1 << 10 | 1 << 14 | 1 << 17;
+                            const C: u64 = 1 << 2 | 1 << 8 | 1 << 11 | 1 << 13 | 1 << 16;
+                            let side = |b: u64| {
+                                let k = if b & 3 != 0 { 1.0 } else { FRAC_1_SQRT_2 };
+                                let l = b & (L | 1 << 19 | 1 << 22 | 1 << 24) != 0;
+                                let r = b & (R | 1 << 20 | 1 << 23 | 1 << 25) != 0;
+                                let c = b & (C | 1 << 21) != 0;
+                                [k * f32::from(l || c), k * f32::from(r || c)]
+                            };
+                            w = match b.spec().channels() {
+                                Channels::Positioned(p) if ch > 2 => {
+                                    p.iter().map(|q| side(q.bits())).collect()
+                                }
+                                _ => (0..ch)
+                                    .map(|i| {
+                                        [f32::from(ch == 1 || i == 0), f32::from(ch == 1 || i == 1)]
+                                    })
+                                    .collect(),
+                            };
+                            let sum = |j: usize| w.iter().map(|x| x[j]).sum::<f32>();
+                            let n = 1.0 / sum(0).max(sum(1)).max(1.0);
+                            w.iter_mut().for_each(|x| *x = x.map(|v| v * n));
+                        }
                         b.copy_to_vec_interleaved(&mut buf);
-                        out.extend(buf.chunks_exact(ch).flat_map(|f| [f[0], f[ch.min(2) - 1]]));
+                        out.extend(buf.chunks_exact(ch).flat_map(|f| {
+                            let mix =
+                                |j: usize| f.iter().zip(&w).map(|(s, x)| s * x[j]).sum::<f32>();
+                            [mix(0), mix(1)]
+                        }));
                         Ok(())
                     })
                 }
@@ -518,7 +548,7 @@ impl Source {
         let have = usize::from(st.start == 0 && st.end() >= need);
         drop(st);
         let mode = [SeekMode::Coarse, SeekMode::Accurate][have];
-        let (track_id, past) = (self.tid, self.dur > 0.0 && secs as f64 >= self.dur);
+        let (track_id, mut past) = (self.tid, self.dur > 0.0 && secs as f64 >= self.dur);
         let t = self.demux.tracks().iter().find(|t| t.id == track_id);
         let start = t.ok_or("invalid track")?.start_ts;
         if !past {
@@ -527,9 +557,14 @@ impl Source {
                 .calc_timestamp(time)
                 .ok_or("invalid seek")?
                 .max(start);
-            let to = self.demux.seek(mode, SeekTo::Timestamp { ts, track_id })?;
-            let at = self.tb.calc_time_saturating(to.actual_ts).as_secs_f64();
-            self.skip = ((target - at) * self.rate).max(0.0) as usize;
+            match self.demux.seek(mode, SeekTo::Timestamp { ts, track_id }) {
+                Ok(to) => {
+                    let at = self.tb.calc_time_saturating(to.actual_ts).as_secs_f64();
+                    self.skip = ((target - at.max(0.0)) * self.rate).max(0.0) as usize;
+                }
+                Err(SymError::SeekError(SeekErrorKind::OutOfRange)) => past = true,
+                Err(e) => Err(e)?,
+            }
         }
         (self.dec)(None, &mut self.pcm)?;
         (self.rs, self.off, self.base, self.done, self.eof) = (None, 0, secs as f64, 0, past);
@@ -833,7 +868,11 @@ fn open(
                 me.unpark();
             }
         },
-        move |e| {
+        move |e: cpal::Error| {
+            use cpal::ErrorKind::{DeviceChanged, RealtimeDenied, Xrun};
+            if matches!(e.kind(), Xrun | DeviceChanged | RealtimeDenied) {
+                return;
+            }
             if !sh2.broken.swap(true, Relaxed) && !sh2.paused.load(Relaxed) {
                 let _ = etx.send(Event::Error(e.to_string()));
             }
@@ -853,7 +892,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
     let mut marks = VecDeque::<(u64, Option<f32>, Option<Event>)>::new();
     let fail = |e: String| drop(tx.send(Event::Error(e)));
     loop {
-        let mut play = None;
+        let (mut play, mut seek) = (None, None);
         loop {
             let cmd = match rx.try_recv() {
                 Ok(c) => c,
@@ -877,10 +916,12 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                         .take_if(|p| at == 0.0 && p.0.url == t.url)
                         .and_then(|p| p.1);
                     let mut was = [mix.cur.take(), mix.old.take()];
-                    let same = |s: &mut Source| !t.transcoded && s.track.url == t.url;
+                    let same = |s: &mut Source| {
+                        !t.transcoded && s.track.url == t.url && s.net.st().err.is_none()
+                    };
                     let hit = was.iter_mut().find_map(|s| s.take_if(|s| same(s)));
                     mix.old = was.into_iter().flatten().find(|s| s.net.st().len.is_some());
-                    (mix.inc, mix.bad, play) = (None, None, Some((t, at, pre, hit)));
+                    (mix.inc, mix.bad, play, seek) = (None, None, Some((t, at, pre, hit)), None);
                     sh.set_pos(at, u64::MAX);
                 }
                 Cmd::Next(t) => match (&mut mix.pre, t) {
@@ -898,14 +939,18 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                     sh.set_pos(s, u64::MAX);
                     match &mut play {
                         Some(p) => (p.1, p.2) = (s, None),
-                        None => mix.seek(&io, s).unwrap_or_else(fail),
+                        None => seek = Some(s),
                     }
                 }
                 Cmd::Stop => {
                     (mix.cur, mix.inc, mix.old, mix.pre, play) = (None, None, None, None, None);
+                    seek = None;
                     sh.set_pos(0.0, u64::MAX);
                 }
             }
+        }
+        if let Some(s) = seek {
+            mix.seek(&io, s).unwrap_or_else(fail);
         }
         let (paused, fresh) = (sh.paused.load(Relaxed), play.is_some());
         if sh.broken.load(Relaxed) {
@@ -913,6 +958,7 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             sh.broken.store(false, Relaxed);
             if !paused {
                 (mix.cur, mix.inc) = (None, None);
+                marks.clear();
             }
         }
         if out.is_none() && !paused && !marks.is_empty() {
