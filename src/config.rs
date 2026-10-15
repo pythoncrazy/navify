@@ -179,7 +179,7 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         let (path, mut o) = (path(), std::fs::OpenOptions::new());
         std::fs::create_dir_all(path.parent().expect("the path has a directory"))?;
-        let tmp = path.with_extension("tmp");
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
         o.write(true).create(true).truncate(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);

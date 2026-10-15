@@ -78,6 +78,8 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     assert_eq!(api::parse::<Song>(bare)?.cover, "al1#h");
     let sub = api::parse::<serde_json::Value>(json!({"id": "s", "coverArt": "al-al1_h"}))?;
     assert_eq!(api::parse::<Song>(sub)?.cover, "al1#h");
+    let disc = json!({"id": "s", "coverArt": "dc-al1:2"});
+    assert_eq!(api::parse::<Song>(disc)?.cover, "al1");
     assert!(api::parse::<Song>(json!({"title": 5})).is_err());
     assert!(api::parse::<Vec<Song>>(serde_json::Value::Null)?.is_empty());
     let native = json!({"id": "al1", "maxYear": 2015, "tags": {"recordlabel": ["L"], "releasetype": ["ep"]}});
@@ -166,6 +168,15 @@ async fn local_reads_and_writes_with_both_apis() -> Result<()> {
     s.rate(&ids[0], 4).await?;
     s.scrobble(&ids[0], false).await?;
     s.scrobble(&ids[0], true).await?;
+    s.server.native = true;
+    for (sort, ok) in [("rating", 0), ("recent", 1), ("frequent", 1)] {
+        let (got, total) = s.songs(sort, 0, 500).await?;
+        let hit = |x: &Song| [x.user_rating > 0, x.play_count > 0][ok];
+        assert!(
+            !got.is_empty() && got.iter().all(hit) && total == got.len(),
+            "{sort}"
+        );
+    }
     let pl = s.playlist_create("navify test", &ids[..2]).await?;
     assert_eq!(pl.song_count, 2);
     let name = Some("navify test 2");
