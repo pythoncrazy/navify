@@ -98,9 +98,22 @@ fn render_gives_exact_length_and_gain() {
     };
     let ratio = peak(0.25) / peak(1.0);
     assert!((ratio - 0.25).abs() <= 0.001, "gain ratio {ratio}");
+    let (io, mut t) = setup("One Two", Some("mp3"));
+    t[0].duration += 0.5;
+    let pcm = render(io, t, RATE, 0.0, 1.0).expect("render early end");
+    let peak = |a: f32, b: f32| {
+        let at = |s: f32| (s * RATE as f32) as usize * 2;
+        pcm[at(a)..at(b)].iter().fold(0f32, |m, s| m.max(s.abs()))
+    };
+    assert!(peak(3.02, 3.1) < 0.9 * peak(4.0, 4.4), "the fade jumps");
     let (io, t) = setup("Five", None);
     let pcm = render(io, t, RATE, 0.0, 0.0).expect("render 5.1");
-    let side = |j| pcm.iter().skip(j).step_by(2).fold(0f32, |m, s| m.max(s.abs()));
+    let side = |j| {
+        pcm.iter()
+            .skip(j)
+            .step_by(2)
+            .fold(0f32, |m, s| m.max(s.abs()))
+    };
     assert!(side(0) > 0.02 && side(1) > 0.02, "5.1 center is missing");
 }
 

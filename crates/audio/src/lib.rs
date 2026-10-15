@@ -752,7 +752,7 @@ impl Mixer {
                 o.iter_mut().zip(b).for_each(|(o, b)| *o = *o * c + b * s);
             }
             self.fade.0 += out.len() / 2;
-            if self.fade.0 >= len || n < out.len() / 2 {
+            if self.fade.0 >= len {
                 self.cur = self.inc.take();
             }
             return Ok((n.max(m), ev));
