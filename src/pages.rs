@@ -125,7 +125,7 @@ fn shelf<'a>(
 ) -> El<'a> {
     let cards: Vec<El> = cards.collect();
     if cards.is_empty() {
-        return Space::new().into();
+        return Space::new().height(0).into();
     }
     let row = container(Row::with_children(cards)).padding([0, 12]);
     column![heading(title, all), row].spacing(8).into()

@@ -2261,11 +2261,25 @@ impl App {
             small.extend(pls.iter().take(3).map(|p| &p.cover));
             small.extend(h[0].iter().take(7).map(|a| &a.cover));
             let hs = cw + 132.0;
-            let near = |n: usize| (off - hs..off + view + hs).contains(&(184.0 + n as f32 * hs));
-            for (_, l) in h.iter().enumerate().filter(|x| near(x.0)) {
-                big.extend(l.iter().take(cols).map(|a| &a.cover));
+            let per = if self.main_w() - 2.0 * PAD >= 720.0 {
+                4
+            } else {
+                2
+            };
+            let tiles = (1 + pls.len().min(3) + h[0].len()).min(8);
+            let y0 = PAD + tiles.div_ceil(per) as f32 * 64.0 + 32.0;
+            let shelves = h
+                .iter()
+                .map(|l| l.iter().take(cols).map(|a| &a.cover).collect());
+            let shelves = shelves.chain([pls.iter().take(cols).map(|p| &p.cover).collect()]);
+            let shelves = shelves.filter(|l: &Vec<_>| !l.is_empty()).enumerate();
+            for (n, l) in shelves {
+                let y = y0 + n as f32 * hs;
+                big.extend(
+                    l.into_iter()
+                        .filter(|_| (off - hs..off + view + hs).contains(&y)),
+                );
             }
-            big.extend(pls.iter().take(cols).filter(|_| near(4)).map(|p| &p.cover));
         }
         let now = self.current_song().map(|s| &s.cover);
         small.extend(now);
