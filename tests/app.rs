@@ -81,7 +81,11 @@ async fn play_button_keeps_shuffle_and_shuffle_starts_anywhere() {
     let key = "album:a1".to_string();
     let album: Album = parse(json!({"id": "a1"})).expect("album");
     let songs = items::<Vec<Song>>("abcdef".chars().map(String::from));
-    let _ = app.update(Message::Loaded(key.clone(), 0, Ok(Arc::new((album, songs)))));
+    let _ = app.update(Message::Loaded(
+        key.clone(),
+        0,
+        Ok(Arc::new((album, songs))),
+    ));
     let _ = app.update(Message::PlayCtx(key.clone(), 0));
     assert!(app.shuffle.is_none());
     let _ = app.update(Message::Shuffle);
