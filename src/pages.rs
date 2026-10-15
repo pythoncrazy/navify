@@ -660,7 +660,12 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let view = tables
         .contains(&app.route.split(':').next().unwrap_or(""))
         .then(|| tool_btn(i::LIST, compact, set(|s, b| s.compact = b, !compact)));
-    let bar = row![play, shuffle].extend(p.extra).push(view).spacing(PAD);
+    let empty = app
+        .data::<(Playlist, Vec<Song>)>(&app.route)
+        .is_some_and(|x| x.1.is_empty());
+    let bar = Row::new().push((!empty).then_some(play));
+    let bar = bar.push((!empty).then_some(shuffle));
+    let bar = bar.extend(p.extra).push(view).spacing(PAD);
     let bar = container(bar.align_y(Center)).height(BAR);
     let bar = bar.padding(Padding::new(PAD).top(12).bottom(16));
     let rest = fade(theme::shade(p.color, 0.4), 232.0, column![bar, body]);
@@ -756,6 +761,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         });
         let sort = sort.text_size(14).font(theme::fw(Normal)).padding([8, 12]);
         let sort = sort.style(theme::pick(true)).menu_style(theme::pick_menu);
+        let some = !songs.is_empty();
         let comment = (!p.comment.is_empty()).then(|| sub(&p.comment, 14.0));
         let meta = column![comment, meta(bold(&p.owner, 14.0), rest)];
         let page = Page {
@@ -767,8 +773,8 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             extra: vec![
                 dots(MenuKind::Playlist(p.clone())),
                 Space::new().width(Fill).into(),
-                find,
-                sort.into(),
+                some.then_some(find).into(),
+                some.then_some(sort).into(),
             ],
             banner: None,
         };
