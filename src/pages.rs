@@ -50,8 +50,9 @@ fn plural(n: u32, word: &str) -> String {
 
 fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let idx = 16.0 + 8.0 * n.max(1).ilog10().saturating_sub(1) as f32;
-    let stars = if app.cfg.settings.ratings { 106.0 } else { 0.0 };
-    let w = app.main_w() - 2.0 * PAD - 184.0 - idx - stars;
+    let st = &app.cfg.settings;
+    let extra = 106.0 * f32::from(st.ratings) + 80.0 * f32::from(st.plays);
+    let w = app.main_w() - 2.0 * PAD - 184.0 - idx - extra;
     let (a, d) = (f32::from(album && w > 480.0), f32::from(date && w > 640.0));
     let w = w - 16.0 * (a + d);
     let fr = w / (6.0 + 4.0 * a + 3.0 * d);
@@ -188,6 +189,8 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     let r = r.push(h("Album", c.1)).push(h("Date added", c.2));
     let star = container(i(i::STAR, 16.0).color(SUB)).width(90);
     let r = r.push(app.cfg.settings.ratings.then_some(star));
+    let plays = sub("Plays", 14.0).width(64).align_x(Right);
+    let r = r.push(app.cfg.settings.plays.then_some(plays));
     let r = r.push(clock.padding(padding::right(52)));
     let r = r.spacing(16).padding([0, 16]).height(36).align_y(Center);
     let p = Padding::new(PAD).top(0).bottom(16);
@@ -234,11 +237,11 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
             .into(),
         false => column![name].push(by).spacing(2).into(),
     };
-    let plays = (s.play_count > 0).then(|| fmt_n(s.play_count as usize));
+    let plays = || (s.play_count > 0).then(|| fmt_n(s.play_count as usize));
     let album = ell(&s.album, c.1, 14.0, Normal);
     let album = link_btn(album, SUB, go("album", &s.album_id));
     let second: El = match pop {
-        true => sub(plays.unwrap_or_default(), 14.0).width(c.1).into(),
+        true => sub(plays().unwrap_or_default(), 14.0).width(c.1).into(),
         false => container(album).width(c.1).into(),
     };
     let more = hot.then(|| icon_btn(i::DOTS, 16.0, Message::RowMenu(key.into(), n)));
@@ -258,7 +261,15 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     });
     let tail = row![container(heart).width(32), dur, container(more).width(32)];
     let r = row![idx, name].push((c.1 > 0.0).then_some(second));
-    let r = r.push(added).push(stars).push(tail.align_y(Center));
+    let count = sub(plays().unwrap_or_default(), 14.0)
+        .width(64)
+        .align_x(Right);
+    let count = app.cfg.settings.plays.then_some(count);
+    let r = r
+        .push(added)
+        .push(stars)
+        .push(count)
+        .push(tail.align_y(Center));
     let r = r
         .spacing(16)
         .padding([0, 16])
@@ -1360,6 +1371,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         line("Zoom", zoom),
         on!(banners_label, banners),
         on!("Show the rating column", ratings),
+        on!("Show the play count column", plays),
         on!("Smooth scrolling", smooth),
         on!("Scroll the lyrics with the track", lyrics_follow),
         line("Lyrics offset (positive shows the lines later)", lag),
