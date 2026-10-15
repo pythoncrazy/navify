@@ -73,6 +73,9 @@ async fn shuffle_keeps_the_current_song() {
     let _ = app.update(Message::Next(true));
     let _ = app.update(Message::Next(false));
     assert!(cur(&app) == "a" && !app.playing && app.position == 0.0);
+    assert_eq!(app.title(), "Navify");
+    let _ = app.update(Message::Toggle);
+    assert!(app.playing && app.title().starts_with(&app.queue[0].title));
     let _ = app.update(Message::Play(songs("abcd"), 0, "t".into()));
     app.qmove = Some((1, 3));
     let _ = app.q_drop();
