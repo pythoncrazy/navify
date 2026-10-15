@@ -571,9 +571,11 @@ fn player_bar(app: &App) -> El<'_> {
         let b = b.style(theme::link(if on { ACCENT } else { SUB }));
         tip(b.on_press(m), label, Top)
     };
+    let room = (app.view_size().0 - 16.0) * 0.3;
+    let tw = (room - 112.0).min(200.0);
     let left = song.filter(|_| !app.full).map(|s| {
         let on = app.is_starred(&s.id, s.starred);
-        let title = theme::ell(&s.title, 200.0, 14.0, Normal);
+        let title = theme::ell(&s.title, tw, 14.0, Normal);
         let radio = !s.url.is_empty();
         let home = if radio {
             "radio".into()
@@ -584,7 +586,7 @@ fn player_bar(app: &App) -> El<'_> {
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));
-        let lines = column![title, artists_line(&s.artists, 12.0, 200.0)].spacing(2);
+        let lines = column![title, artists_line(&s.artists, 12.0, tw)].spacing(2);
         let heart = (!radio).then(|| side(theme::saved(on, 16.0), false, label, like));
         row![art, lines, heart].spacing(12).align_y(Center)
     });
@@ -644,7 +646,10 @@ fn player_bar(app: &App) -> El<'_> {
     let level = usize::from(vol > 0.0) + usize::from(vol >= 0.5);
     let vol_icon = ic([i::MUTE, i::VOL1, i::VOL2][level]);
     let lyrics = app.route == "lyrics";
-    let volume = slider(0.0..=1.0, vol, Message::Vol).step(0.01f32).width(93);
+    let fixed = [216.0, 108.0][usize::from(app.full)];
+    let device = room - fixed >= 56.0;
+    let vw = (room - fixed + [36.0, 0.0][usize::from(device)]).min(93.0);
+    let volume = slider(0.0..=1.0, vol, Message::Vol).step(0.01f32).width(vw);
     let volume = mouse_area(volume.style(theme::seek)).on_scroll(|d| match d {
         iced::mouse::ScrollDelta::Lines { y, .. } => Message::Step(true, y.clamp(-1.0, 1.0)),
         iced::mouse::ScrollDelta::Pixels { y, .. } => {
@@ -662,12 +667,12 @@ fn player_bar(app: &App) -> El<'_> {
     ];
     let right = row![
         (!app.full).then(|| panels.spacing(4)),
-        side(
+        device.then(|| side(
             ic(i::DEVICE),
             false,
             "Connect to a device",
             Message::Menu(Box::new(MenuKind::Device))
-        ),
+        )),
         side(vol_icon, false, mute, act(|a| a.muted = !a.muted)),
         volume,
         (app.full || app.current_song().is_some()).then(|| {
