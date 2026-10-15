@@ -591,7 +591,7 @@ impl App {
     pub(crate) fn songs_of(&self, key: &str) -> Option<(&[Song], String)> {
         if let Some(id) = key.strip_prefix("artist:") {
             let top = self.data::<Vec<Song>>(&format!("top:{id}"))?;
-            return Some((top, self.find_artist(id)?.name));
+            return Some((top, self.find_artist(id)?.name.clone()));
         }
         let (s, name) = song_list(&self.cache.get(key)?.1)?;
         let s = self.pl_rows(key).map_or(s, |v| &v.0[..]);
@@ -729,7 +729,7 @@ impl App {
         })
     }
 
-    fn find_artist(&self, id: &str) -> Option<Artist> {
+    pub fn find_artist(&self, id: &str) -> Option<&Artist> {
         self.cache.values().find_map(|(_, v)| {
             let lists = [
                 v.downcast_ref::<Page<Artist>>().map(|p| &p.0[..]),
@@ -740,7 +740,7 @@ impl App {
                 v.downcast_ref::<Lib>().map(|l| &l.artists[..]),
             ];
             let mut all = lists.into_iter().flatten().flatten();
-            all.find(|a| a.id == id).cloned()
+            all.find(|a| a.id == id)
         })
     }
 
@@ -760,7 +760,7 @@ impl App {
                     l.albums.retain(|x| x.id != a.id);
                     l.albums.extend(on.then_some(a));
                 });
-            } else if let Some(a) = self.find_artist(id) {
+            } else if let Some(a) = self.find_artist(id).cloned() {
                 self.edit::<Lib>("lib", |l| {
                     l.artists.retain(|x| x.id != a.id);
                     l.artists.extend(on.then_some(a));
@@ -952,6 +952,22 @@ impl App {
         Task::batch([done, began, self.listen(true)])
     }
 
+    pub fn lead_artist(&self) -> Option<&str> {
+        let s = self.current_song().filter(|s| s.url.is_empty())?;
+        let id = s.artists.first().map_or(&s.artist_id, |a| &a.id);
+        (!id.is_empty()).then_some(id)
+    }
+
+    pub fn artist_cover<'a>(&'a self, id: &'a str) -> &'a str {
+        self.find_artist(id).map_or(id, |a| &a.cover)
+    }
+
+    fn about(&mut self) -> Task<Message> {
+        let key = self.lead_artist().filter(|_| self.panel == 1);
+        let key = key.map(|id| format!("info:{id}"));
+        Task::batch(key.map(|k| self.request(&k, 0)))
+    }
+
     fn began(&mut self) -> Task<Message> {
         (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
         self.lyric = (usize::MAX, Some(0.0));
@@ -972,7 +988,7 @@ impl App {
         let radio = !song.url.is_empty();
         let now = Task::batch((self.cfg.settings.scrobble && !radio).then_some(now));
         let lyr = (!radio).then(|| self.request(&format!("lyrics:{}", song.id), 0));
-        let lyr = Task::batch(lyr);
+        let lyr = Task::batch([Task::batch(lyr), self.about()]);
         #[cfg(all(unix, not(target_os = "macos")))]
         let files = self
             .session
@@ -1127,10 +1143,12 @@ impl App {
                 let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
                 let wide = k.starts_with("https://");
                 let px = if wide { 1280 } else { size };
+                let crop = usize::from(k.starts_with("w:")) + 2 * usize::from(wide);
+                let aspect = [0.0, 5.0 / 3.0, 3.0][crop];
                 static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
                 let _one = ONE.acquire().await.expect("the decode semaphore is open");
                 let round = k.starts_with("o:");
-                let d = tokio::task::spawn_blocking(move || decode(b, px, wide, round));
+                let d = tokio::task::spawn_blocking(move || decode(b, px, aspect, round));
                 d.await.expect("decode task")
             };
             let done = move |r: Result<Decoded, String>| {
@@ -1227,7 +1245,9 @@ impl App {
         let id = route.strip_prefix("artist:");
         let parts = id.map(|id| ["top", "info", "appears"].map(|k| format!("{k}:{id}")));
         let parts = parts.as_ref().map_or(&[][..], |p| &p[..]);
-        let keep = |k: &String| *k == key || k == "lib" || parts.contains(k);
+        let about = self.lead_artist().map(|id| format!("info:{id}"));
+        let keep =
+            |k: &String| *k == key || k == "lib" || parts.contains(k) || about.as_ref() == Some(k);
         self.cache
             .retain(|k, (t, _)| t.elapsed() < STALE || keep(k));
         self.seeds.extend(self.seed(&key).map(|v| (key.clone(), v)));
@@ -1256,7 +1276,7 @@ impl App {
             .filter(|_| !self.cache.contains_key(key))?;
         Some(match kind {
             "album" => Arc::new((self.find_album(id)?, Vec::<Song>::new())),
-            "artist" => Arc::new((self.find_artist(id)?, Vec::<Album>::new())),
+            "artist" => Arc::new((self.find_artist(id)?.clone(), Vec::<Album>::new())),
             "playlist" => Arc::new((self.playlist(id)?.clone(), Vec::<Song>::new())),
             _ => return None,
         })
@@ -1739,7 +1759,7 @@ impl App {
             }
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
-                return self.covers_now();
+                return Task::batch([self.covers_now(), self.about()]);
             }
             Message::Drag(d) => {
                 self.drag = d;
@@ -2336,11 +2356,14 @@ impl App {
         small.extend(rows[span].iter().map(|r| r.0));
         let now = Vec::from_iter(now.filter(|_| self.panel == 1 || self.full));
         let side = [self.right_w() - 32.0, 300.0][usize::from(self.full)];
+        let lead = self.lead_artist().filter(|_| self.panel == 1 && !self.full);
+        let lead = lead.map(|id| (format!("w:{}", self.artist_cover(id)), self.bucket(side)));
         let art = crate::pages::art_px(self);
         let lists = [(big, cw - 24.0), (head, art), (now, side), (small, 56.0)];
         let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
         let all = lists.chain([(huge, 640)]);
         all.flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b)))
+            .chain(lead)
             .collect()
     }
 
@@ -2519,17 +2542,17 @@ pub const KEYS: [KeyAction; 23] = [
     ("quit", "Quit", "C+Q", || Message::Close),
 ];
 
-fn decode(raw: bytes::Bytes, size: u32, wide: bool, round: bool) -> Result<Decoded, String> {
+fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Decoded, String> {
     use {::image::imageops::FilterType, std::hash::BuildHasher};
     static BIG: std::sync::Mutex<Vec<(u64, Decoded)>> = std::sync::Mutex::new(Vec::new());
     let hash = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
-    let key = hash.hash_one((&raw[..], size, round));
+    let key = hash.hash_one((&raw[..], size, round, aspect.to_bits()));
     if let Some((_, d)) = BIG.lock().expect("cover lock").iter().find(|e| e.0 == key) {
         return Ok(d.clone());
     }
     let mut img = ::image::load_from_memory(&raw).map_err(|e| e.to_string())?;
-    let h = (img.width() / 3).min(img.height());
-    if wide {
+    if aspect > 0.0 {
+        let h = ((img.width() as f32 / aspect) as u32).min(img.height());
         img = img.crop_imm(0, (img.height() - h) * 3 / 10, img.width(), h);
     }
     let big = img.width() > size || img.height() > size;
@@ -2561,7 +2584,7 @@ fn decode(raw: bytes::Bytes, size: u32, wide: bool, round: bool) -> Result<Decod
         true => Color::from_rgb(l, l, l),
         false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
     };
-    if !wide && !big && !round {
+    if aspect == 0.0 && !big && !round {
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
     let mut img = img.into_rgba8();
@@ -2576,7 +2599,7 @@ fn decode(raw: bytes::Bytes, size: u32, wide: bool, round: bool) -> Result<Decod
         image::Handle::from_rgba(w, h, img.into_raw()),
         (w * h * 4) as usize,
     );
-    if big && !wide && size <= 300 {
+    if big && aspect == 0.0 && size <= 300 {
         let mut all = BIG.lock().expect("cover lock");
         all.truncate(3);
         all.insert(0, (key, d.clone()));
