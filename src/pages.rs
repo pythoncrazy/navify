@@ -125,7 +125,7 @@ fn shelf<'a>(
 ) -> El<'a> {
     let cards: Vec<El> = cards.collect();
     if cards.is_empty() {
-        return Space::new().into();
+        return Space::new().height(0).into();
     }
     let row = container(Row::with_children(cards)).padding([0, 12]);
     column![heading(title, all), row].spacing(8).into()
@@ -599,8 +599,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
         ("Most played", "frequent"),
         ("Random picks", "random"),
     ];
-    let shelves = shelves.into_iter().zip(h).filter(|x| !x.1.is_empty());
-    let shelves = shelves.map(|((t, s), l)| {
+    let shelves = shelves.into_iter().zip(h).map(|((t, s), l)| {
         let cards = l
             .iter()
             .take(k)
