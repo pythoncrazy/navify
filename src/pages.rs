@@ -599,7 +599,8 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
         ("Most played", "frequent"),
         ("Random picks", "random"),
     ];
-    let shelves = shelves.into_iter().zip(h).map(|((t, s), l)| {
+    let shelves = shelves.into_iter().zip(h).filter(|x| !x.1.is_empty());
+    let shelves = shelves.map(|((t, s), l)| {
         let cards = l
             .iter()
             .take(k)
