@@ -2281,7 +2281,7 @@ impl App {
     }
 
     pub fn title(&self) -> String {
-        let s = self.current_song();
+        let s = self.current_song().filter(|_| self.playing);
         s.map_or_else(
             || "Navify".into(),
             |s| format!("{} \u{2022} {}", s.title, s.artist),
