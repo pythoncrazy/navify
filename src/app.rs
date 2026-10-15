@@ -202,7 +202,7 @@ pub enum Message {
 
 #[derive(Debug, Default)]
 pub struct Covers {
-    map: HashMap<String, [Slot; 4]>,
+    map: HashMap<String, (String, [Slot; 4])>,
     pub bytes: usize,
     tick: u64,
     color: HashMap<String, Color>,
@@ -217,7 +217,7 @@ fn slot(size: u32) -> usize {
 
 impl Covers {
     pub fn get(&self, id: &str, size: u32) -> Option<image::Handle> {
-        let (e, mut near) = (self.map.get(bare(id))?, [0, 1, 2, 3]);
+        let ((_, e), mut near) = (self.map.get(bare(id))?, [0, 1, 2, 3]);
         near.sort_unstable_by_key(|&j| SIZES[j].abs_diff(size));
         near.iter().find_map(|&j| Some(e[j].as_ref()?.1.clone()))
     }
@@ -226,21 +226,29 @@ impl Covers {
         self.color.get(bare(id)).copied()
     }
     pub fn insert(&mut self, id: String, size: u32, (c, h, n): Decoded) {
-        let id = bare(&id).to_string();
+        let (id, hash) = id.split_once('#').unwrap_or((&id, ""));
         self.tick += 1;
-        self.color.insert(id.clone(), c);
-        let e = &mut self.map.entry(id).or_default()[slot(size)];
-        let old = e.replace((self.tick, h, n));
+        self.color.insert(id.to_string(), c);
+        let (old_hash, e) = self.map.entry(id.to_string()).or_default();
+        if !hash.is_empty() && old_hash != hash {
+            self.bytes -= e
+                .iter_mut()
+                .filter_map(Option::take)
+                .map(|s| s.2)
+                .sum::<usize>();
+            *old_hash = hash.to_string();
+        }
+        let old = e[slot(size)].replace((self.tick, h, n));
         self.bytes = self.bytes + n - old.map_or(0, |o| o.2);
         while self.bytes > COVER_CAP {
             let all = self
                 .map
                 .iter()
-                .flat_map(|(id, e)| e.iter().enumerate().map(move |(j, s)| (s, id, j)));
+                .flat_map(|(id, (_, e))| e.iter().enumerate().map(move |(j, s)| (s, id, j)));
             let all = all.filter_map(|(s, id, j)| Some((s.as_ref()?.0, id, j)));
             let (_, id, j) = all.min().expect("the counted bytes belong to covers");
             let id = id.clone();
-            let e = self.map.get_mut(&id).expect("the cover is cached");
+            let (_, e) = self.map.get_mut(&id).expect("the cover is cached");
             self.bytes -= e[j].take().expect("the slot is full").2;
             if e.iter().all(Option::is_none) {
                 self.map.remove(&id);
@@ -660,10 +668,24 @@ impl App {
     ) -> Task<Message> {
         self.menu = None;
         let done = format!("{verb} {}.", self.playlist(&pid).map_or("", |p| &p.name));
-        let undo = reload(&pid);
+        let (undo, id) = (reload(&pid), pid.clone());
         let f = |s: Session| async move { s.playlist_update(&pid, None, None, &add, &rm).await };
+        let fresh = move |p: Vec<Playlist>| {
+            let id = id.clone();
+            task(move |a| {
+                if let Some(new) = p.iter().find(|x| x.id == id) {
+                    let key = format!("playlist:{id}");
+                    a.edit::<(Playlist, Vec<Song>)>(&key, |(x, _)| x.cover = new.cover.clone());
+                }
+                a.edit::<Lib>("lib", |l| l.playlists = p.clone());
+                a.covers_now()
+            })
+        };
+        let load = |s: Session| async move { s.playlists().await };
+        let fresh = self.call(load, "Could not load the playlists.", fresh);
         Task::batch([
-            self.send(f, "Could not change the playlist.", undo),
+            self.send(f, "Could not change the playlist.", undo)
+                .chain(fresh),
             self.toast(&done),
         ])
     }
@@ -1075,8 +1097,10 @@ impl App {
         for (id, size) in ids {
             self.covers.tick += 1;
             let (t, e) = (self.covers.tick, self.covers.map.get_mut(bare(&id)));
+            let hash = id.split_once('#').map_or("", |x| x.1);
+            let e = e.filter(|(h, _)| hash.is_empty() || h == hash);
             let have = e
-                .and_then(|e| e[slot(size)].as_mut())
+                .and_then(|(_, e)| e[slot(size)].as_mut())
                 .map(|s| s.0 = t)
                 .is_some();
             let bad = self.covers.failed.contains(bare(&id));

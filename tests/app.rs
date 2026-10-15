@@ -274,6 +274,18 @@ fn cover_cache_drops_large_covers_over_the_limit() {
         app.covers.insert(format!("c{k}"), 640, d);
     }
     assert!(app.covers.bytes <= 8 << 20 && app.covers.get("c3", 640).is_some());
+    let d = |n| {
+        (
+            iced::Color::BLACK,
+            iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]),
+            n,
+        )
+    };
+    app.covers.insert("p#a".into(), 640, d(100));
+    app.covers.insert("p".into(), 128, d(10));
+    let before = app.covers.bytes;
+    app.covers.insert("p#b".into(), 128, d(20));
+    assert_eq!(app.covers.bytes, before - 110 + 20);
 }
 
 #[test]
