@@ -369,7 +369,7 @@ fn year_kind(a: &Album) -> String {
     }
 }
 
-fn by_date<'a>(v: impl Iterator<Item = &'a Album>) -> Vec<&'a Album> {
+pub fn by_date<'a>(v: impl Iterator<Item = &'a Album>) -> Vec<&'a Album> {
     let mut v: Vec<&Album> = v.collect();
     let day = |a: &&Album| a.release_date.clone().max(format!("{:04}", a.year));
     v.sort_by_cached_key(|a| std::cmp::Reverse(day(a)));
@@ -990,8 +990,16 @@ fn artist(app: &App) -> Option<El<'_>> {
     let on = app.is_starred(&a.id, a.starred);
     let all = app.popular_all;
     let n = if all { 10 } else { 5 }.min(top.len());
-    let mut c3 = cols(app, true, false, n);
-    c3.0 += 80.0 * f32::from(app.cfg.settings.plays);
+    let newest = by_date(albums.iter()).first().copied();
+    let newest = newest.filter(|_| app.main_w() >= 1000.0 && !top.is_empty());
+    let cut = (app.main_w() - 2.0 * PAD) * [0.0, 0.4][usize::from(newest.is_some())];
+    let c = cols(app, false, false, n);
+    let c3 = (
+        c.0 + 80.0 * f32::from(app.cfg.settings.plays) - cut - 136.0,
+        120.0,
+        0.0,
+        c.3,
+    );
     let more = (top.len() > 5).then(|| {
         let label = bold(if all { "Show less" } else { "See more" }, 14.0);
         let b = button(label).padding(16).style(theme::link(SUB));
@@ -1038,7 +1046,26 @@ fn artist(app: &App) -> Option<El<'_>> {
         let bio = container(bio.style(fill(ELEVATED, 8.0))).padding([0.0, PAD]);
         column![heading("About", None), bio].spacing(8)
     });
-    let popular = (!top.is_empty()).then(|| popular.spacing(8));
+    let pick = newest.map(|x| {
+        let px = app.grid().1 - 24.0;
+        let tw = cut - PAD - px - 40.0;
+        let meta = column![ell(&x.name, tw, 16.0, Bold), sub(year_kind(x), 14.0)].spacing(4);
+        let body = row![cover(app, &x.cover, px, false), meta]
+            .spacing(16)
+            .align_y(Center);
+        let b = button(body)
+            .padding(12)
+            .width(Fill)
+            .style(theme::track(false));
+        let b = container(b.on_press(go("album", &x.id))).padding([0.0, PAD - 12.0]);
+        column![heading("Latest release", None), b]
+            .spacing(8)
+            .width(Fill)
+    });
+    let popular = (!top.is_empty()).then(|| {
+        let left = popular.spacing(8).width(app.main_w() - cut);
+        row![left].push(pick)
+    });
     let discog = (!albums.is_empty()).then(|| discog.spacing(12));
     let body = column![popular, discog, similar, shelf("Appears On", None, appears)];
     let body = body.push(about).spacing(40);
