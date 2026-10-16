@@ -86,6 +86,7 @@ struct Shared {
     paused: AtomicBool,
     broken: AtomicBool,
     read: AtomicU64,
+    lag: AtomicU64,
     flush: AtomicU64,
     base: AtomicU64,
     rate: AtomicU32,
@@ -100,6 +101,7 @@ impl Shared {
         let ahead = self
             .read
             .load(Relaxed)
+            .saturating_sub(self.lag.load(Relaxed))
             .saturating_sub(self.base.load(Relaxed));
         get(&self.pos) + ahead as f32 / 2.0 / self.rate.load(Relaxed).max(1) as f32
     }
@@ -847,7 +849,14 @@ fn open(
     };
     let stream = dev.build_output_stream(
         config,
-        move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+        move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
+            let t = info.timestamp();
+            let delay = t
+                .playback
+                .saturating_duration_since(t.callback)
+                .as_secs_f64();
+            let lag = (delay * f64::from(rate)) as u64 * 2 + out.len() as u64;
+            sh.lag.store(lag, Relaxed);
             let stale = sh.flush.load(Relaxed).saturating_sub(read) as usize;
             if stale > 0
                 && let Ok(c) = cons.read_chunk(stale.min(cons.slots()))
