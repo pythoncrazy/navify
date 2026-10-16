@@ -869,7 +869,8 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let b = b.padding([14, x]).on_press_maybe(m.clone());
         focusable(b, m, 500.0, Some("layer"))
     };
-    let x = icon_btn(i::X, 16.0, Message::MenuClose);
+    let x = theme::sq(i(i::X, 20.0).center(), 32.0).style(theme::link(SUB));
+    let x = x.on_press(Message::MenuClose);
     let close = focusable(x, Some(Message::MenuClose), 16.0, Some("layer"));
     let style = fill(theme::MENU, 8.0);
     if kind == 3 {
@@ -1057,7 +1058,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let t = text_input(hint, v).id("layer");
         let t = t.on_input(move |v| Message::LField(n, v));
         let t = t.on_submit_maybe(ok.clone()).style(style);
-        t.font(theme::fw(Normal)).padding(10).size(14)
+        t.font(theme::fw(Normal)).padding(11).size(14)
     };
     let error = (!named).then(|| txt("Enter a name.", 12.0).color(theme::ERR));
     let name = column![input("Add a name", &app.new_pl, 3)];
@@ -1094,8 +1095,15 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     let save = save.align_y(Center);
     let head = row![bold("Edit details", 24.0).width(Fill), close].align_y(Center);
     let fields = row![art, column![name, desc].spacing(16)].spacing(16);
-    let body = column![column![head, fields].spacing(24), save].spacing(8);
-    let body = body.width(524).padding(24);
+    let fields = fields.padding(padding::right(9));
+    let body = column![
+        column![head, fields].spacing(24),
+        save.padding(padding::right(9))
+    ];
+    let body = body
+        .spacing(8)
+        .width(524)
+        .padding(iced::Padding::new(24.0).top(22).right(15));
     container(body).style(style).into()
 }
 
