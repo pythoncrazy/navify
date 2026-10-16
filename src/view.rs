@@ -495,7 +495,12 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let row = |art| media(art, title, sub, w - 112.0, fg).into();
         let body = if mini { art } else { row(art) };
         let b = button(body).padding(8).width(Fill);
-        let b = b.style(theme::track(same(&app.route)));
+        let a = match (same(&app.route), app.menu_on(&route)) {
+            (true, _) => 0.3,
+            (_, true) => 0.1,
+            _ => 0.0,
+        };
+        let b = b.style(theme::track(a));
         let menu = Message::LibMenu(route.clone());
         mouse_area(b.on_press(Message::Nav(route)))
             .on_right_press(menu)

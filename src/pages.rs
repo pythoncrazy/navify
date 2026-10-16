@@ -163,7 +163,8 @@ fn card<'a>(
     let art = if round { art } else { over(art) };
     let title = ell(title, img, 16.0, Normal);
     let lines = column![title, ell(sub, img, 14.0, Normal).color(SUB)].spacing(4);
-    let style = theme::btn([theme::CLEAR, ELEVATED, BG], [TEXT; 3], 6.0);
+    let idle = [theme::CLEAR, ELEVATED][usize::from(app.menu_on(&route))];
+    let style = theme::btn([idle, ELEVATED, BG], [TEXT; 3], 6.0);
     let b = button(column![art, lines].spacing(8)).padding(12);
     let b = b.style(style).width(cw).height(cw + 52.0);
     let b = b.on_press(Message::Nav(route));
@@ -1104,7 +1105,7 @@ fn artist(app: &App) -> Option<El<'_>> {
         let b = button(body)
             .padding(12)
             .width(Fill)
-            .style(theme::track(false));
+            .style(theme::track(0.0));
         let b = container(b.on_press(go("album", &x.id))).padding([0.0, PAD - 12.0]);
         column![heading("Latest release", None), b]
             .spacing(8)
@@ -1265,7 +1266,7 @@ fn folders<'a>(app: &'a App) -> El<'a> {
         let ic = container(i(c, 20.0).color(SUB).center()).center(rh - 16.0);
         let row = media(ic.style(fill(ELEVATED, 4.0)).into(), name, url, w, fg);
         let b = button(row).padding([8, 16]).width(Fill).height(rh);
-        b.style(theme::track(false)).on_press(m).into()
+        b.style(theme::track(0.0)).on_press(m).into()
     };
     let artists = app
         .data::<Vec<Artist>>(&app.route)
@@ -2049,7 +2050,7 @@ pub fn login(app: &App) -> El<'_> {
         let body = media(avatar.into(), &s.name, &s.user, W - 120.0, TEXT).push(drop);
         let pick = Message::UseServer(s.id.clone());
         let b = button(body).padding(8).width(Fill);
-        let b = b.style(theme::track(false));
+        let b = b.style(theme::track(0.0));
         focusable(b.on_press(pick.clone()), Some(pick), 4.0, None)
     });
     let error = (!l.error.is_empty()).then(|| {

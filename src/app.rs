@@ -579,6 +579,15 @@ impl App {
         [self.cfg.settings.panels.0, 72.0][usize::from(self.lib_mini())]
     }
 
+    pub fn menu_on(&self, route: &str) -> bool {
+        self.menu.as_ref().is_some_and(|m| match &m.kind {
+            MenuKind::Album(a) => route == format!("album:{}", a.id),
+            MenuKind::Artist(a) => route == format!("artist:{}", a.id),
+            MenuKind::Playlist(p) => route == format!("playlist:{}", p.id),
+            _ => false,
+        })
+    }
+
     pub fn right_w(&self) -> f32 {
         self.cfg.settings.panels.1
     }

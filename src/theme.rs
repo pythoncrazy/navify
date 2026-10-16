@@ -184,8 +184,7 @@ pub fn link(c: Color) -> impl Fn(&Theme, Status) -> BtnStyle {
     btn([CLEAR; 3], [c, h, h], 0.0)
 }
 
-pub fn track(sel: bool) -> impl Fn(&Theme, Status) -> BtnStyle {
-    let a = if sel { 0.3 } else { 0.0 };
+pub fn track(a: f32) -> impl Fn(&Theme, Status) -> BtnStyle {
     btn([tint(a), tint(a.max(0.1)), tint(0.3)], [TEXT; 3], 4.0)
 }
 
