@@ -555,10 +555,13 @@ impl Session {
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
         let id = match id.find("https://") {
             Some(i) => &id[i..],
-            None => ["o:", "w:"]
-                .iter()
-                .find_map(|p| id.strip_prefix(p))
-                .unwrap_or(id),
+            None => {
+                let wide = id.strip_prefix('b').and_then(|r| r.split_once(':'));
+                let wide = wide.filter(|(n, _)| n.parse::<f32>().is_ok());
+                ["w:", "o:"].iter().fold(wide.map_or(id, |w| w.1), |id, p| {
+                    id.strip_prefix(p).unwrap_or(id)
+                })
+            }
         };
         let file = self.cover_file(id, size);
         if let Ok(b) = fs::read(&file).await

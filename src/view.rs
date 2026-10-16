@@ -909,6 +909,54 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let body = container(body).width(500).height(h);
         return body.style(fill(ELEVATED, 4.0)).into();
     }
+    if kind == 6 {
+        let a = app.data::<(Artist, Vec<crate::api::Album>)>(&format!("artist:{id}"));
+        let a = &a.expect("the artist page opens the dialog").0;
+        let bio = app.data::<crate::api::Info>(&format!("info:{id}"));
+        let bio = bio.map_or(String::new(), |i| pages::plain(&i.biography));
+        let pic = app
+            .covers
+            .get(&format!("b18:{}", app.artist_cover(id)), 640);
+        let pic = pic.map(|h| {
+            let img = image(h).width(Fill).height(432);
+            let img = img.border_radius(iced::border::Radius::new(8.0).bottom(0.0));
+            img.content_fit(iced::ContentFit::Fill)
+        });
+        let x = button(i(i::X, 16.0).center())
+            .width(32)
+            .height(32)
+            .padding(0);
+        let dark = BG.scale_alpha(0.7);
+        let x = x.style(theme::solid([dark, BG.scale_alpha(0.8), dark], TEXT));
+        let x = focusable(
+            x.on_press(Message::MenuClose),
+            Some(Message::MenuClose),
+            16.0,
+            Some("layer"),
+        );
+        let top = stack![
+            container(pic).width(Fill).height(432),
+            container(x).align_right(Fill).padding(16)
+        ];
+        let stats = [
+            (a.album_count, "Albums"),
+            (a.song_count, "Songs"),
+            (a.play_count, "Plays"),
+        ];
+        let stats = stats
+            .into_iter()
+            .filter(|s| s.0 > 0)
+            .map(|(n, l)| column![bold(fmt_n(n as usize), 32.0), sub(l, 14.0)].into());
+        let stats = iced::widget::Column::with_children(stats.collect::<Vec<El>>()).spacing(40);
+        let body = row![stats.width(180), txt(bio, 16.0).color(SUB).width(Fill)].padding(40);
+        let body = scrollable(column![top, body]).style(theme::scroll);
+        let h = app.view_size().1 * 0.7;
+        return container(body)
+            .width(768)
+            .height(h)
+            .style(fill(theme::PANEL, 8.0))
+            .into();
+    }
     if kind == 5 {
         let key = format!("song:{id}");
         let v = app.data::<serde_json::Value>(&key);
