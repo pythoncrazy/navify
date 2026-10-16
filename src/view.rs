@@ -732,7 +732,7 @@ fn player_bar(app: &App) -> El<'_> {
         let b = b.style(theme::link(if on { ACCENT } else { SUB }));
         tip(b.on_press(m), label, Top)
     };
-    let room = (app.view_size().0 - 32.0) * 0.3;
+    let room = (app.view_size().0 - 16.0) * 0.3 - 8.0;
     let tw = (room - 112.0).min(200.0);
     let left = song.filter(|_| !app.full).map(|s| {
         let on = app.is_starred(&s.id, s.starred);
@@ -850,12 +850,11 @@ fn player_bar(app: &App) -> El<'_> {
         },
     ];
     let right = container(right.align_y(Center)).align_right(FillPortion(3));
-    let left = container(left).width(FillPortion(3));
+    let left = container(left)
+        .padding(padding::left(8))
+        .width(FillPortion(3));
     let bar = row![left, container(center).center_x(FillPortion(4)), right];
-    bar.align_y(Center)
-        .padding(padding::left(16).right(8))
-        .height(72)
-        .into()
+    bar.align_y(Center).padding([0, 8]).height(72).into()
 }
 
 fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
