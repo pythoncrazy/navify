@@ -93,6 +93,25 @@ fn blk<'a>(w: f32, h: f32, r: f32) -> El<'a> {
     b.style(fill(theme::CHIP, r)).into()
 }
 
+fn huge(t: &str, tw: f32) -> text::Text<'_> {
+    let fits = |s: &f32| theme::width(t, *s, Black) <= tw;
+    let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
+    ell(t, tw, size, Black).line_height(1.1)
+}
+
+pub fn grid_y(app: &App) -> f32 {
+    match app.route.starts_with("genre:") {
+        true => hero_h(app) + PAD,
+        false => GRID_Y,
+    }
+}
+
+fn genre_color(app: &App, name: &str) -> Color {
+    let gs = app.data::<Vec<Genre>>("genres");
+    let n = gs.and_then(|g| g.iter().position(|x| x.name == name));
+    theme::hue(n.unwrap_or_else(|| name.bytes().map(usize::from).sum()))
+}
+
 fn fade<'a>(top: Color, h: f32, body: impl Into<El<'a>>) -> El<'a> {
     let g = container(Space::new()).width(Fill).height(h);
     let g = g.style(theme::down(&[(0.0, top), (1.0, theme::PANEL)]));
@@ -659,11 +678,7 @@ struct Page<'a> {
 
 fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let px = art_px(app);
-    let title = |tw: f32| {
-        let fits = |s: &f32| theme::width(p.title, *s, Black) <= tw;
-        let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
-        ell(p.title, tw, size, Black).line_height(1.1)
-    };
+    let title = |tw: f32| huge(p.title, tw);
     let low = |k: f32| match p.color == LIKED {
         true => Color::from_rgb(p.color.r * k, p.color.g * k, p.color.b * k),
         false => theme::shade(p.color, k),
@@ -1041,6 +1056,11 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     if let Some((id, f, _, albums)) = disc_args(app) {
         let tools = disc_tools(app, albums, id, f);
         return (off > GRID_Y - 64.0).then(|| bar(tools, theme::PANEL).into());
+    }
+    if let Some(g) = app.route.strip_prefix("genre:") {
+        let t = ell(g, app.main_w() - 2.0 * PAD, 24.0, Bold);
+        let bg = theme::shade(genre_color(app, g), 0.5);
+        return (off > hero_h(app) - 64.0).then(|| bar(t.into(), bg).into());
     }
     let artist = app.data::<(Artist, Vec<Album>)>(&app.route);
     let (title, color, cols, banner) = match artist {
@@ -1485,11 +1505,22 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
         _ => "Albums",
     };
     let (cols, cw) = app.grid();
-    let g = |n, f: &dyn Fn(usize) -> El<'a>| grid(app, n, cols, cw + 52.0, GRID_Y, f);
+    let g = |n, f: &dyn Fn(usize) -> El<'a>| grid(app, n, cols, cw + 52.0, grid_y(app), f);
     let artists = app.data::<(Vec<Artist>, usize)>(&app.route).map(|(v, _)| v);
     let artists = artists.map(|v| g(v.len(), &|n| artist_card(app, &v[n])));
     let albums = app.data::<(Vec<Album>, usize)>(&app.route).map(|(v, _)| v);
     let albums = albums.map(|v| g(v.len(), &|n| album_card(app, &v[n], v[n].artist.clone())));
+    if kind == "genre" {
+        let c = genre_color(app, arg);
+        let head = container(huge(arg, app.main_w() - 2.0 * PAD)).padding(PAD);
+        let head = head
+            .width(Fill)
+            .height(hero_h(app))
+            .align_bottom(hero_h(app));
+        let head = head.style(theme::down(&[(0.0, c), (1.0, theme::shade(c, 0.5))]));
+        let body = column![Space::new().height(PAD)].push(albums).width(Fill);
+        return column![head, fade(theme::shade(c, 0.4), 232.0, body)].into();
+    }
     let head = column![bold(title, 32.0)].push(chips).spacing(16);
     let head = container(head)
         .padding(Padding::new(PAD).bottom(0))
