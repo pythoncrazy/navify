@@ -5,7 +5,7 @@ use iced::widget::{
     Column, Row, Space, button, column, container, hover, image, mouse_area, pick_list, row,
     scrollable, slider, stack, text, text_input, toggler,
 };
-use iced::{Center, Color, Fill, FillPortion, Padding, Right, color, padding};
+use iced::{Center, Color, Fill, FillPortion, Padding, Right, Shrink, color, padding};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Server, Song, Trio};
 use crate::app::{App, Home, Lib, Menu, MenuKind, Message, act, later, set, task};
@@ -2383,7 +2383,8 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let tab = |t: &'static str, on: bool| {
         let edge = container(Space::new().width(Fill).height(2));
         let edge = edge.style(fill([CLEAR, ACCENT][usize::from(on)], 1.0));
-        let b = column![bold(t, 16.0).wrapping(text::Wrapping::None), edge].spacing(4);
+        let b = column![bold(t, 14.0).wrapping(text::Wrapping::None), edge];
+        let b = b.spacing(6).width(Shrink);
         let b = button(b)
             .padding(0)
             .style(theme::link([SUB, TEXT][usize::from(on)]));
