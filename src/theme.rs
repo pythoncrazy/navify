@@ -111,13 +111,11 @@ pub mod icon {
     pub const CLOCK: char = '\u{e087}';
     pub const LISTPLUS: char = '\u{e23f}';
     pub const USER: char = '\u{e19f}';
-    pub const LOGOUT: char = '\u{e10e}';
     pub const STAR: char = '\u{e176}';
     pub const FOLDER: char = '\u{e0d7}';
     pub const PENCIL: char = '\u{e1f9}';
     pub const TRASH: char = '\u{e18e}';
     pub const PR: char = '\u{e431}';
-    pub const SERVER: char = '\u{e153}';
     pub const LIST: char = '\u{e106}';
     pub const GRID: char = '\u{e0ff}';
     pub const DOWN: char = '\u{e06d}';
