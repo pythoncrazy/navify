@@ -98,6 +98,7 @@ pub mod icon {
     pub const SEARCH: char = '\u{e151}';
     pub const FULL: char = '\u{e112}';
     pub const DEVICE: char = '\u{e210}';
+    pub const LAPTOP: char = '\u{e1d8}';
     pub const WINDOW: char = '\u{e11a}';
     pub const LIBRARY: char = '\u{e100}';
     pub const SIDE: char = '\u{e12a}';

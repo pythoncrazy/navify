@@ -2345,7 +2345,8 @@ fn panel_head<'a>(title: impl Into<El<'a>>, n: u8) -> El<'a> {
     let r = row![title, x.on_press(Message::Panel(n))]
         .spacing(8)
         .align_y(Center);
-    r.padding(Padding::new(8.0).left(16).right(16)).into()
+    r.padding(Padding::new(8.0).top(16).left(16).right(16))
+        .into()
 }
 
 fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> {
@@ -2391,15 +2392,17 @@ pub fn device_panel(app: &App) -> El<'_> {
     let (on, others): (Vec<_>, Vec<_>) = devices(app).into_iter().partition(|d| &d.0 == cur);
     let name = on.into_iter().next().map_or_else(|| cur.clone(), |d| d.1);
     let card = row![
-        i(i::DEVICE, 24.0).color(ACCENT),
+        i(i::LAPTOP, 24.0).color(ACCENT),
         txt(name, 16.0).color(ACCENT)
     ];
     let card = container(card.spacing(12).align_y(Center))
-        .padding(20)
+        .padding([0, 20])
+        .height(64)
+        .align_y(Center)
         .width(Fill);
-    let card = container(card.style(fill(ELEVATED, 8.0))).padding([0, 8]);
+    let card = container(card.style(fill(ELEVATED, 8.0))).padding(Padding::from([0, 8]).top(8));
     let title = ["Select another device", "No other devices found"][usize::from(others.is_empty())];
-    let title = container(bold(title, 16.0)).padding(Padding::new(20.0).top(32).bottom(8));
+    let title = container(bold(title, 16.0)).padding(Padding::new(20.0).top(24).bottom(12));
     let rows = others.into_iter().map(|(id, name)| {
         let r = row![i(i::DEVICE, 24.0), txt(name, 16.0)]
             .spacing(12)
@@ -2496,7 +2499,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
         tab("Queue", !app.recent_tab),
         tab("Recently played", app.recent_tab)
     ];
-    let head = container(panel_head(tabs.spacing(24), 2)).padding(padding::top(8).left(3));
+    let head = container(panel_head(tabs.spacing(24), 2)).padding(padding::left(3));
     if app.recent_tab {
         return column![head, scrollable(past).style(theme::scroll)].into();
     }
