@@ -668,10 +668,11 @@ impl Session {
             None => ("search", "s", q),
         };
         let url = reqwest::Url::parse_with_params(&format!("{base}/{path}.php"), [(k, v)])?;
-        let res = self.http.get(url).send().await.map_err(net_err)?;
+        let err = |e| anyhow!("TheAudioDB: {}", net_err(e));
+        let res = self.http.get(url).send().await.map_err(err)?;
         let status = res.status().as_u16();
         ensure!(status < 300, "TheAudioDB returned HTTP {status}.");
-        let v: Value = serde_json::from_slice(&res.bytes().await.map_err(net_err)?)?;
+        let v: Value = serde_json::from_slice(&res.bytes().await.map_err(err)?)?;
         let low = Some(q.to_lowercase());
         let same = |a: &&Value| a["strArtist"].as_str().map(str::to_lowercase) == low;
         let mut hit = v["artists"].as_array().into_iter().flatten();
