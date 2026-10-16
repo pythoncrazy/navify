@@ -124,6 +124,7 @@ pub mod icon {
     pub const PR: char = '\u{e431}';
     pub const LIST: char = '\u{e106}';
     pub const GRID: char = '\u{e0ff}';
+    pub const GRID9: char = '\u{e0e9}';
     pub const DOWN: char = '\u{e06d}';
     pub const UP: char = '\u{e070}';
     pub const INFO: char = '\u{e0f9}';

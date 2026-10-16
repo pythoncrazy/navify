@@ -39,6 +39,7 @@ const ORDER: [&str; 6] = [
 ];
 pub const DOT: &str = " \u{2022} ";
 pub const LIB_SORTS: [&str; 3] = ["Custom order", "Alphabetical", "Creator"];
+pub const LIB_VIEWS: [char; 4] = [i::COMPACT, i::LIST, i::GRID9, i::GRID];
 const GROUPS: [(&str, &str); 4] = [
     ("all", "Popular releases"),
     ("album", "Albums"),
@@ -2504,8 +2505,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 .iter()
                 .zip(0u8..)
                 .map(|(l, n)| item(l, None, n == sort, i::CHECK, set(|s, n| s.lib_sort = n, n)));
-            let views = [(i::COMPACT, true), (i::LIST, false)].map(|(c, v)| {
-                let on = app.cfg.settings.lib_compact == v;
+            let views = LIB_VIEWS.iter().zip(0u8..).map(|(&c, v)| {
+                let on = app.cfg.settings.lib_view == v;
                 let fg = if on { ACCENT } else { SUB };
                 let b = button(i(c, 16.0).color(fg).center()).width(Fill).height(32);
                 let b = b.style(theme::btn(
@@ -2517,7 +2518,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                     [fg; 3],
                     4.0,
                 ));
-                b.on_press(set(|s, b| s.lib_compact = b, v)).into()
+                b.on_press(set(|s, v| s.lib_view = v, v)).into()
             });
             let views = container(Row::with_children(views).spacing(4)).padding([4, 4]);
             let col = column![section("Sort by")].extend(rows);
