@@ -2014,7 +2014,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let tog =
         |v: bool, f: fn(&mut Settings, bool)| -> El<'_> { theme::switch(v, set(f, !v)).into() };
     let head = |t: &'a str| -> (bool, String, El<'a>) {
-        let h = container(bold(t, 16.0)).padding(padding::top(PAD).bottom(8));
+        let h = bold(t, 16.0).line_height(text::LineHeight::Absolute(22.0.into()));
+        let h = container(h).padding(padding::top(PAD - 4.0).bottom(4));
         (true, String::new(), h.into())
     };
     fn line<'a>(label: impl Into<String>, c: El<'a>) -> (bool, String, El<'a>) {
@@ -2265,7 +2266,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             t.font(theme::fw(Normal)).padding([8, 12]).into()
         }
     };
-    let title = row![bold("Settings", 32.0), Space::new().width(Fill), find].align_y(Center);
+    let title = row![bold("Settings", 32.0), Space::new().width(Fill), find];
+    let title = container(title.height(55)).padding(padding::bottom(4));
     let rows = rows.into_iter().zip(shown).filter(|r| r.1).map(|r| r.0.2);
     let none = hit.iter().all(|h| !h).then(|| {
         let t = txt(format!("No settings match \"{q}\""), 16.0).color(SUB);
