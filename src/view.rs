@@ -693,8 +693,8 @@ fn player_bar(app: &App) -> El<'_> {
     let mute = if app.muted { "Unmute" } else { "Mute" };
     let np = Message::Panel(1);
     let panels = row![
-        side(ic(i::PR), app.panel == 1, "Now playing view", np),
-        side(ic(i::LYRICS), lyrics, "Lyrics", words),
+        song.map(|_| side(ic(i::PR), app.panel == 1, "Now playing view", np)),
+        song.map(|_| side(ic(i::LYRICS), lyrics, "Lyrics", words)),
         side(ic(i::QUEUE), app.panel == 2, "Queue", Message::Panel(2)),
     ];
     let right = row![
@@ -707,15 +707,15 @@ fn player_bar(app: &App) -> El<'_> {
         )),
         side(vol_icon, false, mute, act(|a| a.muted = !a.muted)),
         volume,
-        (app.full || app.current_song().is_some()).then(|| {
-            let full = app.full;
-            side(
+        match (app.full, song) {
+            (false, None) => container(dic(i::FULL)).center(32).into(),
+            (full, _) => side(
                 ic([i::FULL, i::WINDOW][usize::from(full)]),
                 false,
                 ["Full screen", "Exit full screen"][usize::from(full)],
                 task(move |a| a.set_full(!full)),
-            )
-        }),
+            ),
+        },
     ];
     let right = container(right.spacing(4).align_y(Center)).align_right(FillPortion(3));
     let left = container(left).width(FillPortion(3));
