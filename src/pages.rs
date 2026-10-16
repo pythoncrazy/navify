@@ -2320,7 +2320,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
 
 type Item = Option<(char, String, Message, bool)>;
 
-pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
+pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
     let w = if matches!(m.kind, MenuKind::User) {
         328.0
     } else {
@@ -2333,6 +2333,15 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         let b = b.style(theme::btn(hover, [theme::tint(0.9); 3], 2.0));
         focusable(b.on_press(msg.clone()), Some(msg), 2.0, Some("layer"))
     };
+    let opener = |n: u8| {
+        act(move |a| {
+            let y = crate::app::cursor().1;
+            a.menu
+                .iter_mut()
+                .filter(|m| m.sub != n)
+                .for_each(|m| (m.sub, m.sub_y) = (n, y));
+        })
+    };
     let boxed = |el: El<'a>, w: f32, h: f32, pad: u16| {
         let c = container(el).padding(pad).width(w).height(h);
         let r = if matches!(m.kind, MenuKind::Create) {
@@ -2343,17 +2352,11 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         (c.style(fill(theme::MENU, r)).into(), w, h)
     };
     let it = |c: char, l: &str, m: Message| Some((c, l.to_string(), m, false));
-    let open = |n: u8, c: char, l: &str| {
-        let m = act(move |a| {
-            let (x, y) = crate::app::cursor();
-            a.menu
-                .iter_mut()
-                .for_each(|m| (m.sub, m.x, m.y) = (n, x, y));
-        });
-        Some((c, l.to_string(), m, true))
-    };
+    let open = |n: u8, c: char, l: &str| Some((c, l.to_string(), opener(n), true));
     let user = app.session.as_ref().map(|s| &s.server);
     let mine = |p: &Playlist| app.owns(p);
+    let q = m.find.to_lowercase();
+    let found = |p: &&Playlist| mine(p) && p.name.to_lowercase().contains(&q);
     let star = |id: &str, server: bool, yes: &str, no: &str| {
         let k = usize::from(app.is_starred(id, server));
         let m = Message::Star(vec![id.into()], k == 0);
@@ -2363,14 +2366,15 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let to_pl = |r: String, skip: &str| -> Vec<Item> {
         let pls = app.data::<Lib>("lib").into_iter();
         let pls = pls.flat_map(|l| l.playlists.iter());
-        let add = |p: &Playlist| it(i::MUSIC, &p.name, Message::AddCtx(r.clone(), p.id.clone()));
+        let add = |p: &Playlist| it(' ', &p.name, Message::AddCtx(r.clone(), p.id.clone()));
         let new = it(
             i::PLUS,
             "New playlist",
             Message::AddCtx(r.clone(), String::new()),
         );
-        let pls = pls.filter(|p| mine(p) && p.id != skip).map(add);
-        [new, None].into_iter().chain(pls).collect()
+        let pls: Vec<Item> = pls.filter(|p| found(p) && p.id != skip).map(add).collect();
+        let gap = (!pls.is_empty()).then_some(None);
+        [new].into_iter().chain(gap).chain(pls).collect()
     };
     let ids = |s: &[Song]| s.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
     let mut head: Option<El> = None;
@@ -2440,7 +2444,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 .extend(views);
             return boxed(col.into(), 160.0, h, 4);
         }
-        MenuKind::Song(v) | MenuKind::SongIn(v, _) if m.sub == 2 && v.len() == 1 => {
+        MenuKind::Song(v) | MenuKind::SongIn(v, _) if level == 2 && v.len() == 1 => {
             let id = &v[0].id;
             let cur = app.ratings.get(id).copied().unwrap_or(v[0].user_rating);
             let stars = (1..=5u8).map(|n| {
@@ -2466,7 +2470,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             let out = it(' ', "Log out", Message::LogOut);
             others.chain([profile, settings, out]).collect()
         }
-        MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
+        MenuKind::Song(s) | MenuKind::SongIn(s, _) if level == 1 => {
             let name = match &s[..] {
                 [x] => x.title.clone(),
                 _ => String::new(),
@@ -2475,10 +2479,12 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 .data::<Lib>("lib")
                 .into_iter()
                 .flat_map(|l| l.playlists.iter());
-            let pls = pls.filter(|p| mine(p));
-            let add = |p: &Playlist| it(i::MUSIC, &p.name, Message::PlAdd(p.id.clone(), ids(s)));
+            let pls = pls.filter(found);
+            let add = |p: &Playlist| it(' ', &p.name, Message::PlAdd(p.id.clone(), ids(s)));
             let new = it(i::PLUS, "New playlist", Message::PlNew(name, ids(s)));
-            [new, None].into_iter().chain(pls.map(add)).collect()
+            let pls: Vec<Item> = pls.map(add).collect();
+            let gap = (!pls.is_empty()).then_some(None);
+            [new].into_iter().chain(gap).chain(pls).collect()
         }
         MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
@@ -2510,7 +2516,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             }
             v
         }
-        MenuKind::Album(a) if m.sub == 1 => to_pl(format!("album:{}", a.id), ""),
+        MenuKind::Album(a) if level == 1 => to_pl(format!("album:{}", a.id), ""),
         MenuKind::Album(a) => {
             let save = ["Remove from Your Library", "Add to Your Library"];
             let r = format!("album:{}", a.id);
@@ -2532,7 +2538,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             let follow = star(&a.id, a.starred, "Unfollow", "Follow");
             vec![follow, it(i::RADIO, "Go to artist radio", radio)]
         }
-        MenuKind::Playlist(p) if m.sub == 1 => to_pl(format!("playlist:{}", p.id), &p.id),
+        MenuKind::Playlist(p) if level == 1 => to_pl(format!("playlist:{}", p.id), &p.id),
         MenuKind::Playlist(p) => {
             let mut v = vec![queue(&format!("playlist:{}", p.id)), None];
             if mine(p) {
@@ -2555,9 +2561,28 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             v
         }
     };
+    if level == 1 {
+        let style = theme::input(
+            [theme::MENU_HOVER; 2],
+            [theme::MENU_HOVER; 2],
+            [0.0; 2],
+            4.0,
+        );
+        let t = text_input("Find a playlist", &m.find).on_submit(Message::Noop);
+        let t = t.on_input(|v| act(move |a| a.menu.iter_mut().for_each(|m| m.find = v.clone())));
+        let glass = text_input::Icon {
+            font: theme::LUCIDE,
+            code_point: i::SEARCH,
+            size: Some(16.0.into()),
+            spacing: 8.0,
+            side: text_input::Side::Left,
+        };
+        let t = t.icon(glass).style(style).font(theme::fw(Normal)).size(14);
+        head = Some(container(t.padding([6, 8])).center_y(40).into());
+    }
     let seps = list.iter().filter(|x| x.is_none()).count();
     let n = list.len() - seps + usize::from(head.is_some());
-    let h = (n as f32 * 40.0 + seps as f32 + 8.0).min(400.0);
+    let h = (n as f32 * 40.0 + seps as f32 + 8.0).min([f32::MAX, 400.0][usize::from(level > 0)]);
     let rows = list.into_iter().map(|x| match x {
         Some((c, l, msg, sub)) => {
             let room =
@@ -2570,7 +2595,15 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 c => Some(i(c, 16.0).into()),
             };
             let r = Row::new().push(icon).push(label.width(Fill));
-            entry(r.push(arrow), msg)
+            let enter = match sub {
+                true => msg.clone(),
+                false => opener(0),
+            };
+            let e = entry(r.push(arrow), msg);
+            match level == 0 {
+                true => mouse_area(e).on_enter(enter).into(),
+                false => e,
+            }
         }
         None => rule(),
     });

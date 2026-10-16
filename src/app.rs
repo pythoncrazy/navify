@@ -64,6 +64,8 @@ pub struct Menu {
     pub y: f32,
     pub kind: MenuKind,
     pub sub: u8,
+    pub sub_y: f32,
+    pub find: String,
 }
 
 #[derive(Clone)]
@@ -1686,6 +1688,8 @@ impl App {
                     y,
                     kind: *kind,
                     sub: 0,
+                    sub_y: 0.0,
+                    find: String::new(),
                 });
                 return Task::none();
             }
