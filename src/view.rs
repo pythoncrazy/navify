@@ -940,7 +940,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         });
         let list = iced::widget::Column::with_children(groups.collect::<Vec<El>>()).spacing(24);
         let list = scrollable(list.padding(padding::right(16))).height(Fill);
-        let head = row![bold("Keyboard Shortcuts", 32.0).width(Fill), close];
+        let head = row![bold("Keyboard Shortcuts", 32.0)];
         let hint = row![
             txt("Press", 16.0),
             caps("shortcuts"),
@@ -953,7 +953,17 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         .spacing(12);
         let top = container(top).padding(iced::Padding::new(24.0).top(23).bottom(18));
         let list = container(list.style(theme::scroll)).padding(iced::Padding::new(24.0).top(22));
-        let body = column![top, pages::rule(), list];
+        let x = theme::sq(i(i::X, 32.0).center(), 32.0).style(theme::link(SUB));
+        let x = focusable(
+            x.on_press(Message::MenuClose),
+            Some(Message::MenuClose),
+            16.0,
+            Some("layer"),
+        );
+        let x = container(x)
+            .align_right(Fill)
+            .padding(iced::Padding::ZERO.top(16).right(17));
+        let body = stack![column![top, pages::rule(), list], x];
         let h = (app.view_size().1 - 218.0).max(300.0);
         let body = container(body).width(500).height(h);
         return body.style(fill(ELEVATED, 4.0)).into();
