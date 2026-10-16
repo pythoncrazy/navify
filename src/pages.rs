@@ -43,6 +43,16 @@ pub fn art_px(app: &App) -> f32 {
     (128.0 + (app.main_w() - 600.0) * 104.0 / 424.0).clamp(128.0, 232.0)
 }
 
+pub fn banner_h(app: &App) -> f32 {
+    (app.view_size().1 * 0.4).clamp(340.0, 500.0)
+}
+
+pub fn banner(app: &App, a: &Artist) -> Option<String> {
+    let url = app.data::<String>(&a.banner_key())?;
+    let tenths = (app.main_w() / banner_h(app) * 10.0).round();
+    (app.cfg.settings.banners && !url.is_empty()).then(|| format!("b{tenths}:{url}"))
+}
+
 pub fn hero_h(app: &App) -> f32 {
     art_px(app) + PAD + 64.0
 }
@@ -626,7 +636,7 @@ struct Page<'a> {
     meta: El<'a>,
     color: Color,
     extra: Vec<El<'a>>,
-    banner: Option<&'a str>,
+    banner: Option<String>,
 }
 
 fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
@@ -637,9 +647,9 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         ell(p.title, tw, size, Black).line_height(1.1)
     };
     let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
-    let hero: El = if let Some(url) = p.banner {
-        let bh = app.main_w() / 3.0;
-        let img = app.covers.get(url, 640);
+    let hero: El = if let Some(key) = &p.banner {
+        let bh = banner_h(app);
+        let img = app.covers.get(key, 640);
         let img = img.map(|h| image(h).width(Fill).height(bh));
         let img = img.map(|i| i.content_fit(iced::ContentFit::Fill));
         let a = |x| BG.scale_alpha(x);
@@ -958,13 +968,13 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let artist = app.data::<(Artist, Vec<Album>)>(&app.route);
     let (title, color, cols, banner) = match artist {
         Some((a, _)) => {
-            let b = app.data::<String>(&a.banner_key());
-            let b = b.is_some_and(|u| app.cfg.settings.banners && !u.is_empty());
-            (&a.name[..], head_color(app, &a.cover), None, b)
+            let b = banner(app, a);
+            let color = head_color(app, b.as_deref().unwrap_or(&a.cover));
+            (&a.name[..], color, None, b.is_some())
         }
         None => detail_of(app).map(|(p, _, c)| (p.title, p.color, Some(c), false))?,
     };
-    let top = [hero_h(app), app.main_w() / 3.0][usize::from(banner)];
+    let top = [hero_h(app), banner_h(app)][usize::from(banner)];
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
     let play = play_btn(app, 48.0, &app.route);
     let head = row![play, title].spacing(8).align_y(Center);
@@ -1076,8 +1086,7 @@ fn artist(app: &App) -> Option<El<'_>> {
     let body = column![popular, discog, similar, shelf("Appears On", None, appears)];
     let body = body.push(about).spacing(40);
     let body = body.padding(padding::bottom(PAD * 2.0));
-    let banner = app.data::<String>(&a.banner_key()).map(String::as_str);
-    let banner = banner.filter(|u| app.cfg.settings.banners && !u.is_empty());
+    let banner = banner(app, a);
     let follow = if on { "Following" } else { "Follow" };
     let follow = theme::pill_btn(follow, Message::Star(vec![a.id.clone()], !on));
     let p = Page {
@@ -1085,7 +1094,7 @@ fn artist(app: &App) -> Option<El<'_>> {
         kind: "Artist",
         title: &a.name,
         meta: sub(counts, 14.0).color(TEXT).into(),
-        color: head_color(app, &a.cover),
+        color: head_color(app, banner.as_deref().unwrap_or(&a.cover)),
         extra: vec![follow.into(), dots(MenuKind::Artist(a.clone()))],
         banner,
     };

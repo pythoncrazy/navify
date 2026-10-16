@@ -1141,10 +1141,10 @@ impl App {
             let s = s.clone();
             let load = async move {
                 let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
-                let wide = k.starts_with("https://");
-                let px = if wide { 1280 } else { size };
-                let crop = usize::from(k.starts_with("w:")) + 2 * usize::from(wide);
-                let aspect = [0.0, 5.0 / 3.0, 3.0][crop];
+                let wide = k.strip_prefix('b').and_then(|r| r.split_once(':'));
+                let wide = wide.and_then(|(n, _)| n.parse::<f32>().ok());
+                let px = if wide.is_some() { 1280 } else { size };
+                let aspect = wide.map_or(5.0 / 3.0 * f32::from(k.starts_with("w:")), |n| n / 10.0);
                 static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
                 let _one = ONE.acquire().await.expect("the decode semaphore is open");
                 let round = k.starts_with("o:");
@@ -2273,7 +2273,7 @@ impl App {
         let tiles = |n: usize| span(n, cw + 52.0, cols, GRID_Y);
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
-        let (mut huge, mut head): (Vec<&String>, Vec<&String>) = Default::default();
+        let (mut head, mut banner): (Vec<&String>, _) = Default::default();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
             big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
@@ -2306,8 +2306,7 @@ impl App {
             let appears = self.data::<Vec<Album>>(&format!("appears:{id}"));
             let shelf = crate::pages::disc_shelf(self, albums);
             head.push(&a.cover);
-            let banner = self.data::<String>(&a.banner_key());
-            huge.extend(banner.filter(|u| self.cfg.settings.banners && !u.is_empty()));
+            banner = crate::pages::banner(self, a);
             small.extend(top.iter().flat_map(|v| v.iter().take(10)).map(|s| &s.cover));
             big.extend(shelf.iter().map(|x| &x.cover));
             big.extend(
@@ -2366,8 +2365,9 @@ impl App {
         let art = crate::pages::art_px(self);
         let lists = [(big, cw - 24.0), (head, art), (now, side), (small, 56.0)];
         let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
-        let all = lists.chain([(huge, 640)]);
-        all.flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b)))
+        lists
+            .flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b)))
+            .chain(banner.map(|k| (k, 640)))
             .chain(lead)
             .collect()
     }

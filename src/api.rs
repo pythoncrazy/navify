@@ -548,6 +548,13 @@ impl Session {
     }
 
     pub async fn cover(&self, id: &str, size: u32) -> Result<Bytes> {
+        let id = match id.find("https://") {
+            Some(i) => &id[i..],
+            None => ["o:", "w:"]
+                .iter()
+                .find_map(|p| id.strip_prefix(p))
+                .unwrap_or(id),
+        };
         let file = self.cover_file(id, size);
         if let Ok(b) = fs::read(&file).await
             && !b.is_empty()
@@ -557,10 +564,6 @@ impl Session {
         let url = match id.starts_with("https://") {
             true => id.to_string(),
             false => {
-                let id = ["o:", "w:"]
-                    .iter()
-                    .find_map(|p| id.strip_prefix(p))
-                    .unwrap_or(id);
                 let id = id.split('#').next();
                 self.url("getCoverArt", &json!({"id": id, "size": size}))
             }
