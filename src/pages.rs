@@ -122,7 +122,8 @@ fn plural(n: u32, word: &str) -> String {
 fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let idx = 16.0 + 8.0 * n.max(1).ilog10().saturating_sub(1) as f32;
     let st = &app.cfg.settings;
-    let extra = 106.0 * f32::from(st.ratings) + 80.0 * f32::from(st.plays);
+    let extra = 106.0 * f32::from(st.ratings) + 80.0 * f32::from(st.plays)
+        - 56.0 * f32::from(st.hide_duration);
     let w = app.main_w() - 2.0 * PAD - 184.0 - idx - extra;
     let plays = ["album:", "discography:"]
         .iter()
@@ -286,7 +287,9 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
         true => row![h("Title", half), h("Artist", half)].spacing(16),
         false => row![h("Title", c.0)],
     };
-    let clock = container(i(i::CLOCK, 16.0).color(SUB)).align_right(120);
+    let hide = app.cfg.settings.hide_duration;
+    let clock = (!hide).then(|| i(i::CLOCK, 16.0).color(SUB));
+    let clock = container(clock).align_right(120.0 - 56.0 * f32::from(hide));
     let r = row![sub("#", 16.0).width(c.3).center(), title];
     let album = ["album:", "discography:"]
         .iter()
@@ -363,6 +366,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let liked = key == "liked";
     let heart = (hot || starred && !liked).then(|| heart_btn(&s.id, starred, 16.0));
     let dur = sub(fmt_dur(s.duration), 14.0).width(56).align_x(Right);
+    let dur = (!app.cfg.settings.hide_duration).then_some(dur);
     let thumb = art.then(|| cover(app, &s.cover, 40.0, false));
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
     let added = date([&s.created, &s.starred_at][usize::from(liked)]);
@@ -2573,6 +2577,9 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 album.then(|| flip("Plays", !st.hide_plays, |s, b| s.hide_plays = !b)),
                 Some(flip("Rating", st.ratings, |s, b| s.ratings = b)),
                 (!album).then(|| flip("Plays", st.plays, |s, b| s.plays = b)),
+                Some(flip("Duration", !st.hide_duration, |s, b| {
+                    s.hide_duration = !b
+                })),
             ];
             let n = rows.iter().flatten().count();
             let col = column![section("Columns")].extend(rows.into_iter().flatten());
