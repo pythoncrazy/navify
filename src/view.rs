@@ -654,20 +654,22 @@ fn player_bar(app: &App) -> El<'_> {
     };
     let playing = usize::from(app.playing);
     let glyph = theme::filled([theme::fill::PLAY, theme::fill::PAUSE][playing], 16.0);
-    let bg = song.map_or(theme::DIM, |_| TEXT);
+    let bg = song.map_or(TEXT.scale_alpha(0.3), |_| TEXT);
     let play = theme::sq(glyph.color(BG).center(), 32.0).style(theme::solid([bg; 3], BG));
     let play = play.on_press(Message::Toggle);
     let play = tip(play, ["Play", "Pause"][playing], Top);
     let (ic, fi) = (|c| i(c, 16.0), |c| theme::filled(c, 16.0));
+    let dim = song.is_none().then_some(SUB.scale_alpha(0.3));
+    let (dic, dfi) = (|c| ic(c).color_maybe(dim), |c| fi(c).color_maybe(dim));
     let (on, rep) = (app.shuffle.is_some(), usize::from(app.repeat));
     let shuffle = ["Enable shuffle", "Disable shuffle"][usize::from(on)];
     let repeat = ["Enable repeat", "Enable repeat one", "Disable repeat"][rep];
-    let repeat_icon = ic([i::REPEAT, i::REPEAT, i::REPEAT1][rep]);
+    let repeat_icon = dic([i::REPEAT, i::REPEAT, i::REPEAT1][rep]);
     let controls = row![
-        side(ic(i::SHUFFLE), on, shuffle, Message::Shuffle),
-        side(fi(theme::fill::PREV), false, "Previous", Message::Prev),
+        side(dic(i::SHUFFLE), on, shuffle, Message::Shuffle),
+        side(dfi(theme::fill::PREV), false, "Previous", Message::Prev),
         play,
-        side(fi(theme::fill::NEXT), false, "Next", Message::Next(true)),
+        side(dfi(theme::fill::NEXT), false, "Next", Message::Next(true)),
         side(repeat_icon, rep > 0, repeat, act(App::repeat)),
     ];
     let center = column![controls.spacing(8).align_y(Center), progress];
