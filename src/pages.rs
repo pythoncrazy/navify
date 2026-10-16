@@ -1206,11 +1206,6 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let head = (!grid).then_some(head);
         return (off > grid_y(app) - 120.0).then(|| column![head, tools].into());
     }
-    if let Some(g) = app.route.strip_prefix("genre:") {
-        let t = ell(g, app.main_w() - 2.0 * PAD, 24.0, Bold);
-        let bg = theme::shade(genre_color(app, g), 0.5);
-        return (off > grid_y(app) - PAD - 104.0).then(|| bar(t.into(), bg).into());
-    }
     if app.route == "profile" {
         let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
         let t = ell(user, app.main_w() - 2.0 * PAD, 24.0, Bold);
