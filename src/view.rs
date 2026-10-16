@@ -245,6 +245,13 @@ mod wrap {
             let Some((msg, _, _)) = &self.1 else { return };
             let key = |k| matches!(e, Event::Keyboard(KeyPressed { key, .. }) if *key == k);
             let go = key(Key::Named(Named::Enter)) || key(Key::Named(Named::Space));
+            let press = matches!(e, Event::Mouse(iced::mouse::Event::ButtonPressed(_)));
+            let hit = press && c.is_over(l.bounds()) || go && ring.0;
+            if let Some(p) = c.position().filter(|_| hit) {
+                let (x, y) = crate::app::cursor();
+                let at = l.bounds() + iced::Vector::new(x - p.x, y - p.y);
+                *crate::app::ANCHOR.lock().expect("the anchor lock") = at;
+            }
             match e {
                 _ if !ring.0 => return,
                 Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => ring.0 = false,
@@ -1210,7 +1217,11 @@ pub fn view(app: &App) -> El<'_> {
     let menu = app.menu.as_ref().map(|m| {
         let (ww, wh) = app.view_size();
         let (el, w, h) = pages::menu(app, m, 0);
-        let x = if m.x + w + 8.0 > ww { m.x - w } else { m.x };
+        let x = if m.x + w + 8.0 > ww {
+            m.x + m.dx - w
+        } else {
+            m.x
+        };
         let y = if m.y + h + 8.0 > wh {
             m.y - 2.0 * m.dy - h
         } else {
