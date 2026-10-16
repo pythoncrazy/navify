@@ -122,6 +122,7 @@ fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let st = &app.cfg.settings;
     let extra = 106.0 * f32::from(st.ratings) + 80.0 * f32::from(st.plays);
     let w = app.main_w() - 2.0 * PAD - 184.0 - idx - extra;
+    let (album, date) = (album && !st.hide_album, date && !st.hide_added);
     let (a, d) = (f32::from(album && w > 480.0), f32::from(date && w > 640.0));
     let w = w - 16.0 * (a + d);
     let fr = w / (6.0 + 4.0 * a + 3.0 * d);
@@ -292,6 +293,7 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     let r = r.push((app.cfg.settings.plays && !album).then_some(plays));
     let r = r.push(clock.padding(padding::right(52)));
     let r = r.spacing(16).padding([0, 16]).height(36).align_y(Center);
+    let r = mouse_area(r).on_right_press(Message::Menu(Box::new(MenuKind::Columns)));
     let p = Padding::new(PAD).top(0).bottom(16);
     container(column![r, rule()]).padding(p).into()
 }
@@ -2443,6 +2445,50 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 .push(head("View as"))
                 .extend(views);
             return boxed(col.into(), 160.0, h, 4);
+        }
+        MenuKind::Columns => {
+            let st = &app.cfg.settings;
+            let album = app.route.starts_with("album:");
+            let dated = app.route.starts_with("playlist:") || app.route == "liked";
+            let box_on = |on: bool| -> El<'a> {
+                let c = container(on.then(|| i(i::CHECK, 12.0).color(BG))).center(16);
+                let border = iced::Border::default().rounded(2);
+                let border = border.width(f32::from(u8::from(!on))).color(SUB);
+                let bg = if on { ACCENT } else { Color::TRANSPARENT };
+                c.style(move |_| container::Style::default().background(bg).border(border))
+                    .into()
+            };
+            let item = |l: &'a str, on: bool, msg: Message| {
+                let fg = if on { ACCENT } else { theme::tint(0.9) };
+                entry(row![txt(l, 14.0).color(fg).width(Fill), box_on(on)], msg)
+            };
+            let rows = [
+                (!album).then(|| {
+                    item(
+                        "Album",
+                        !st.hide_album,
+                        set(|s, b| s.hide_album = b, !st.hide_album),
+                    )
+                }),
+                dated.then(|| {
+                    item(
+                        "Date added",
+                        !st.hide_added,
+                        set(|s, b| s.hide_added = b, !st.hide_added),
+                    )
+                }),
+                Some(item(
+                    "Rating",
+                    st.ratings,
+                    set(|s, b| s.ratings = b, !st.ratings),
+                )),
+                (!album).then(|| item("Plays", st.plays, set(|s, b| s.plays = b, !st.plays))),
+            ];
+            let n = rows.iter().flatten().count();
+            let t = bold("Columns", 12.0).color(theme::tint(0.7));
+            let t = container(t).padding(Padding::new(12.0).top(14)).height(41);
+            let col = column![t].extend(rows.into_iter().flatten());
+            return boxed(col.into(), 160.0, 41.0 + 40.0 * n as f32 + 8.0, 4);
         }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if level == 2 && v.len() == 1 => {
             let id = &v[0].id;
