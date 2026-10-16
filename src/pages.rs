@@ -1796,12 +1796,12 @@ pub fn queue_panel(app: &App) -> El<'_> {
 type Item = Option<(char, String, Message, bool)>;
 
 pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
-    const W: f32 = 260.0;
+    const W: f32 = 250.0;
     let entry = |r: Row<'a, Message>, msg: Message| -> El<'a> {
         let hover = [theme::CLEAR, theme::MENU_HOVER, theme::MENU_HOVER];
         let b = button(container(r.spacing(12).align_y(Center)).center_y(Fill));
         let b = b.padding([0, 12]).height(40).width(Fill);
-        let b = b.style(theme::btn(hover, [TEXT; 3], 2.0));
+        let b = b.style(theme::btn(hover, [theme::tint(0.9); 3], 2.0));
         focusable(b.on_press(msg.clone()), Some(msg), 2.0, Some("layer"))
     };
     let boxed = |el: El<'a>, w: f32, h: f32, pad: u16| {
@@ -1888,7 +1888,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         }
         MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
-            let like = ["Save to your Liked Songs", "Remove from your Liked Songs"];
+            let like = ["Add to Liked Songs", "Remove from your Liked Songs"];
             let q = |next| Message::Queue(songs.clone(), next);
             let mut v = vec![open(1, i::PLUS, "Add to playlist")];
             if let MenuKind::SongIn(_, n) = &m.kind {
@@ -1896,14 +1896,16 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 v.push(it(i::TRASH, "Remove from this playlist", rm));
             }
             let (star, k) = (Message::Star(ids(songs), !on), usize::from(on));
-            v.push(it([i::SAVE, i::SAVED][k], like[k], star));
+            v.push(it(['\0', i::SAVED][k], like[k], star));
             v.push(it(i::LISTPLUS, "Add to queue", q(false)));
             v.push(it(i::QUEUE, "Play next", q(true)));
             if let [s] = &songs[..] {
                 let radio = Message::Radio(s.id.clone());
                 v.extend([None, it(i::RADIO, "Go to song radio", radio)]);
                 let links = [("artist", &s.artist_id), ("album", &s.album_id)];
-                let links = links.into_iter().filter(|(_, id)| !id.is_empty());
+                let links = links
+                    .into_iter()
+                    .filter(|(k, id)| !id.is_empty() && app.route != format!("{k}:{id}"));
                 v.extend(links.map(|(k, id)| {
                     let c = if k == "artist" { i::USER } else { i::ALBUM };
                     it(c, &format!("Go to {k}"), go(k, id))
@@ -1943,8 +1945,12 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let rows = list.into_iter().map(|x| match x {
         Some((c, l, msg, sub)) => {
             let label = ell(l, W - if sub { 92.0 } else { 64.0 }, 14.0, Normal);
-            let arrow = sub.then(|| i(i::RIGHT, 16.0));
-            let r = row![i(c, 16.0).color(SUB), label.width(Fill)];
+            let arrow = sub.then(|| theme::filled(theme::fill::PLAY, 12.0));
+            let icon: El = match c {
+                '\0' => crate::view::liked_art(16.0),
+                c => i(c, 16.0).into(),
+            };
+            let r = row![icon, label.width(Fill)];
             entry(r.push(arrow), msg)
         }
         None => rule(),
