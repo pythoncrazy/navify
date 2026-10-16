@@ -60,6 +60,7 @@ pub struct Settings {
     pub smooth: bool,
     pub hide_album: bool,
     pub hide_added: bool,
+    pub hide_plays: bool,
     pub lib_view: u8,
 }
 
@@ -124,6 +125,7 @@ impl Default for Settings {
             smooth: true,
             hide_album: false,
             hide_added: false,
+            hide_plays: false,
             lib_view: 1,
             play_mode: 0,
             ratings: false,
