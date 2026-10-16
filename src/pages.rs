@@ -1869,33 +1869,27 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
             let like = ["Save to your Liked Songs", "Remove from your Liked Songs"];
             let q = |next| Message::Queue(songs.clone(), next);
-            let mut v = vec![
-                it(i::LISTPLUS, "Add to queue", q(false)),
-                it(i::QUEUE, "Play next", q(true)),
-                None,
-                open(1, i::PLUS, "Add to playlist"),
-            ];
+            let mut v = vec![open(1, i::PLUS, "Add to playlist")];
             if let MenuKind::SongIn(_, n) = &m.kind {
                 let rm = Message::PlRemove(n.clone());
                 v.push(it(i::TRASH, "Remove from this playlist", rm));
             }
             let (star, k) = (Message::Star(ids(songs), !on), usize::from(on));
             v.push(it([i::SAVE, i::SAVED][k], like[k], star));
+            v.push(it(i::LISTPLUS, "Add to queue", q(false)));
+            v.push(it(i::QUEUE, "Play next", q(true)));
             if let [s] = &songs[..] {
                 let radio = Message::Radio(s.id.clone());
-                let radio = it(i::RADIO, "Go to song radio", radio);
-                let info = it(
-                    i::INFO,
-                    "Show song details",
-                    Message::Modal(s.id.clone(), 5),
-                );
-                v.extend([open(2, i::STAR, "Rate"), info, None, radio]);
+                v.extend([None, it(i::RADIO, "Go to song radio", radio)]);
                 let links = [("artist", &s.artist_id), ("album", &s.album_id)];
                 let links = links.into_iter().filter(|(_, id)| !id.is_empty());
                 v.extend(links.map(|(k, id)| {
                     let c = if k == "artist" { i::USER } else { i::ALBUM };
                     it(c, &format!("Go to {k}"), go(k, id))
                 }));
+                let info = Message::Modal(s.id.clone(), 5);
+                v.extend([it(i::INFO, "Show song details", info), None]);
+                v.push(open(2, i::STAR, "Rate"));
             }
             v
         }
