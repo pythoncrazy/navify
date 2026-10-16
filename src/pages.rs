@@ -725,7 +725,10 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         });
     let empty = app
         .data::<(Playlist, Vec<Song>)>(&app.route)
-        .is_some_and(|x| x.1.is_empty());
+        .is_some_and(|x| x.1.is_empty())
+        || app
+            .data::<(Vec<Song>, usize)>(&app.route)
+            .is_some_and(|x| x.1 == 0);
     let bar = Row::new().push((!empty).then_some(play));
     let bar = bar.push((!empty).then_some(shuffle));
     let bar = bar.extend(p.extra).push(view).spacing(PAD);
