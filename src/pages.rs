@@ -1177,7 +1177,7 @@ fn blank<'a>(
 pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let off = app.scrolls.get(&app.route).map_or(0.0, |s| s.0);
     let bar = |c: El<'a>, bg: Color| {
-        let b = container(c).padding([0.0, PAD]).center_y(64).width(Fill);
+        let b = container(c).padding([0, 16]).center_y(64).width(Fill);
         b.style(fill(bg, 0.0))
     };
     if app.route == "lyrics" && app.cfg.settings.lyrics_follow && app.lyric.1.is_none() {
@@ -1210,7 +1210,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
         let t = ell(user, app.main_w() - 2.0 * PAD, 24.0, Bold);
         let bg = theme::dark(initial(user).1, 0.2);
-        return (off > hero_h(app) - 64.0).then(|| bar(t.into(), bg).into());
+        return (off > hero_h(app) - 24.0).then(|| bar(t.into(), bg).into());
     }
     let artist = app.data::<(Artist, Vec<Album>)>(&app.route);
     let (title, color, cols, banner) = match artist {
