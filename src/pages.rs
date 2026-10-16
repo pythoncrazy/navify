@@ -23,7 +23,7 @@ type Hit = (usize, usize);
 
 pub const PAD: f32 = 24.0;
 pub const GRID_Y: f32 = 184.0;
-pub const DIR_Y: f32 = 90.0;
+pub const DIR_Y: f32 = 138.0;
 pub const BAR: f32 = 104.0;
 pub const HEAD: f32 = 53.0;
 const DISC_HEAD: f32 = 136.0 + 34.0 + HEAD;
@@ -1890,7 +1890,9 @@ fn folders<'a>(app: &'a App) -> El<'a> {
     });
     let list = gaps(lo, hi, n, rh, items);
     let title = ell(name, app.main_w() - 2.0 * PAD, 32.0, Bold);
-    let title = container(title).padding(PAD).height(DIR_Y);
+    let title = container(title)
+        .padding(Padding::new(PAD).top(72))
+        .height(DIR_Y);
     column![title, container(list).padding(Padding::new(PAD).top(0))].into()
 }
 
