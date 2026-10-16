@@ -1,5 +1,5 @@
 use iced::font::Weight::{Black, Medium, Normal};
-use iced::widget::tooltip::Position::{Bottom, Right, Top};
+use iced::widget::tooltip::Position::{Bottom, Left, Right, Top};
 use iced::widget::{
     Row, Space, button, column, container, image, mouse_area, row, scrollable, slider, stack, text,
     text_editor, text_input, tooltip,
@@ -1034,11 +1034,17 @@ pub fn view(app: &App) -> El<'_> {
         let g = g.interaction(iced::mouse::Interaction::ResizingHorizontally);
         g.on_press(Message::Drag(Some(n)))
     };
-    let right = (app.panel > 0).then(|| {
+    let right: El = if app.panel > 0 {
         let p = [pages::queue_panel, pages::now_playing][usize::from(app.panel == 1)](app);
-        let p = container(p).width(app.right_w()).height(Fill);
-        row![grip(1), p]
-    });
+        row![grip(1), container(p).width(app.right_w()).height(Fill)].into()
+    } else {
+        let show = tip(
+            icon_btn(i::LEFT, 16.0, Message::Panel(1)),
+            "Show Now Playing view",
+            Left,
+        );
+        row![gap(), container(show).center_x(40).center_y(Fill)].into()
+    };
     let panels = row![gap(), lib_panel(app), grip(0), main].push(right);
     let black = |e| container(e).style(fill(BG, 0.0));
     let (top, bottom) = (black(top_bar(app)), black(player_bar(app)));
@@ -1049,7 +1055,10 @@ pub fn view(app: &App) -> El<'_> {
         column![r(0, 1), Space::new().height(Fill), r(2, 3)].width(w)
     };
     let gap = || Space::new().width(8);
-    let right = (app.panel > 0).then(|| row![gap(), caps(app.right_w())]);
+    let right = row![
+        gap(),
+        caps([40.0, app.right_w()][usize::from(app.panel > 0)])
+    ];
     let caps = row![gap(), caps(app.lib_w()), gap(), caps(app.main_w())].push(right);
     let pad = |h| Space::new().height(h);
     let caps = column![pad(64), caps.height(Fill), pad(72)];
