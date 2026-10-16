@@ -2689,56 +2689,93 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
     if big {
         img = img.thumbnail(size, size);
     }
-    let small = img.resize_exact(24, 24, FilterType::Triangle).to_rgb8();
-    let mut bins = [[0f32; 5]; 13];
-    for p in small.pixels() {
-        let [r, g, b] = p.0.map(|c| c as f32 / 255.0);
+    let hsl = |[r, g, b]: [f32; 3]| {
         let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
         let (d, l) = (mx - mn, (mx + mn) / 2.0);
-        if !(0.06..=0.92).contains(&l) {
-            continue;
-        }
-        let s = d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6);
         let h = match () {
             _ if d == 0.0 => 0.0,
             _ if mx == r => ((g - b) / d).rem_euclid(6.0),
             _ if mx == g => (b - r) / d + 2.0,
             _ => (r - g) / d + 4.0,
         };
-        let gray = s < 0.25 || l < 0.15;
-        let w = if gray {
-            1.0
-        } else {
-            s * (1.0 - (l - 0.4).abs() * 2.0).max(0.0)
-        };
-        let k = &mut bins[if gray { 12 } else { (h * 2.0) as usize % 12 }];
-        *k = [
-            k[0] + w,
-            k[1] + r * w,
-            k[2] + g * w,
-            k[3] + b * w,
-            k[4] + 1.0,
-        ];
-    }
-    let best = bins[..12].iter().max_by(|a, b| a[0].total_cmp(&b[0]));
-    let best = *best.expect("12 hue bins");
-    let gray = best[0] <= 0.0 || best[4] < 576.0 * 0.1;
-    let [w, r, g, b, _] = if gray { bins[12] } else { best };
-    let color = match gray {
-        true => {
-            let l = if w > 0.0 {
-                (r * 0.3 + g * 0.59 + b * 0.11) / w
-            } else {
-                0.3
-            };
-            let l = l.clamp(0.15, 0.35);
-            Color::from_rgb(l, l, l)
-        }
-        false => {
-            let k = 0.72 / (r / w).max(g / w).max(b / w).max(0.05) / w;
-            Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0))
-        }
+        (h * 60.0, d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6), l)
     };
+    let ok = |c: [f32; 3]| {
+        let (h, s, l) = hsl(c);
+        l > 0.05 && l < 0.95 && !((10.0..=37.0).contains(&h) && s <= 0.82)
+    };
+    let rgb = |q: [u8; 3]| q.map(|c| f32::from(c << 3) / 255.0);
+    let mut hist = std::collections::BTreeMap::<[u8; 3], u32>::new();
+    for p in img
+        .resize_exact(112, 112, FilterType::Triangle)
+        .to_rgb8()
+        .pixels()
+    {
+        *hist.entry(p.0.map(|c| c >> 3)).or_default() += 1;
+    }
+    let span = |b: &[([u8; 3], u32)], i: usize| {
+        let v = b.iter().map(|x| x.0[i]);
+        v.clone().max().unwrap_or(0) - v.min().unwrap_or(0)
+    };
+    let mut boxes = vec![
+        hist.into_iter()
+            .filter(|x| ok(rgb(x.0)))
+            .collect::<Vec<_>>(),
+    ];
+    while boxes.len() < 16 {
+        let vol = |b: &Vec<_>| (0..3).map(|i| u32::from(span(b, i)) + 1).product::<u32>();
+        let k = (0..boxes.len())
+            .max_by_key(|&k| vol(&boxes[k]))
+            .expect("a box");
+        let mut b = boxes.swap_remove(k);
+        if b.len() < 2 {
+            boxes.push(b);
+            break;
+        }
+        let d = (0..3).max_by_key(|&i| span(&b, i)).expect("three channels");
+        b.sort_by_key(|x| x.0[d]);
+        let (all, mut acc) = (b.iter().map(|x| x.1).sum::<u32>(), 0);
+        let at = b.iter().position(|x| {
+            acc += x.1;
+            2 * acc >= all
+        });
+        let rest = b.split_off(at.expect("a median").min(b.len() - 2) + 1);
+        boxes.extend([b, rest]);
+    }
+    let sw: Vec<([f32; 3], f32)> = boxes
+        .iter()
+        .filter(|b| !b.is_empty())
+        .map(|b| {
+            let n = b.iter().map(|x| x.1).sum::<u32>();
+            let avg = [0, 1, 2].map(|i| {
+                let t: u32 = b.iter().map(|x| u32::from(x.0[i]) * x.1).sum();
+                ((t + n / 2) / n) as u8
+            });
+            (rgb(avg), n as f32)
+        })
+        .filter(|w| ok(w.0))
+        .collect();
+    let top = sw.iter().map(|w| w.1).fold(0.0, f32::max);
+    let pick = |l: [f32; 3], s: [f32; 3]| {
+        let fit = sw
+            .iter()
+            .filter(|w| w.1 >= top * 0.1)
+            .filter_map(|&(c, n)| {
+                let (_, cs, cl) = hsl(c);
+                let fit = (s[0]..=s[2]).contains(&cs) && (l[0]..=l[2]).contains(&cl);
+                let score = (1.0 - (cs - s[1]).abs()) * 0.24 + (1.0 - (cl - l[1]).abs()) * 0.52;
+                fit.then_some((score + n / top * 0.24, c))
+            });
+        fit.max_by(|a, b| a.0.total_cmp(&b.0)).map(|x| x.1)
+    };
+    let color = pick([0.3, 0.5, 0.7], [0.35, 1.0, 1.0])
+        .or_else(|| pick([0.0, 0.26, 0.45], [0.35, 1.0, 1.0]))
+        .or_else(|| pick([0.55, 0.74, 1.0], [0.35, 1.0, 1.0]))
+        .or_else(|| pick([0.15, 0.26, 0.45], [0.05, 0.3, 0.4]))
+        .map_or(Color::from_rgb8(83, 83, 83), |c| {
+            let [r, g, b] = c.map(|x| x - (hsl(c).2 - 0.5).max(0.0));
+            Color::from_rgb(r, g, b)
+        });
     if aspect == 0.0 && !big && !round {
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
