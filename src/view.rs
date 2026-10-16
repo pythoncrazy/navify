@@ -439,17 +439,13 @@ fn top_bar(app: &App) -> El<'_> {
     let search = stack![mouse_area(search).on_release(browse)]
         .push(tail)
         .clip(true);
-    let search: El = match app.search_q.is_empty() && !app.binding("search").is_empty() {
-        true => {
-            let x = 66.0 + theme::width(hint, 16.0, Normal);
-            let keys = caps(&crate::app::key_label(app.binding("search")), 14.0, SUB);
-            hover(
-                search,
-                container(keys).padding(padding::left(x)).center_y(48),
-            )
-        }
-        false => search.into(),
-    };
+    let keys = (app.search_q.is_empty() && !app.binding("search").is_empty())
+        .then(|| caps(&crate::app::key_label(app.binding("search")), 14.0, SUB));
+    let x = 66.0 + theme::width(hint, 16.0, Normal);
+    let search = hover(
+        search,
+        container(keys).padding(padding::left(x)).center_y(48),
+    );
     let fwd = app.hi + 1 < app.history.len();
     let settings = Message::Nav("settings".into());
     let menu = Message::Menu(Box::new(MenuKind::User));
