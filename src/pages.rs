@@ -1810,7 +1810,11 @@ pub fn queue_panel(app: &App) -> El<'_> {
 type Item = Option<(char, String, Message, bool)>;
 
 pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
-    const W: f32 = 250.0;
+    let w = if matches!(m.kind, MenuKind::User) {
+        328.0
+    } else {
+        250.0
+    };
     let entry = |r: Row<'a, Message>, msg: Message| -> El<'a> {
         let hover = [theme::CLEAR, theme::MENU_HOVER, theme::MENU_HOVER];
         let b = button(container(r.spacing(12).align_y(Center)).center_y(Fill));
@@ -1898,18 +1902,18 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             .collect()
         }
         MenuKind::User => {
-            let url = ell(user.map_or("", |s| &s.url), W - 32.0, 12.0, Normal);
+            let url = ell(user.map_or("", |s| &s.url), w - 32.0, 12.0, Normal);
             let name = bold(user.map_or("", |s| &s.user), 14.0);
             let who = column![name, url.color(SUB)].spacing(2);
             head = Some(container(who).padding([0, 12]).center_y(40).into());
             let active = |s: &&Server| app.cfg.active.as_ref() != Some(&s.id);
             let others = app.cfg.servers.iter().filter(active).map(|s| {
                 let label = format!("Switch to {}", s.name);
-                it(i::SERVER, &label, Message::UseServer(s.id.clone()))
+                it(' ', &label, Message::UseServer(s.id.clone()))
             });
-            let settings = it(i::SETTINGS, "Settings", Message::Nav("settings".into()));
-            let out = it(i::LOGOUT, "Log out", Message::LogOut);
-            others.chain([settings, None, out]).collect()
+            let settings = it(' ', "Settings", Message::Nav("settings".into()));
+            let out = it(' ', "Log out", Message::LogOut);
+            others.chain([settings, out]).collect()
         }
         MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
             let name = match &s[..] {
@@ -2005,19 +2009,22 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let h = (n as f32 * 40.0 + seps as f32 + 8.0).min(400.0);
     let rows = list.into_iter().map(|x| match x {
         Some((c, l, msg, sub)) => {
-            let label = ell(l, W - if sub { 92.0 } else { 64.0 }, 14.0, Normal);
+            let room =
+                w - 36.0 - 28.0 * f32::from(u8::from(sub)) - 28.0 * f32::from(u8::from(c != ' '));
+            let label = ell(l, room, 14.0, Normal);
             let arrow = sub.then(|| theme::filled(theme::fill::PLAY, 12.0));
-            let icon: El = match c {
-                '\0' => crate::view::liked_art(16.0),
-                c => i(c, 16.0).into(),
+            let icon: Option<El> = match c {
+                ' ' => None,
+                '\0' => Some(crate::view::liked_art(16.0)),
+                c => Some(i(c, 16.0).into()),
             };
-            let r = row![icon, label.width(Fill)];
+            let r = Row::new().push(icon).push(label.width(Fill));
             entry(r.push(arrow), msg)
         }
         None => rule(),
     });
     let list = scrollable(Column::new().push(head).extend(rows));
-    boxed(list.style(theme::scroll).into(), W, h, 4)
+    boxed(list.style(theme::scroll).into(), w, h, 4)
 }
 
 pub fn login(app: &App) -> El<'_> {
