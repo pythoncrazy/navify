@@ -703,7 +703,9 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let icon = pages::LIB_VIEWS[view as usize];
     let order = row![txt(pages::LIB_SORTS[sort as usize], 14.0), i(icon, 16.0)].spacing(8);
     let menu = Message::Menu(Box::new(MenuKind::LibSort));
-    let order = theme::link_btn(order.align_y(Center), SUB, menu).padding([4, 8]);
+    let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::LibSort));
+    let order = theme::link_btn(order.align_y(Center), [SUB, TEXT][usize::from(open)], menu);
+    let order = order.padding([4, 8]);
     let order = tip(order, "Change the sort order", Bottom);
     let gap = field.is_none().then(|| Space::new().width(Fill));
     let tools = row![find].push(field).push(gap).push(order);
