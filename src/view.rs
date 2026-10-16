@@ -363,7 +363,7 @@ fn caps<'a>(combo: &str, size: f32, color: Color) -> Row<'a, Message> {
         .rounded(4);
     let cap = |k: &str| -> El<'a> {
         let k = container(txt(k.to_string(), size).color(color)).padding([0, 6]);
-        k.center_y(24)
+        k.center_y(size + 12.0)
             .style(move |_| container::Style::default().border(edge))
             .into()
     };
@@ -897,10 +897,16 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             caps("shortcuts"),
             txt("to open or close this dialog.", 16.0)
         ];
-        let top = column![head.align_y(Center), hint.spacing(6).align_y(Center)].spacing(12);
-        let body = column![top, list.style(theme::scroll)].spacing(40);
-        let h = (app.view_size().1 - 220.0).max(300.0);
-        let body = container(body.padding(24)).width(500).height(h);
+        let top = column![
+            head.align_y(Center).height(42),
+            hint.spacing(6).align_y(Center)
+        ]
+        .spacing(12);
+        let top = container(top).padding(iced::Padding::new(24.0).top(23).bottom(18));
+        let list = container(list.style(theme::scroll)).padding(iced::Padding::new(24.0).top(22));
+        let body = column![top, pages::rule(), list];
+        let h = (app.view_size().1 - 218.0).max(300.0);
+        let body = container(body).width(500).height(h);
         return body.style(fill(ELEVATED, 4.0)).into();
     }
     if kind == 5 {
