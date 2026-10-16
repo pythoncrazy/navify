@@ -511,7 +511,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                 stack![art, top.style(theme::link(TEXT)).on_press(m)].into()
             }
         };
-        let row = |art| media(art, title, sub, w - 112.0, fg).into();
+        let live = (on && app.playing).then(|| i(i::VOL2, 16.0).color(ACCENT));
+        let row = |art| media(art, title, sub, w - 112.0, fg).push(live).into();
         let body = if mini { art } else { row(art) };
         let b = button(body).padding(8).width(Fill);
         let [a, h] = match (same(&app.route), app.menu_on(&route)) {
