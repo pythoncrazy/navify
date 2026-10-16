@@ -2503,6 +2503,16 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         [new].into_iter().chain(gap).chain(pls).collect()
     };
     let ids = |s: &[Song]| s.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
+    let pin = |kind: &str, id: &str| {
+        let r = format!("{kind}:{id}");
+        let on = app.cfg.settings.pins.contains(&r);
+        let label = format!("{} {kind}", ["Pin", "Unpin"][usize::from(on)]);
+        let flip = |s: &mut crate::config::Settings, r: String| match s.pins.contains(&r) {
+            true => s.pins.retain(|p| *p != r),
+            false => s.pins.push(r),
+        };
+        it(i::PIN, &label, crate::app::set(flip, r))
+    };
     let mut head: Option<El> = None;
     let list: Vec<Item> = match &m.kind {
         MenuKind::Create => {
@@ -2756,13 +2766,18 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                     .into_iter()
                     .chain(art.map(|id| it(i::USER, "Go to artist", go("artist", id)))),
             );
-            v.extend([None, open(1, i::PLUS, "Add to playlist")]);
+            v.extend([
+                None,
+                open(1, i::PLUS, "Add to playlist"),
+                pin("album", &a.id),
+            ]);
             v
         }
         MenuKind::Artist(a) => {
             let radio = Message::Radio(a.id.clone());
             let follow = star(&a.id, a.starred, "Unfollow", "Follow");
-            vec![follow, it(i::RADIO, "Go to artist radio", radio)]
+            let radio = it(i::RADIO, "Go to artist radio", radio);
+            vec![follow, radio, pin("artist", &a.id)]
         }
         MenuKind::Playlist(p) if level == 1 => to_pl(format!("playlist:{}", p.id), &p.id),
         MenuKind::Playlist(p) => {
@@ -2783,7 +2798,10 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                     it(c, l, flip),
                 ]);
             }
-            v.push(open(1, i::PLUS, "Add to other playlist"));
+            v.extend([
+                open(1, i::PLUS, "Add to other playlist"),
+                pin("playlist", &p.id),
+            ]);
             v
         }
     };

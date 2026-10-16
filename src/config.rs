@@ -63,6 +63,7 @@ pub struct Settings {
     pub hide_plays: bool,
     pub hide_duration: bool,
     pub lib_view: u8,
+    pub pins: Vec<String>,
 }
 
 impl Settings {
@@ -129,6 +130,7 @@ impl Default for Settings {
             hide_plays: false,
             hide_duration: false,
             lib_view: 1,
+            pins: Vec::new(),
             play_mode: 0,
             ratings: false,
             plays: false,

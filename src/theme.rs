@@ -83,6 +83,7 @@ pub mod fill {
     pub const SAVED: char = '\u{e184}';
     pub const HOME: char = '\u{e2c2}';
     pub const CARET: char = '\u{e136}';
+    pub const PIN: char = '\u{e3e2}';
 }
 
 pub mod icon {
@@ -99,6 +100,7 @@ pub mod icon {
     pub const LIBRARY: char = '\u{e100}';
     pub const SIDE: char = '\u{e12a}';
     pub const EXTERNAL: char = '\u{e5a4}';
+    pub const PIN: char = '\u{e259}';
     pub const QUEUE: char = '\u{e2e0}';
     pub const EQ: char = '\u{e55a}';
     pub const LYRICS: char = '\u{e349}';

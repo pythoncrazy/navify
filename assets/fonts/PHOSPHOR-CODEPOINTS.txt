@@ -6,3 +6,4 @@ heart 0xe2a8
 check-circle 0xe184
 house 0xe2c2
 caret-down 0xe136
+push-pin 0xe3e2
