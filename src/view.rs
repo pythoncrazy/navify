@@ -500,12 +500,13 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let row = |art| media(art, title, sub, w - 112.0, fg).into();
         let body = if mini { art } else { row(art) };
         let b = button(body).padding(8).width(Fill);
-        let a = match (same(&app.route), app.menu_on(&route)) {
-            (true, _) => 0.3,
-            (_, true) => 0.1,
-            _ => 0.0,
+        let [a, h] = match (same(&app.route), app.menu_on(&route)) {
+            (true, _) => [0.1, 0.22],
+            (_, true) => [0.1, 0.1],
+            _ => [0.0, 0.05],
         };
-        let b = b.style(theme::track(a));
+        let t = theme::tint;
+        let b = b.style(theme::btn([t(a), t(h), t(0.3)], [TEXT; 3], 4.0));
         let menu = Message::LibMenu(route.clone());
         mouse_area(b.on_press(Message::Nav(route)))
             .on_right_press(menu)
