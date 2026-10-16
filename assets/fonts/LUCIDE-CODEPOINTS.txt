@@ -52,3 +52,4 @@ grip 0xe3b1
 square-arrow-out-up-right 0xe5a4
 pin 0xe259
 user-plus 0xe1a2
+laptop-minimal 0xe1d8
