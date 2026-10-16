@@ -1669,7 +1669,8 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let art = cover(app, &s.cover, w, false);
     let body = column![art, info].push(preview).push(about).push(next);
     let body = body.spacing(16).padding(Padding::new(16.0).top(0));
-    let head = panel_head(ell(&app.source, app.right_w() - 64.0, 16.0, Bold), 1);
+    let src = [&app.source, &s.album][usize::from(app.source.is_empty())];
+    let head = panel_head(ell(src, app.right_w() - 64.0, 16.0, Bold), 1);
     column![head, scrollable(body).style(theme::scroll)].into()
 }
 
