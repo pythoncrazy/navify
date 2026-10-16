@@ -106,7 +106,7 @@ impl Default for Settings {
             tray: false,
             panels: (300.0, 320.0),
             lib_collapsed: false,
-            banners: false,
+            banners: true,
             lib_sort: 0,
             scrobble_pct: 50.0,
             seek_secs: 5.0,
