@@ -789,7 +789,7 @@ fn player_bar(app: &App) -> El<'_> {
     let play = theme::sq(glyph.color(BG).center(), 32.0).style(theme::solid([bg; 3], BG));
     let play = play.on_press(Message::Toggle);
     let play = tip(play, ["Play", "Pause"][playing], Top);
-    let (ic, fi) = (|c| i(c, 16.0), |c| theme::filled(c, 16.0));
+    let (ic, fi) = (|c| i(c, 16.0), |c| theme::filled(c, 19.0));
     let dim = song.is_none().then_some(SUB.scale_alpha(0.3));
     let (dic, dfi) = (|c| ic(c).color_maybe(dim), |c| fi(c).color_maybe(dim));
     let (on, rep) = (app.shuffle.is_some(), usize::from(app.repeat));
