@@ -122,7 +122,10 @@ fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let st = &app.cfg.settings;
     let extra = 106.0 * f32::from(st.ratings) + 80.0 * f32::from(st.plays);
     let w = app.main_w() - 2.0 * PAD - 184.0 - idx - extra;
-    let (album, date) = (album && !st.hide_album, date && !st.hide_added);
+    let plays = ["album:", "discography:"]
+        .iter()
+        .any(|p| app.route.starts_with(p));
+    let (album, date) = (album && (plays || !st.hide_album), date && !st.hide_added);
     let (a, d) = (f32::from(album && w > 480.0), f32::from(date && w > 640.0));
     let w = w - 16.0 * (a + d);
     let fr = w / (6.0 + 4.0 * a + 3.0 * d);
@@ -149,6 +152,7 @@ pub fn grid_y(app: &App) -> f32 {
     match app.route.split(':').next() {
         Some("genre") => hero_h(app) + PAD,
         Some("artists") => GRID_Y - 40.0,
+        Some("discography") => GRID_Y - 24.0,
         _ => GRID_Y,
     }
 }
@@ -281,7 +285,9 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     };
     let clock = container(i(i::CLOCK, 16.0).color(SUB)).align_right(120);
     let r = row![sub("#", 16.0).width(c.3).center(), title];
-    let album = app.route.starts_with("album:");
+    let album = ["album:", "discography:"]
+        .iter()
+        .any(|p| app.route.starts_with(p));
     let second: Option<El> = match album {
         true => h("Plays", c.1).map(|t| container(t.width(100).align_x(Right)).width(c.1).into()),
         false => h("Album", c.1).map(Into::into),
@@ -501,10 +507,13 @@ fn disc_args(app: &App) -> Option<(&str, &str, &Artist, &[Album])> {
 
 fn disc_rows<'a>(app: &'a App, albums: &'a [Album], f: &str) -> Vec<(f32, f32, &'a Album)> {
     let mut v = by_date(albums.iter().filter(|a| f == "all" || kind(a).1 == f));
+    if app.disc_name {
+        v.sort_by_cached_key(|a| a.name.to_lowercase());
+    }
     if app.disc_old {
         v.reverse();
     }
-    let mut y = GRID_Y;
+    let mut y = grid_y(app);
     let row = |a: &'a Album| {
         let songs = app.data::<(Album, Vec<Song>)>(&format!("album:{}", a.id));
         let n = songs.map_or(0, |x| x.1.len());
@@ -523,7 +532,8 @@ pub fn disc_view(app: &App) -> Vec<&Album> {
     let rows = disc_rows(app, albums, f);
     let (off, view) = app.scroll();
     let (cols, cw) = app.grid();
-    let (lo, hi) = span(off - GRID_Y, off + view - GRID_Y, cw + 52.0, rows.len(), 1);
+    let gy = grid_y(app);
+    let (lo, hi) = span(off - gy, off + view - gy, cw + 52.0, rows.len(), 1);
     let (lo, hi) = ((lo * cols).min(rows.len()), (hi * cols).min(rows.len()));
     let near = |r: &&(f32, f32, &Album)| r.0 + r.1 > off - view && r.0 < off + 2.0 * view;
     match app.cfg.settings.disc_grid {
@@ -532,45 +542,46 @@ pub fn disc_view(app: &App) -> Vec<&Album> {
     }
 }
 
-fn disc_tools<'a>(app: &'a App, albums: &[Album], id: &str, f: &str) -> El<'a> {
-    let grid_on = app.cfg.settings.disc_grid;
-    let has = |g: &str| g == "all" || albums.iter().any(|x| kind(x).1 == g);
-    let chips = GROUPS.iter().filter(|(g, _)| has(g)).map(|(g, l)| {
-        let label = if *g == "all" { "All" } else { l };
-        theme::chip_btn(label, f == *g, go("discography", &format!("{id}:{g}")))
-    });
-    let tool = |c, on: bool| tool_btn(c, on == grid_on, set(|s, b| s.disc_grid = b, on));
-    let arrow = i(if app.disc_old { i::UP } else { i::DOWN }, 16.0);
-    let order = row![txt("Release date", 14.0), arrow].spacing(4);
-    let order = link_btn(
-        order.align_y(Center),
+fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
+    let label = GROUPS
+        .iter()
+        .skip(1)
+        .find(|g| g.0 == f)
+        .map_or("All", |g| g.1);
+    let filter = row![txt(label, 14.0), theme::filled(theme::fill::CARET, 14.0)].spacing(4);
+    let filter = link_btn(
+        filter.align_y(Center),
         SUB,
-        task(|a| {
-            a.disc_old = !a.disc_old;
-            a.disc_load()
-        }),
+        Message::Menu(Box::new(MenuKind::Disc)),
     );
-    let chips = Row::with_children(chips).spacing(8);
-    let r = row![chips, Space::new().width(Fill), order, tool(i::LIST, false)];
-    let r = r.push(tool(i::GRID, true)).spacing(16);
-    r.align_y(Center).into()
+    let view = [i::LIST, i::GRID][usize::from(app.cfg.settings.disc_grid)];
+    let order = ["Release date", "Name"][usize::from(app.disc_name)];
+    let order = row![txt(order, 14.0), i(view, 16.0)]
+        .spacing(8)
+        .align_y(Center);
+    let order = link_btn(order, SUB, Message::Menu(Box::new(MenuKind::View)));
+    let name = ell(&a.name, app.main_w() - 2.0 * PAD - 280.0, 24.0, Bold);
+    let name = link_btn(name, TEXT, go("artist", id));
+    row![name, Space::new().width(Fill), filter, order]
+        .spacing(16)
+        .align_y(Center)
+        .into()
 }
 
 fn discography(app: &App) -> Option<El<'_>> {
     let (id, f, a, albums) = disc_args(app)?;
-    let name = ell(&a.name, app.main_w() - 2.0 * PAD, 32.0, Bold);
-    let name = link_btn(name, TEXT, go("artist", id));
-    let head = container(column![name, disc_tools(app, albums, id, f)].spacing(16));
+    let head = container(disc_tools(app, a, id, f));
     let head = head
         .padding(Padding::new(PAD).top(72).bottom(0))
-        .height(GRID_Y);
+        .height(grid_y(app));
     let rows = disc_rows(app, albums, f);
     if app.cfg.settings.disc_grid {
         let (cols, cw) = app.grid();
         let card = |n: usize| album_card(app, rows[n].2, year_kind(rows[n].2));
-        return Some(column![head, grid(app, rows.len(), cols, cw + 52.0, GRID_Y, card)].into());
+        let g = grid(app, rows.len(), cols, cw + 52.0, grid_y(app), card);
+        return Some(column![head, g].into());
     }
-    let (c, (off, view)) = (cols(app, false, false, 0), app.scroll());
+    let (c, (off, view)) = (cols(app, true, false, 0), app.scroll());
     let (mut gap, mut col) = (0.0, Column::new().push(head));
     for (y, h, al) in rows {
         if y + h < off - 200.0 || y > off + view + 200.0 {
@@ -599,7 +610,14 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
     let on = app.is_starred(&al.id, al.starred);
     let open = Message::Nav(key.clone());
     let art = link_btn(cover(app, &al.cover, 136.0, false), TEXT, open.clone());
-    let play = play_btn(app, 40.0, &key);
+    let on_ctx = app.ctx == key && app.current_song().is_some();
+    let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(on_ctx && app.playing)];
+    let play = theme::sq(theme::filled(g, 14.0).color(BG).center(), 32.0);
+    let play = play.style(theme::btn([TEXT; 3], [BG; 3], 16.0));
+    let play = play.on_press(match on_ctx {
+        true => Message::Toggle,
+        false => Message::PlayCtx(key.clone(), 0),
+    });
     let menu = dots(MenuKind::Album(Box::new(al.clone())));
     let acts = row![play, heart_btn(&al.id, on, 24.0), menu].spacing(16);
     let name = link_btn(name, TEXT, open);
@@ -1154,9 +1172,22 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let b = container(b).center_x(Fill).align_bottom(Fill);
         return Some(b.padding(24).into());
     }
-    if let Some((id, f, _, albums)) = disc_args(app) {
-        let tools = disc_tools(app, albums, id, f);
-        return (off > GRID_Y - 64.0).then(|| bar(tools, theme::PANEL).into());
+    if let Some((id, f, a, albums)) = disc_args(app) {
+        let rows = disc_rows(app, albums, f);
+        let al = rows.iter().find(|r| r.0 + r.1 > off + 120.0).map(|r| r.2)?;
+        let key = format!("album:{}", al.id);
+        let title = ell(&al.name, app.main_w() - 120.0, 24.0, Bold);
+        let head = row![play_btn(app, 48.0, &key), title]
+            .spacing(8)
+            .align_y(Center);
+        let head = bar(head.into(), theme::dark(head_color(app, &al.cover), 0.2));
+        let tools = container(disc_tools(app, a, id, f))
+            .padding([0.0, PAD])
+            .center_y(56);
+        let tools = tools.width(Fill).style(fill(theme::PANEL, 0.0));
+        let grid = app.cfg.settings.disc_grid;
+        let head = (!grid).then_some(head);
+        return (off > grid_y(app) - 120.0).then(|| column![head, tools].into());
     }
     if let Some(g) = app.route.strip_prefix("genre:") {
         let t = ell(g, app.main_w() - 2.0 * PAD, 24.0, Bold);
@@ -2416,6 +2447,35 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 let r = r.push(txt(l, 14.0).color(fg).width(Fill));
                 entry(r.push(on.then(|| i(tail, 16.0).color(fg))), msg)
             };
+            if app.route.starts_with("discography:") {
+                let arrow = [i::ARROW_DOWN, i::ARROW_UP][usize::from(app.disc_old)];
+                let sort = |l: &'a str, name: bool| {
+                    let on = app.disc_name == name;
+                    let m = task(move |a| {
+                        (a.disc_old, a.disc_name) = (on && !a.disc_old, name);
+                        a.disc_load()
+                    });
+                    item(l, None, on, arrow, m)
+                };
+                let grid = app.cfg.settings.disc_grid;
+                let view = |l: &'a str, c: char, on: bool| {
+                    let m = task(move |a| {
+                        let o = a.cfg.settings.clone();
+                        a.cfg.settings.disc_grid = on;
+                        iced::Task::batch([a.settings(o), a.disc_load()])
+                    });
+                    item(l, Some(c), grid == on, i::CHECK, m)
+                };
+                let col = column![
+                    head("Sort by"),
+                    sort("Release date", false),
+                    sort("Name", true),
+                    head("View as"),
+                    view("List", i::LIST, false),
+                    view("Grid", i::GRID, true),
+                ];
+                return boxed(col.into(), 160.0, 41.0 * 2.0 + 40.0 * 4.0 + 8.0, 4);
+            }
             let sorts = app.route.starts_with("playlist:").then(|| {
                 let arrow = [i::ARROW_UP, i::ARROW_DOWN][usize::from(desc)];
                 let rows = ORDER.iter().zip(0u8..).map(|(l, n)| {
@@ -2445,6 +2505,24 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 .push(head("View as"))
                 .extend(views);
             return boxed(col.into(), 160.0, h, 4);
+        }
+        MenuKind::Disc => {
+            let Some((id, f, _, albums)) = disc_args(app) else {
+                return boxed(Space::new().into(), 0.0, 0.0, 0);
+            };
+            let has = |g: &str| g == "all" || albums.iter().any(|x| kind(x).1 == g);
+            let rows = GROUPS.iter().filter(|(g, _)| has(g)).map(|(g, l)| {
+                let on = f == *g;
+                let fg = if on { ACCENT } else { theme::tint(0.9) };
+                let l = txt(if *g == "all" { "All" } else { l }, 14.0)
+                    .color(fg)
+                    .width(Fill);
+                let tail = on.then(|| i(i::CHECK, 16.0).color(fg));
+                entry(row![l].push(tail), go("discography", &format!("{id}:{g}")))
+            });
+            let rows: Vec<El> = rows.collect();
+            let h = 40.0 * rows.len() as f32 + 8.0;
+            return boxed(Column::with_children(rows).into(), 160.0, h, 4);
         }
         MenuKind::Columns => {
             let st = &app.cfg.settings;

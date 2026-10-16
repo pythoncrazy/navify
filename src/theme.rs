@@ -82,6 +82,7 @@ pub mod fill {
     pub const HEART: char = '\u{e2a8}';
     pub const SAVED: char = '\u{e184}';
     pub const HOME: char = '\u{e2c2}';
+    pub const CARET: char = '\u{e136}';
 }
 
 pub mod icon {
