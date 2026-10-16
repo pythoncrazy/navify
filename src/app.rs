@@ -518,7 +518,7 @@ impl App {
     }
 
     pub fn scroll(&self) -> (f32, f32) {
-        let h = self.view_size().1 - 136.0;
+        let h = self.view_size().1 - 152.0;
         self.scrolls.get(&self.route).copied().unwrap_or((0.0, h))
     }
 
@@ -2080,7 +2080,7 @@ impl App {
                 let s = self.scale();
                 self.cfg.settings.window = (w * s, h * s);
                 let h = self.view_size().1;
-                self.scrolls.values_mut().for_each(|s| s.1 = h - 136.0);
+                self.scrolls.values_mut().for_each(|s| s.1 = h - 152.0);
                 return self.covers_now();
             }
             Message::LibScrolled(off, view) => {

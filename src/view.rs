@@ -804,7 +804,7 @@ fn player_bar(app: &App) -> El<'_> {
         side(repeat_icon, rep > 0, repeat, act(App::repeat)),
     ];
     let center = column![controls.spacing(8).align_y(Center), progress];
-    let center = center.spacing(4).align_x(Center).max_width(722);
+    let center = center.spacing(8).align_x(Center).max_width(722);
     let vol = if app.muted { 0.0 } else { app.volume };
     let level = usize::from(vol > 0.0) + usize::from(vol >= 0.5);
     let vol_icon = ic([i::MUTE, i::VOL1, i::VOL2][level]);
@@ -1187,7 +1187,8 @@ pub fn view(app: &App) -> El<'_> {
     };
     let panels = row![gap(), lib_panel(app), grip(0), main].push(right);
     let black = |e| container(e).style(fill(BG, 0.0));
-    let (top, bottom) = (black(top_bar(app)), black(player_bar(app)));
+    let bottom = container(player_bar(app)).center_y(88);
+    let (top, bottom) = (black(top_bar(app)), black(bottom.into()));
     let base = column![top, panels.push(gap()).height(Fill), bottom];
     let caps = |w: f32| {
         let cap = |k: usize| image(CAPS[k].clone()).width(8).height(8);
@@ -1201,7 +1202,7 @@ pub fn view(app: &App) -> El<'_> {
     ];
     let caps = row![gap(), caps(app.lib_w()), gap(), caps(app.main_w())].push(right);
     let pad = |h| Space::new().height(h);
-    let caps = column![pad(64), caps.height(Fill), pad(72)];
+    let caps = column![pad(64), caps.height(Fill), pad(88)];
     let top = [modal, menu]
         .into_iter()
         .flatten()
