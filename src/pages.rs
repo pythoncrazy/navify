@@ -216,7 +216,7 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     container(column![r, rule()]).padding(p).into()
 }
 
-fn date(s: &str) -> String {
+pub fn date(s: &str) -> String {
     const M: &str = "JanFebMarAprMayJunJulAugSepOctNovDec";
     let d = s.get(..10).unwrap_or("").split('-');
     let d = d.filter_map(|x| x.parse().ok());

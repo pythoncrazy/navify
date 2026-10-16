@@ -770,16 +770,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             let s = match k {
                 "size" => format!("{:.1} MB", x.as_f64()? / 1e6),
                 "duration" => fmt_dur(x.as_f64()? as f32),
-                "created" | "played" => {
-                    let d = x.as_str()?;
-                    let m = d.get(5..7)?.parse::<usize>().ok()?.checked_sub(1)?;
-                    let month = [
-                        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
-                        "Nov", "Dec",
-                    ];
-                    let day = d.get(8..10)?.trim_start_matches('0');
-                    format!("{} {day}, {}", month.get(m)?, d.get(..4)?)
-                }
+                "created" | "played" => pages::date(x.as_str()?),
                 "playCount" => {
                     let local = app.plays.get(id).copied().unwrap_or(0) as u64;
                     fmt_n(local.max(x.as_u64()?) as usize)
