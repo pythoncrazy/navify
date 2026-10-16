@@ -1254,11 +1254,11 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let b = container(c).padding([0, 16]).center_y(64).width(Fill);
         b.style(fill(bg, 0.0))
     };
-    if app.route == "lyrics" && app.cfg.settings.lyrics_follow && app.lyric.1.is_none() {
+    if lyric_line(app) == usize::MAX - 1 {
         let t = bold("Show the current line", 14.0);
         let b = button(t)
             .padding([10, 20])
-            .on_press(act(|a| a.lyric = (usize::MAX, Some(0.0))));
+            .on_press(act(|a| a.lyric = true));
         let b = b.style(theme::btn([TEXT; 3], [BG; 3], 500.0));
         let b = container(b).center_x(Fill).align_bottom(Fill);
         return Some(b.padding(24).into());
@@ -1931,7 +1931,7 @@ fn lyrics(app: &App) -> El<'_> {
         return s;
     }
     let bg = fill(head_color(app, &song.cover), 0.0);
-    let Some((l, cur, synced)) = lyric_at(app, song) else {
+    let Some((l, cur, synced, _)) = lyric_at(app, song) else {
         let t = bold("No lyrics are available for this song.", 24.0);
         let t = container(t).center_x(Fill).padding(80);
         return t.height(app.scroll().1).style(bg).into();
@@ -1969,24 +1969,39 @@ fn lyrics(app: &App) -> El<'_> {
     container(col).padding(pad).width(Fill).style(bg).into()
 }
 
-pub fn lyric_line(app: &App) -> Option<usize> {
-    Some(lyric_at(app, app.current_song()?)?.1.unwrap_or(0))
+pub fn lyric_line(app: &App) -> usize {
+    let lyr = (app.route == "lyrics" && app.cfg.settings.lyrics_follow)
+        .then(|| app.current_song().and_then(|s| lyric_at(app, s)))
+        .flatten()
+        .filter(|x| x.2);
+    match (lyr, app.lyric) {
+        (Some((_, i, _, _)), true) => i.unwrap_or(0),
+        (Some(_), false) => usize::MAX - 1,
+        _ => usize::MAX,
+    }
 }
 
-pub fn synced_lyrics(app: &App) -> bool {
-    app.current_song()
-        .and_then(|s| lyric_at(app, s))
-        .is_some_and(|x| x.2)
+pub fn lyric_wait(app: &App) -> Option<u64> {
+    let (_, cur, true, Some(rem)) = lyric_at(app, app.current_song()?)? else {
+        return None;
+    };
+    Some(match rem + 8 {
+        r if r > 1250 || app.route != "lyrics" => 1000,
+        r => (r.max(250) as u64 & !1) | (cur.map_or(0, |i| i + 1) as u64 & 1),
+    })
 }
 
-fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, Option<usize>, bool)> {
+fn lyric_at<'a>(
+    app: &'a App,
+    song: &Song,
+) -> Option<(&'a Lyrics, Option<usize>, bool, Option<i64>)> {
     let all = app.data::<Vec<Lyrics>>(&format!("lyrics:{}", song.id))?;
     let any = |synced: bool| {
         all.iter()
             .find(move |l| !l.lines.is_empty() && l.synced >= synced)
     };
     let l = any(true).or_else(|| any(false))?;
-    let ms = (app.position * 1000.0) as i64;
+    let ms = (app.pos() * 1000.0) as i64;
     let end = (song.duration * 1000.0) as i64;
     let lag = (app.cfg.settings.lyrics_offset * 1000.0) as i64;
     let at = |t: u64| t as i64 - l.offset + lag;
@@ -1998,7 +2013,11 @@ fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, Option<usize>,
     let synced = l.synced && (end <= 0 || fits);
     let past = |x: &(Option<u64>, String)| x.0.is_some_and(|t| at(t) <= ms);
     let cur = l.lines.iter().rposition(past).filter(|_| synced);
-    Some((l, cur, synced))
+    let next = l.lines[cur.map_or(0, |i| i + 1)..]
+        .iter()
+        .find_map(|x| x.0)
+        .map(|t| at(t) - ms);
+    Some((l, cur, synced, next))
 }
 
 fn pick<'a, T: Clone + Send + Sync + 'static>(
@@ -2382,7 +2401,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
         let c = container(column![top, body]);
         c.style(fill(ELEVATED, 8.0))
     });
-    let preview = lyric_at(app, s).map(|(l, cur, _)| {
+    let preview = lyric_at(app, s).map(|(l, cur, _, _)| {
         let lines = l.lines[cur.unwrap_or(0)..]
             .iter()
             .filter(|x| !x.1.is_empty())
