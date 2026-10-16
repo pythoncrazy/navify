@@ -15,7 +15,7 @@ use crate::theme::{
 };
 use crate::view::{
     El, SONGS_BG, art, artists_line, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, go, icon_btn,
-    liked_art, media, tool_btn,
+    liked_art, media, tip, tool_btn,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -1271,7 +1271,11 @@ fn profile(app: &App) -> Option<El<'_>> {
             .color(TEXT)
             .into(),
         color: initial(user).1,
-        extra: Vec::new(),
+        extra: vec![tip(
+            bar_btn(i::SETTINGS, Message::Nav("settings".into())),
+            "Go to settings",
+            iced::widget::tooltip::Position::Top,
+        )],
         banner: None,
     };
     Some(page(
@@ -2121,7 +2125,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 a.pl_find = Some(String::new());
                 iced::widget::operation::focus("setfind")
             });
-            crate::view::tip(
+            tip(
                 icon_btn(i::SEARCH, 16.0, open),
                 "Search settings",
                 iced::widget::tooltip::Position::Bottom,
