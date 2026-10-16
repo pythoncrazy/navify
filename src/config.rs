@@ -61,6 +61,7 @@ pub struct Settings {
     pub hide_album: bool,
     pub hide_added: bool,
     pub hide_plays: bool,
+    pub hide_duration: bool,
     pub lib_view: u8,
 }
 
@@ -126,6 +127,7 @@ impl Default for Settings {
             hide_album: false,
             hide_added: false,
             hide_plays: false,
+            hide_duration: false,
             lib_view: 1,
             play_mode: 0,
             ratings: false,
