@@ -160,7 +160,6 @@ pub enum Message {
     Back,
     Fwd,
     Scrolled(f32, f32, f32),
-    LyricAt(f32),
     LibScrolled(f32, f32),
     Search(String),
     SearchGo(u64),
@@ -292,7 +291,7 @@ pub struct App {
     seeds: HashMap<String, AnyData>,
     pub pending: HashSet<String>,
     pub scrolls: HashMap<String, (f32, f32)>,
-    pub lyric: (usize, Option<f32>),
+    pub lyric: bool,
     pub covers: Covers,
     pub player: Option<navify_audio::Player>,
     media: Option<souvlaki::MediaControls>,
@@ -1032,7 +1031,7 @@ impl App {
 
     fn began(&mut self) -> Task<Message> {
         (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
-        self.lyric = (usize::MAX, Some(0.0));
+        self.lyric = true;
         self.queue_next_refresh();
         let Some(song) = self.current_song().cloned() else {
             return Task::none();
@@ -1081,7 +1080,7 @@ impl App {
         Task::batch([lyr, now, Task::batch(note), self.save_later()])
     }
 
-    fn pos(&self) -> f32 {
+    pub fn pos(&self) -> f32 {
         let p = self.player.as_ref().filter(|_| self.loaded);
         p.map_or(self.position, |p| p.position())
     }
@@ -1325,7 +1324,7 @@ impl App {
         let mut tasks: Vec<_> = keys.map(|k| self.request(k, 0)).collect();
         tasks.push(self.disc_load());
         match route == "lyrics" {
-            true => self.lyric = (usize::MAX, Some(0.0)),
+            true => self.lyric = true,
             false => tasks.push(self.scroll_to(self.scrolls.get(&route).map_or(0.0, |s| s.0))),
         }
         if route == "login" {
@@ -1440,13 +1439,6 @@ impl App {
             if diff && self.route.starts_with("playlist:") {
                 t = Task::batch([t, self.covers_now()]);
             }
-        }
-        let follow = self.lyric.1.is_some() && self.route == "lyrics";
-        let follow = follow && self.cfg.settings.lyrics_follow;
-        let line = follow.then(|| crate::pages::lyric_line(self)).flatten();
-        if let Some(n) = line.filter(|n| *n != self.lyric.0) {
-            self.lyric.0 = n;
-            t = Task::batch([t, lyric_find()]);
         }
         let awake = self.playing && self.cfg.settings.awake;
         if awake != self.awake.0 {
@@ -1567,10 +1559,6 @@ impl App {
                     .scrolls
                     .insert(key.clone(), (off, view))
                     .unwrap_or_default();
-                let max = (content - view).max(0.0);
-                if key == "lyrics" && self.lyric.1.is_some_and(|y| (y.min(max) - off).abs() > 2.0) {
-                    self.lyric.1 = None;
-                }
                 let v = self.cache.get(&key).map(|c| &c.1);
                 let more = v.and_then(|v| pager!(v, p => (p.0.len() < p.1).then_some(p.0.len())));
                 let more = more.filter(|_| content > 0.0 && off + view * 3.0 >= content);
@@ -1578,11 +1566,6 @@ impl App {
                 let moved = old.0 as usize / 28 != off as usize / 28 || old.1 != view;
                 return Task::batch([more, Task::batch(moved.then(|| self.disc_load()))]);
             }
-            Message::LyricAt(y) if self.route == "lyrics" && self.lyric.1.is_some() => {
-                self.lyric.1 = Some(y);
-                return self.scroll_to(y);
-            }
-            Message::LyricAt(_) => {}
             Message::Search(q) => {
                 (self.search_q, self.search_seq) = (q, self.search_seq + 1);
                 return later(0.25, Message::SearchGo(self.search_seq));
@@ -1637,7 +1620,7 @@ impl App {
                 };
                 let pos = pos.clamp(0.0, dur.max(0.0));
                 let again = pos < 5.0 && self.pos() > 10.0;
-                (self.position, self.lyric) = (pos, (usize::MAX, Some(0.0)));
+                (self.position, self.lyric) = (pos, true);
                 self.player.iter().for_each(|p| p.seek(pos));
                 if again {
                     let done = self.listen(false);
@@ -2604,7 +2587,8 @@ impl App {
     }
 
     pub fn view(&self) -> iced::Element<'_, Message> {
-        crate::view::smooth(crate::view::view(self), self.cfg.settings.smooth)
+        let lyr = crate::pages::lyric_line(self);
+        crate::view::smooth(crate::view::view(self), self.cfg.settings.smooth, lyr)
     }
 
     pub fn title(&self) -> String {
@@ -2683,9 +2667,8 @@ impl App {
         if self.playing
             && !self.hidden
             && (self.route == "lyrics" || self.panel == 1)
-            && crate::pages::synced_lyrics(self)
+            && let Some(ms) = crate::pages::lyric_wait(self)
         {
-            let ms = if self.route == "lyrics" { 250 } else { 1000 };
             subs.push(
                 iced::time::every(Duration::from_millis(ms)).map(|_| act(|a| a.position = a.pos())),
             );
@@ -3038,44 +3021,6 @@ fn layer_focus(
         }
     }
     iced::advanced::widget::operate(Focus(layer, Some(Box::new(pick)), 0, None))
-}
-
-fn lyric_find() -> Task<Message> {
-    use iced::advanced::widget::operation::{Outcome, Scrollable};
-    use iced::advanced::widget::{Id, Operation};
-    use iced::{Rectangle, Vector};
-    struct Find(Option<(f32, f32)>, Option<f32>);
-    impl Operation<Message> for Find {
-        fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation<Message>)) {
-            f(self);
-        }
-        fn scrollable(
-            &mut self,
-            id: Option<&Id>,
-            b: Rectangle,
-            c: Rectangle,
-            _: Vector,
-            _: &mut dyn Scrollable,
-        ) {
-            if id == Some(&Id::from(crate::view::SCROLL)) {
-                self.0 = Some((c.y, b.height));
-            }
-        }
-        fn container(&mut self, id: Option<&Id>, b: Rectangle) {
-            if id == Some(&Id::from("lyric")) {
-                self.1 = Some(b.y);
-            }
-        }
-        fn finish(&self) -> Outcome<Message> {
-            match (self.0, self.1) {
-                (Some((top, h)), Some(y)) => {
-                    Outcome::Some(Message::LyricAt((y - top - h * 0.3).max(0.0)))
-                }
-                _ => Outcome::None,
-            }
-        }
-    }
-    iced::advanced::widget::operate(Find(None, None))
 }
 
 fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {

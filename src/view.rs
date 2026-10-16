@@ -66,7 +66,13 @@ pub fn focusable<'a>(
     id: Option<&'static str>,
 ) -> El<'a> {
     let id = id.map(iced::advanced::widget::Id::from);
-    Element::new(wrap::Wrap(c.into(), Some((msg, radius, id)), None, 0))
+    Element::new(wrap::Wrap(
+        c.into(),
+        Some((msg, radius, id)),
+        None,
+        0,
+        usize::MAX,
+    ))
 }
 
 pub fn live<'a>(
@@ -80,19 +86,20 @@ pub fn live<'a>(
         None,
         Some((clock, Box::new(build), run, p)),
         0,
+        usize::MAX,
     ))
 }
 
-pub fn smooth(c: El<'_>, on: bool) -> El<'_> {
-    Element::new(wrap::Wrap(c, None, None, usize::from(on)))
+pub fn smooth(c: El<'_>, on: bool, lyr: usize) -> El<'_> {
+    Element::new(wrap::Wrap(c, None, None, usize::from(on), lyr))
 }
 
 pub fn pane<'a>(c: impl Into<El<'a>>) -> El<'a> {
-    Element::new(wrap::Wrap(c.into(), None, None, 2))
+    Element::new(wrap::Wrap(c.into(), None, None, 2, usize::MAX))
 }
 
 pub fn vgap<'a>(c: impl Into<El<'a>>, lo: usize) -> El<'a> {
-    Element::new(wrap::Wrap(c.into(), None, None, 3 + lo))
+    Element::new(wrap::Wrap(c.into(), None, None, 3 + lo, usize::MAX))
 }
 
 pub fn bands<'a>(stops: &[(f32, Color)]) -> El<'a> {
@@ -124,9 +131,49 @@ mod wrap {
         pub Option<Focus>,
         pub Option<Live<'a>>,
         pub usize,
+        pub usize,
     );
     #[derive(Default)]
-    struct Ring(bool, f32, Option<std::time::Instant>, Point, bool, usize);
+    struct Ring(
+        bool,
+        f32,
+        Option<std::time::Instant>,
+        Point,
+        bool,
+        usize,
+        Option<f32>,
+    );
+    struct Scan(Option<(Rect, Rect, f32)>, Option<(f32, f32)>, Option<f32>);
+    impl Operation for Scan {
+        fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation)) {
+            if self.0.is_none() || self.1.is_none() && self.2.is_none() {
+                f(self);
+            }
+        }
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            b: Rect,
+            c: Rect,
+            v: iced::Vector,
+            s: &mut dyn iced::advanced::widget::operation::Scrollable,
+        ) {
+            if id == Some(&Id::from(super::SCROLL)) {
+                self.0 = Some((b, c, v.y));
+                if let Some(y) = self.2 {
+                    s.scroll_to(iced::widget::operation::AbsoluteOffset {
+                        x: Some(0.0),
+                        y: Some(y),
+                    });
+                }
+            }
+        }
+        fn container(&mut self, id: Option<&Id>, b: Rect) {
+            if id == Some(&Id::from("lyric")) {
+                self.1 = Some((b.y, b.height));
+            }
+        }
+    }
     impl Focusable for Ring {
         fn is_focused(&self) -> bool {
             self.0
@@ -214,7 +261,8 @@ mod wrap {
                 None,
                 Point::ORIGIN,
                 false,
-                self.3.saturating_sub(3),
+                self.3.checked_sub(3).unwrap_or(usize::MAX),
+                None,
             ))
         }
         fn children(&self) -> Vec<Tree> {
@@ -279,7 +327,74 @@ mod wrap {
                 }
                 _ => {}
             }
+            let w = self.0.as_widget_mut();
+            let c0 = &mut t.children[0];
+            let scan = |w: &mut dyn Widget<Message, T, R>, c0: &mut Tree, a, b| {
+                let mut s = Scan(None, a, b);
+                w.operate(c0, l, r, &mut s);
+                (s.0, s.1)
+            };
+            let frame = std::time::Duration::from_millis(16);
             let ring = t.state.downcast_mut::<Ring>();
+            if matches!(e, Event::Window(iced::window::Event::Resized(_))) && self.3 <= 1 {
+                ring.5 = usize::MAX;
+            }
+            if self.4 >= usize::MAX - 1 && self.3 <= 1 && self.1.is_none() && self.2.is_none() {
+                (ring.5, ring.6) = (self.4, None);
+            } else if self.4 < usize::MAX - 1
+                && let Event::Window(RedrawRequested(now)) = e
+            {
+                if ring.5 != self.4
+                    && let (Some((b, ch, off)), Some((ly, lh))) = scan(w, c0, None, None)
+                {
+                    let old = std::mem::replace(&mut ring.5, self.4);
+                    ring.1 = 0.0;
+                    let max = (ch.height - b.height).max(0.0);
+                    let y = (ly - ch.y + lh * 0.5 - b.height * 0.45).clamp(0.0, max);
+                    let near = old == usize::MAX - 1 || (y - off).abs() < b.height;
+                    match self.3 == 1 && old != usize::MAX && near && (y - off).abs() >= 1.0 {
+                        true => {
+                            ring.2 = ring.2.filter(|_| ring.6.is_some());
+                            ring.6 = Some(y);
+                        }
+                        false => {
+                            ring.6 = None;
+                            scan(w, c0, None, Some(y));
+                        }
+                    }
+                }
+                if let Some(y) = ring.6 {
+                    match ring.2.map(|t| t + frame).filter(|d| d > now) {
+                        Some(due) => sh.request_redraw_at(due),
+                        None => {
+                            let off = scan(w, c0, Some((0.0, 0.0)), None).0.map_or(y, |x| x.2);
+                            let dt = ring.2.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
+                            let rem = y - off;
+                            let next = match rem.abs() < 1.0 {
+                                true => {
+                                    ring.6 = None;
+                                    y
+                                }
+                                false => {
+                                    ring.2 = Some(*now);
+                                    sh.request_redraw_at(*now + frame);
+                                    off + rem * (1.0 - (-dt / 0.08).exp())
+                                }
+                            };
+                            scan(w, c0, None, Some(next));
+                        }
+                    }
+                }
+            }
+            if self.4 < usize::MAX - 1
+                && matches!(e, Event::Mouse(WheelScrolled { .. }))
+                && scan(w, c0, Some((0.0, 0.0)), None)
+                    .0
+                    .is_some_and(|x| c.is_over(x.0))
+            {
+                (ring.5, ring.6) = (usize::MAX - 1, None);
+                sh.publish(super::act(|a| a.lyric = false));
+            }
             match e {
                 Event::Keyboard(ModifiersChanged(m)) => ring.4 = !m.is_empty(),
                 Event::Mouse(WheelScrolled {
@@ -297,9 +412,23 @@ mod wrap {
                 }
                 _ => {}
             }
-            let w = self.0.as_widget_mut();
-            w.update(&mut t.children[0], e, l, c, r, cb, sh, v);
-            let frame = std::time::Duration::from_millis(16);
+            let drag = self.4 < usize::MAX - 1
+                && matches!(
+                    e,
+                    Event::Mouse(CursorMoved { .. } | iced::mouse::Event::ButtonPressed(_))
+                );
+            let pre = drag
+                .then(|| scan(w, c0, Some((0.0, 0.0)), None).0.map(|x| x.2))
+                .flatten();
+            w.update(c0, e, l, c, r, cb, sh, v);
+            if pre.is_some_and(|o| {
+                scan(w, c0, Some((0.0, 0.0)), None)
+                    .0
+                    .is_some_and(|x| (x.2 - o).abs() > 0.5)
+            }) {
+                (ring.5, ring.6) = (usize::MAX - 1, None);
+                sh.publish(super::act(|a| a.lyric = false));
+            }
             if let (Event::Window(RedrawRequested(now)), true) = (e, ring.1 != 0.0) {
                 if let Some(due) = ring.2.map(|t| t + frame).filter(|d| d > now) {
                     return sh.request_redraw_at(due);
@@ -314,7 +443,7 @@ mod wrap {
                 let delta = ScrollDelta::Pixels { x: 0.0, y: step };
                 let wheel = Event::Mouse(WheelScrolled { delta });
                 let at = Cursor::Available(ring.3);
-                w.update(&mut t.children[0], &wheel, l, at, r, cb, sh, v);
+                w.update(c0, &wheel, l, at, r, cb, sh, v);
                 match free && !sh.is_event_captured() {
                     true => ring.1 = 0.0,
                     false if ring.1 != 0.0 => sh.request_redraw_at(*now + frame),
@@ -1400,12 +1529,13 @@ pub fn view(app: &App) -> El<'_> {
             .chain(toast.map(El::from));
         return stack![body].extend(top).into();
     }
-    let scroll = scrollable(pane(pages::route(app)))
-        .id(SCROLL)
-        .on_scroll(|v| {
+    let mut scroll = scrollable(pane(pages::route(app))).id(SCROLL);
+    if app.route != "lyrics" {
+        scroll = scroll.on_scroll(|v| {
             let (b, c) = (v.bounds().height, v.content_bounds().height);
             Message::Scrolled(v.absolute_offset().y, b, c)
         });
+    }
     let scroll = scroll.style(theme::scroll).height(Fill);
     let main = stack![scroll].extend(pages::sticky(app));
     let main = container(main).width(Fill).height(Fill).clip(true);

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use navify::api::{Album, Song, parse};
+use navify::api::{Album, Lyrics, Song, parse};
 use navify::app::{AnyData, App, Message, act};
+use navify::pages::{lyric_line, lyric_wait};
 use serde_json::json;
 
 fn app() -> App {
@@ -305,4 +306,28 @@ fn settings_check_rejects_values_out_of_range() {
     assert!(s.check().is_err());
     s = serde_json::from_value(json!({"zoom": 3.0})).expect("settings");
     assert!(s.check().is_err());
+    let mut app = app();
+    app.queue = items(["a".into()]);
+    app.queue[0].duration = 10.0;
+    let _ = app.update(Message::Nav("lyrics".into()));
+    let lyr = Lyrics {
+        synced: true,
+        offset: 0,
+        lines: vec![
+            (Some(1000), "a".into()),
+            (Some(1600), "b".into()),
+            (Some(4000), "c".into()),
+        ],
+    };
+    let ok = Ok(Arc::new(vec![lyr]) as _);
+    let _ = app.update(Message::Loaded("lyrics:a".into(), 0, ok));
+    assert_eq!((lyric_line(&app), lyric_wait(&app)), (0, Some(1008)));
+    app.position = 1.0;
+    assert_eq!((lyric_line(&app), lyric_wait(&app)), (0, Some(609)));
+    app.lyric = false;
+    assert_eq!(lyric_line(&app), usize::MAX - 1);
+    let _ = app.update(Message::Seek(1.6));
+    assert_eq!((lyric_line(&app), lyric_wait(&app)), (1, Some(1000)));
+    app.position = 5.0;
+    assert_eq!((lyric_line(&app), lyric_wait(&app)), (2, None));
 }
