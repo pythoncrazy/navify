@@ -200,11 +200,16 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     };
     let clock = container(i(i::CLOCK, 16.0).color(SUB)).align_right(120);
     let r = row![sub("#", 16.0).width(c.3).center(), title];
-    let r = r.push(h("Album", c.1)).push(h("Date added", c.2));
+    let album = app.route.starts_with("album:");
+    let second: Option<El> = match album {
+        true => h("Plays", c.1).map(|t| container(t.width(100).align_x(Right)).width(c.1).into()),
+        false => h("Album", c.1).map(Into::into),
+    };
+    let r = r.push(second).push(h("Date added", c.2));
     let star = container(i(i::STAR, 16.0).color(SUB)).width(90);
     let r = r.push(app.cfg.settings.ratings.then_some(star));
     let plays = sub("Plays", 14.0).width(64).align_x(Right);
-    let r = r.push(app.cfg.settings.plays.then_some(plays));
+    let r = r.push((app.cfg.settings.plays && !album).then_some(plays));
     let r = r.push(clock.padding(padding::right(52)));
     let r = r.spacing(16).padding([0, 16]).height(36).align_y(Center);
     let p = Padding::new(PAD).top(0).bottom(16);
@@ -252,12 +257,16 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         false => column![name].push(by).spacing(2).into(),
     };
     let count = app.plays.get(&s.id).copied().unwrap_or(0).max(s.play_count);
-    let plays = || (count > 0).then(|| fmt_n(count as usize));
+    let plays = || fmt_n(count as usize);
+    let in_album = key.starts_with("album:");
     let album = ell(&s.album, c.1, 14.0, Normal);
     let album = link_btn(album, SUB, go("album", &s.album_id));
-    let second: El = match pop {
-        true => sub(plays().unwrap_or_default(), 14.0).width(c.1).into(),
-        false => container(album).width(c.1).into(),
+    let second: El = match (pop, in_album) {
+        (true, _) => sub(plays(), 14.0).width(c.1).into(),
+        (_, true) => container(sub(plays(), 14.0).width(100).align_x(Right))
+            .width(c.1)
+            .into(),
+        _ => container(album).width(c.1).into(),
     };
     let more = hot.then(|| icon_btn(i::DOTS, 16.0, Message::RowMenu(key.into(), n)));
     let heart = (hot || starred).then(|| heart_btn(&s.id, starred, 16.0));
@@ -276,10 +285,8 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     });
     let tail = row![container(heart).width(32), dur, container(more).width(32)];
     let r = row![idx, name].push((c.1 > 0.0).then_some(second));
-    let count = sub(plays().unwrap_or_default(), 14.0)
-        .width(64)
-        .align_x(Right);
-    let count = (app.cfg.settings.plays && !pop).then_some(count);
+    let count = sub(plays(), 14.0).width(64).align_x(Right);
+    let count = (app.cfg.settings.plays && !pop && !in_album).then_some(count);
     let r = r
         .push(added)
         .push(stars)
@@ -729,7 +736,14 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             ],
             banner: None,
         };
-        return Some((p, songs, cols(app, false, false, songs.len())));
+        let c = cols(app, true, false, songs.len());
+        let w = c.0 + c.1 + 80.0 * f32::from(app.cfg.settings.plays);
+        let fr = (app.main_w() - 2.0 * PAD - 80.0 - c.3) / 7.0;
+        let c = match c.1 > 0.0 {
+            true => (4.0 * fr, w - 4.0 * fr, c.2, c.3),
+            false => c,
+        };
+        return Some((p, songs, c));
     }
     if let Some((p, songs)) = app.data::<(Playlist, Vec<Song>)>(key) {
         let len = fmt_long(p.duration);
