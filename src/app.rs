@@ -1712,7 +1712,7 @@ impl App {
             }
             Message::Menu(kind) => {
                 let (x, y) = match *kind {
-                    MenuKind::Create => (self.lib_w() - 108.0, 115.0),
+                    MenuKind::Create => (self.lib_w() - 108.0, 123.0),
                     MenuKind::User => (self.view_size().0 - 338.0, 64.0),
                     MenuKind::View => (self.lib_w() + self.main_w() - 148.0, cursor().1 + 24.0),
                     MenuKind::Disc => (cursor().0 - 16.0, cursor().1 + 24.0),
