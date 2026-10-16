@@ -118,6 +118,7 @@ pub struct Song {
     pub artist: String,
     pub artist_id: String,
     pub genre: String,
+    pub year: u32,
     #[serde(alias = "trackNumber")]
     pub track: u32,
     #[serde(rename = "discNumber")]

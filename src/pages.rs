@@ -29,12 +29,13 @@ pub const HEAD: f32 = 53.0;
 const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
 const GREY: Color = color!(0x535353);
 const LIKED: Color = color!(0x5038a0);
-const ORDER: [&str; 6] = [
+const ORDER: [&str; 7] = [
     "Custom order",
     "Title",
     "Artist",
     "Album",
-    "Date added",
+    "Recently added",
+    "Release date",
     "Duration",
 ];
 pub const DOT: &str = " \u{2022} ";
@@ -2593,12 +2594,13 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let sorts = app.route.starts_with("playlist:").then(|| {
                 let arrow = [i::ARROW_UP, i::ARROW_DOWN][usize::from(desc)];
                 let rows = ORDER.iter().zip(0u8..).map(|(l, n)| {
-                    let next = if n == key {
-                        app.pl_sort ^ 16
-                    } else {
-                        n | (16 * u8::from(n == 4))
+                    let next = match n {
+                        0 => 0,
+                        _ if n == key => app.pl_sort ^ 16,
+                        _ => n | (16 * u8::from(n == 4)),
                     };
-                    item(l, None, n == key, arrow, act(move |a| a.pl_sort = next))
+                    let tail = if n == 0 { i::CHECK } else { arrow };
+                    item(l, None, n == key, tail, act(move |a| a.pl_sort = next))
                 });
                 column![section("Sort by")].extend(rows)
             });

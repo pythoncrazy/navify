@@ -671,7 +671,8 @@ impl App {
             2 => idx.sort_by_cached_key(|&n| low(&songs[n].artist)),
             3 => idx.sort_by_cached_key(|&n| low(&songs[n].album)),
             4 => idx.sort_by_key(|&n| &songs[n].created),
-            5 => idx.sort_by_key(|&n| (songs[n].duration * 1000.0) as u32),
+            5 => idx.sort_by_key(|&n| songs[n].year),
+            6 => idx.sort_by_key(|&n| (songs[n].duration * 1000.0) as u32),
             _ => {}
         }
         if self.pl_sort & 16 != 0 {
