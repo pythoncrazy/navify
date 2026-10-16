@@ -58,6 +58,7 @@ pub enum MenuKind {
     View,
     Columns,
     Disc,
+    LibSort,
 }
 
 #[derive(Clone, Debug)]
@@ -1685,6 +1686,7 @@ impl App {
                     MenuKind::User => (self.view_size().0 - 338.0, 64.0),
                     MenuKind::View => (self.lib_w() + self.main_w() - 148.0, cursor().1 + 24.0),
                     MenuKind::Disc => (cursor().0 - 16.0, cursor().1 + 24.0),
+                    MenuKind::LibSort => (self.lib_w() - 220.0, cursor().1 + 24.0),
                     _ => cursor(),
                 };
                 self.menu = Some(Menu {

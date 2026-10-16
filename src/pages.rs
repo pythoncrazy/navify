@@ -38,6 +38,7 @@ const ORDER: [&str; 6] = [
     "Duration",
 ];
 pub const DOT: &str = " \u{2022} ";
+pub const LIB_SORTS: [&str; 3] = ["Custom order", "Alphabetical", "Creator"];
 const GROUPS: [(&str, &str); 4] = [
     ("all", "Popular releases"),
     ("album", "Albums"),
@@ -2366,6 +2367,19 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         let b = b.style(theme::btn(hover, [theme::tint(0.9); 3], 2.0));
         focusable(b.on_press(msg.clone()), Some(msg), 2.0, Some("layer"))
     };
+    let section = |t: &'a str| -> El<'a> {
+        let t = bold(t, 12.0).color(theme::tint(0.7));
+        container(t)
+            .padding(Padding::new(12.0).top(14))
+            .height(41)
+            .into()
+    };
+    let item = |l: &'a str, c: Option<char>, on: bool, tail: char, msg: Message| {
+        let fg = if on { ACCENT } else { theme::tint(0.9) };
+        let r = Row::new().push(c.map(|c| i(c, 16.0).color(fg)));
+        let r = r.push(txt(l, 14.0).color(fg).width(Fill));
+        entry(r.push(on.then(|| i(tail, 16.0).color(fg))), msg)
+    };
     let opener = |n: u8| {
         act(move |a| {
             let y = crate::app::cursor().1;
@@ -2428,54 +2442,37 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 .on_press(msg.clone());
             return boxed(focusable(b, Some(msg), 6.0, Some("layer")), 367.0, 72.0, 4);
         }
+        MenuKind::View if app.route.starts_with("discography:") => {
+            let arrow = [i::ARROW_DOWN, i::ARROW_UP][usize::from(app.disc_old)];
+            let sort = |l: &'a str, name: bool| {
+                let on = app.disc_name == name;
+                let m = task(move |a| {
+                    (a.disc_old, a.disc_name) = (on && !a.disc_old, name);
+                    a.disc_load()
+                });
+                item(l, None, on, arrow, m)
+            };
+            let grid = app.cfg.settings.disc_grid;
+            let view = |l: &'a str, c: char, on: bool| {
+                let m = task(move |a| {
+                    let o = a.cfg.settings.clone();
+                    a.cfg.settings.disc_grid = on;
+                    iced::Task::batch([a.settings(o), a.disc_load()])
+                });
+                item(l, Some(c), grid == on, i::CHECK, m)
+            };
+            let col = column![
+                section("Sort by"),
+                sort("Release date", false),
+                sort("Name", true),
+                section("View as"),
+                view("List", i::LIST, false),
+                view("Grid", i::GRID, true),
+            ];
+            return boxed(col.into(), 160.0, 41.0 * 2.0 + 40.0 * 4.0 + 8.0, 4);
+        }
         MenuKind::View => {
-            let (key, desc, compact) = (
-                app.pl_sort & 15,
-                app.pl_sort & 16 != 0,
-                app.cfg.settings.compact,
-            );
-            let head = |t: &'a str| -> El<'a> {
-                let t = bold(t, 12.0).color(theme::tint(0.7));
-                container(t)
-                    .padding(Padding::new(12.0).top(14))
-                    .height(41)
-                    .into()
-            };
-            let item = |l: &'a str, c: Option<char>, on: bool, tail: char, msg: Message| {
-                let fg = if on { ACCENT } else { theme::tint(0.9) };
-                let r = Row::new().push(c.map(|c| i(c, 16.0).color(fg)));
-                let r = r.push(txt(l, 14.0).color(fg).width(Fill));
-                entry(r.push(on.then(|| i(tail, 16.0).color(fg))), msg)
-            };
-            if app.route.starts_with("discography:") {
-                let arrow = [i::ARROW_DOWN, i::ARROW_UP][usize::from(app.disc_old)];
-                let sort = |l: &'a str, name: bool| {
-                    let on = app.disc_name == name;
-                    let m = task(move |a| {
-                        (a.disc_old, a.disc_name) = (on && !a.disc_old, name);
-                        a.disc_load()
-                    });
-                    item(l, None, on, arrow, m)
-                };
-                let grid = app.cfg.settings.disc_grid;
-                let view = |l: &'a str, c: char, on: bool| {
-                    let m = task(move |a| {
-                        let o = a.cfg.settings.clone();
-                        a.cfg.settings.disc_grid = on;
-                        iced::Task::batch([a.settings(o), a.disc_load()])
-                    });
-                    item(l, Some(c), grid == on, i::CHECK, m)
-                };
-                let col = column![
-                    head("Sort by"),
-                    sort("Release date", false),
-                    sort("Name", true),
-                    head("View as"),
-                    view("List", i::LIST, false),
-                    view("Grid", i::GRID, true),
-                ];
-                return boxed(col.into(), 160.0, 41.0 * 2.0 + 40.0 * 4.0 + 8.0, 4);
-            }
+            let (key, desc) = (app.pl_sort & 15, app.pl_sort & 16 != 0);
             let sorts = app.route.starts_with("playlist:").then(|| {
                 let arrow = [i::ARROW_UP, i::ARROW_DOWN][usize::from(desc)];
                 let rows = ORDER.iter().zip(0u8..).map(|(l, n)| {
@@ -2486,25 +2483,29 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                     };
                     item(l, None, n == key, arrow, act(move |a| a.pl_sort = next))
                 });
-                column![head("Sort by")].extend(rows)
+                column![section("Sort by")].extend(rows)
             });
             let views = [("Compact", i::COMPACT, true), ("List", i::LIST, false)];
             let views = views.map(|(l, c, v)| {
-                item(
-                    l,
-                    Some(c),
-                    compact == v,
-                    i::CHECK,
-                    set(|s, b| s.compact = b, v),
-                )
+                let on = app.cfg.settings.compact == v;
+                item(l, Some(c), on, i::CHECK, set(|s, b| s.compact = b, v))
             });
             let n = sorts.as_ref().map_or(0, |_| ORDER.len());
             let h = 41.0 * (1 + usize::from(n > 0)) as f32 + 40.0 * (n + 2) as f32 + 8.0;
             let col = Column::new()
                 .push(sorts)
-                .push(head("View as"))
+                .push(section("View as"))
                 .extend(views);
             return boxed(col.into(), 160.0, h, 4);
+        }
+        MenuKind::LibSort => {
+            let sort = app.cfg.settings.lib_sort;
+            let rows = LIB_SORTS
+                .iter()
+                .zip(0u8..)
+                .map(|(l, n)| item(l, None, n == sort, i::CHECK, set(|s, n| s.lib_sort = n, n)));
+            let col = column![section("Sort by")].extend(rows);
+            return boxed(col.into(), 208.0, 41.0 + 40.0 * 3.0 + 8.0, 4);
         }
         MenuKind::Disc => {
             let Some((id, f, _, albums)) = disc_args(app) else {
@@ -2512,13 +2513,14 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             };
             let has = |g: &str| g == "all" || albums.iter().any(|x| kind(x).1 == g);
             let rows = GROUPS.iter().filter(|(g, _)| has(g)).map(|(g, l)| {
-                let on = f == *g;
-                let fg = if on { ACCENT } else { theme::tint(0.9) };
-                let l = txt(if *g == "all" { "All" } else { l }, 14.0)
-                    .color(fg)
-                    .width(Fill);
-                let tail = on.then(|| i(i::CHECK, 16.0).color(fg));
-                entry(row![l].push(tail), go("discography", &format!("{id}:{g}")))
+                let l = if *g == "all" { "All" } else { l };
+                item(
+                    l,
+                    None,
+                    f == *g,
+                    i::CHECK,
+                    go("discography", &format!("{id}:{g}")),
+                )
             });
             let rows: Vec<El> = rows.collect();
             let h = 40.0 * rows.len() as f32 + 8.0;
@@ -2528,44 +2530,25 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let st = &app.cfg.settings;
             let album = app.route.starts_with("album:");
             let dated = app.route.starts_with("playlist:") || app.route == "liked";
-            let box_on = |on: bool| -> El<'a> {
+            let check = |l: &'a str, on: bool, msg: Message| {
                 let c = container(on.then(|| i(i::CHECK, 12.0).color(BG))).center(16);
                 let border = iced::Border::default().rounded(2);
                 let border = border.width(f32::from(u8::from(!on))).color(SUB);
                 let bg = if on { ACCENT } else { Color::TRANSPARENT };
-                c.style(move |_| container::Style::default().background(bg).border(border))
-                    .into()
-            };
-            let item = |l: &'a str, on: bool, msg: Message| {
+                let c = c.style(move |_| container::Style::default().background(bg).border(border));
                 let fg = if on { ACCENT } else { theme::tint(0.9) };
-                entry(row![txt(l, 14.0).color(fg).width(Fill), box_on(on)], msg)
+                entry(row![txt(l, 14.0).color(fg).width(Fill), c], msg)
             };
+            let flip =
+                |l, on: bool, f: fn(&mut crate::config::Settings, bool)| check(l, on, set(f, !on));
             let rows = [
-                (!album).then(|| {
-                    item(
-                        "Album",
-                        !st.hide_album,
-                        set(|s, b| s.hide_album = b, !st.hide_album),
-                    )
-                }),
-                dated.then(|| {
-                    item(
-                        "Date added",
-                        !st.hide_added,
-                        set(|s, b| s.hide_added = b, !st.hide_added),
-                    )
-                }),
-                Some(item(
-                    "Rating",
-                    st.ratings,
-                    set(|s, b| s.ratings = b, !st.ratings),
-                )),
-                (!album).then(|| item("Plays", st.plays, set(|s, b| s.plays = b, !st.plays))),
+                (!album).then(|| flip("Album", !st.hide_album, |s, b| s.hide_album = !b)),
+                dated.then(|| flip("Date added", !st.hide_added, |s, b| s.hide_added = !b)),
+                Some(flip("Rating", st.ratings, |s, b| s.ratings = b)),
+                (!album).then(|| flip("Plays", st.plays, |s, b| s.plays = b)),
             ];
             let n = rows.iter().flatten().count();
-            let t = bold("Columns", 12.0).color(theme::tint(0.7));
-            let t = container(t).padding(Padding::new(12.0).top(14)).height(41);
-            let col = column![t].extend(rows.into_iter().flatten());
+            let col = column![section("Columns")].extend(rows.into_iter().flatten());
             return boxed(col.into(), 160.0, 41.0 + 40.0 * n as f32 + 8.0, 4);
         }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if level == 2 && v.len() == 1 => {
