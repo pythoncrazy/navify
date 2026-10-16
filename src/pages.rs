@@ -1286,7 +1286,7 @@ fn profile(app: &App) -> Option<El<'_>> {
     Some(page(
         app,
         p,
-        body.padding(padding::bottom(PAD * 2.0)).into(),
+        body.padding(padding::top(17).bottom(PAD * 2.0)).into(),
     ))
 }
 
