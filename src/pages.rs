@@ -1235,7 +1235,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         .filter(|_| off > list_y(app) - HEAD - 64.0)
         .map(|c| table_head(app, c));
     let cols = cols.map(|c| container(c).style(fill(color!(0x1a1a1a), 0.0)));
-    (off > top - 64.0).then(|| column![head].push(cols).into())
+    (off > top - 24.0).then(|| column![head].push(cols).into())
 }
 
 fn plain(html: &str) -> String {
