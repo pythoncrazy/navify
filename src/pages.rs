@@ -288,7 +288,7 @@ fn playlist_card<'a>(app: &'a App, p: &'a Playlist) -> El<'a> {
 fn table_head<'a>(app: &App, c: Cols, gap: f32) -> El<'a> {
     let h = |t: &'static str, w: f32| (w > 0.0).then(|| sub(t, 14.0).width(w));
     let half = c.0 / 2.0 - 8.0;
-    let split = app.cfg.settings.compact && !app.route.starts_with("artist:");
+    let split = app.row_h() < 56.0;
     let title = match split {
         true => row![h("Title", half), h("Artist", half)].spacing(16),
         false => row![h("Title", c.0)],
@@ -349,7 +349,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let sel = app.sel.as_ref().is_some_and(|x| x.0 == key) && app.picked.contains(&n);
     let cur = app.current_song().is_some_and(|x| x.id == s.id);
     let starred = app.is_starred(&s.id, s.starred);
-    let compact = app.cfg.settings.compact;
+    let compact = app.row_h() < 56.0;
     let art = !key.starts_with("album:") && !compact;
     let fg = if cur { ACCENT } else { TEXT };
     let at = Message::PlayAt(key.into(), n);
@@ -362,7 +362,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         _ => num.width(c.3).center().into(),
     };
     let tw = c.0 - if art { 52.0 } else { 0.0 };
-    let half = [tw, tw / 2.0 - 8.0][usize::from(compact && !pop)];
+    let half = [tw, tw / 2.0 - 8.0][usize::from(compact)];
     let name = ell(&s.title, half, 16.0, Normal).color(fg);
     let by = (!pop).then(|| artists_line(&s.artists, 14.0, half));
     let title: El = match compact {
