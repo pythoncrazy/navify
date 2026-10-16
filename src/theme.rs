@@ -83,6 +83,7 @@ pub mod fill {
     pub const SAVED: char = '\u{e184}';
     pub const HOME: char = '\u{e2c2}';
     pub const CARET: char = '\u{e136}';
+    pub const CARET_UP: char = '\u{e13c}';
     pub const PIN: char = '\u{e3e2}';
     pub const BROWSE: char = '\u{e00c}';
 }
