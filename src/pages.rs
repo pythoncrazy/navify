@@ -733,9 +733,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let pls = shelf("Your playlists", None, pls);
     let tiles = container(Column::from_vec(rows.collect()).spacing(gap)).padding([0.0, PAD]);
     let col = column![tiles].extend(shelves).push(pls).spacing(40);
-    let k = 0.4 * (0.38 / (c.r.max(c.g).max(c.b) + c.r.min(c.g).min(c.b))).min(1.0);
-    let top = Color::from_rgb(c.r * k, c.g * k, c.b * k);
-    Some(fade(top, 256.0, col.padding([PAD, 16.0])))
+    Some(fade(theme::dark(c, 0.08), 256.0, col.padding([PAD, 16.0])))
 }
 
 struct Page<'a> {
@@ -751,11 +749,8 @@ struct Page<'a> {
 fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let px = art_px(app);
     let title = |tw: f32| huge(p.title, tw);
-    let low = |k: f32| match p.color == LIKED {
-        true => Color::from_rgb(p.color.r * k, p.color.g * k, p.color.b * k),
-        false => theme::shade(p.color, k),
-    };
-    let bg = theme::down(&[(0.0, p.color), (1.0, low(0.5))]);
+    let low = theme::dark(p.color, 0.2);
+    let bg = theme::down(&[(0.0, p.color), (1.0, low)]);
     let hero: El = if let Some(key) = &p.banner {
         let bh = banner_h(app);
         let img = app.covers.get(key, 640);
@@ -821,7 +816,12 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let bar = bar.extend(p.extra).push(view).spacing(PAD);
     let bar = container(bar.align_y(Center)).height(BAR);
     let bar = bar.padding(Padding::new(PAD).top(12).bottom(16));
-    let rest = fade(low(0.4), 232.0, column![bar, body]);
+    let top = Color::from_rgb(
+        low.r * 0.7 + 0.3 * theme::PANEL.r,
+        low.g * 0.7 + 0.3 * theme::PANEL.g,
+        low.b * 0.7 + 0.3 * theme::PANEL.b,
+    );
+    let rest = fade(top, 173.0, column![bar, body]);
     column![hero, rest].into()
 }
 
@@ -1149,7 +1149,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
     let play = play_btn(app, 48.0, &app.route);
     let head = row![play, title].spacing(8).align_y(Center);
-    let head = bar(head.into(), theme::shade(color, 0.5));
+    let head = bar(head.into(), theme::dark(color, 0.2));
     let cols = cols
         .filter(|_| off > list_y(app) - HEAD - 64.0)
         .map(|c| table_head(app, c));
