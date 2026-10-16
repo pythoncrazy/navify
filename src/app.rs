@@ -576,6 +576,10 @@ impl App {
         [56.0, 32.0][usize::from(self.cfg.settings.compact)]
     }
 
+    pub fn lib_compact(&self) -> bool {
+        self.cfg.settings.lib_compact && !self.lib_mini()
+    }
+
     pub fn lib_mini(&self) -> bool {
         let s = &self.cfg.settings;
         let right = [48.0, s.panels.1 + 8.0][usize::from(self.panel > 0)];
@@ -2488,7 +2492,12 @@ impl App {
         let next = (self.index + 1..self.queue.len()).take(ahead);
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
         let (rows, span) = crate::view::lib_rows(self);
-        small.extend(rows[span].iter().map(|r| r.0));
+        small.extend(
+            rows[span]
+                .iter()
+                .filter(|_| !self.lib_compact())
+                .map(|r| r.0),
+        );
         let now = Vec::from_iter(now.filter(|_| self.panel == 1 || self.full));
         let side = [self.right_w() - 32.0, 300.0][usize::from(self.full)];
         let lead = self.lead_artist().filter(|_| self.panel == 1 && !self.full);
