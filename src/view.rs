@@ -84,11 +84,15 @@ pub fn live<'a>(
 }
 
 pub fn smooth(c: El<'_>, on: bool) -> El<'_> {
-    Element::new(wrap::Wrap(c, None, None, u8::from(on)))
+    Element::new(wrap::Wrap(c, None, None, usize::from(on)))
 }
 
 pub fn pane<'a>(c: impl Into<El<'a>>) -> El<'a> {
     Element::new(wrap::Wrap(c.into(), None, None, 2))
+}
+
+pub fn vgap<'a>(c: impl Into<El<'a>>, lo: usize) -> El<'a> {
+    Element::new(wrap::Wrap(c.into(), None, None, 3 + lo))
 }
 
 pub fn bands<'a>(stops: &[(f32, Color)]) -> El<'a> {
@@ -115,9 +119,14 @@ mod wrap {
         f32,
     );
     type Focus = (Option<Message>, f32, Option<Id>);
-    pub struct Wrap<'a>(pub El<'a>, pub Option<Focus>, pub Option<Live<'a>>, pub u8);
+    pub struct Wrap<'a>(
+        pub El<'a>,
+        pub Option<Focus>,
+        pub Option<Live<'a>>,
+        pub usize,
+    );
     #[derive(Default)]
-    struct Ring(bool, f32, Option<std::time::Instant>, Point, bool);
+    struct Ring(bool, f32, Option<std::time::Instant>, Point, bool, usize);
     impl Focusable for Ring {
         fn is_focused(&self) -> bool {
             self.0
@@ -199,12 +208,30 @@ mod wrap {
             tree::Tag::of::<Ring>()
         }
         fn state(&self) -> tree::State {
-            tree::State::new(Ring::default())
+            tree::State::new(Ring(
+                false,
+                0.0,
+                None,
+                Point::ORIGIN,
+                false,
+                self.3.saturating_sub(3),
+            ))
         }
         fn children(&self) -> Vec<Tree> {
             vec![Tree::new(&self.0)]
         }
         fn diff(&self, t: &mut Tree) {
+            if let Some(lo) = self.3.checked_sub(3) {
+                let old = std::mem::replace(&mut t.state.downcast_mut::<Ring>().5, lo);
+                let c = &mut t.children[0].children;
+                let (m, d) = (c.len().saturating_sub(2), lo.abs_diff(old));
+                if d > 0 && d < m {
+                    match lo > old {
+                        true => c[1..=m].rotate_left(d),
+                        false => c[1..=m].rotate_right(d),
+                    }
+                }
+            }
             t.diff_children(std::slice::from_ref(&self.0));
         }
         fn operate(&mut self, t: &mut Tree, l: Layout, r: &R, op: &mut dyn Operation) {
@@ -381,21 +408,23 @@ pub fn media<'a>(
     r.spacing(12).align_y(Center)
 }
 
-pub fn artists_line<'a>(artists: &[Artist], size: f32, w: f32) -> El<'a> {
+pub fn artists_line<'a>(artists: &'a [Artist], size: f32, w: f32) -> El<'a> {
     let mut left = w;
     let mut r = Row::new();
     for (n, a) in artists.iter().enumerate() {
         if left < size {
             break;
         }
-        let name = format!("{}{}", if n > 0 { ", " } else { "" }, a.name);
-        let used = theme::width(&name, size, Normal);
+        let name: Cow<'a, str> = match n {
+            0 => (&a.name).into(),
+            _ => format!(", {}", a.name).into(),
+        };
+        let used = (n + 1 < artists.len()).then(|| theme::width(&name, size, Normal));
         let t = theme::ell(name, left, size, Normal).color(SUB);
-        left -= used;
-        let link = format!("artist:{}", a.id);
+        left -= used.unwrap_or(0.0);
         r = r.push(match a.id.is_empty() {
             true => El::from(t),
-            false => theme::link_btn(t, SUB, Message::Nav(link)).into(),
+            false => theme::link_btn(t, SUB, go("artist", &a.id)).into(),
         });
     }
     r.into()
@@ -533,25 +562,36 @@ fn top_bar(app: &App) -> El<'_> {
     bar.padding([0, 8]).height(64).into()
 }
 
-type LibRow<'a> = (&'a String, &'a String, String, String, &'a String);
+type LibRow<'a> = (&'a String, &'a String, &'static str, String, &'a String);
 
 pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     let f = app.lib_filter;
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
-    let hit = |name: &str| name.to_lowercase().contains(&q);
+    let hit = |name: &str| q.is_empty() || name.to_lowercase().contains(&q);
     let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
         let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
-            let s = format!("Playlist \u{2022} {}", p.owner);
-            (&p.cover, &p.name, s, format!("playlist:{}", p.id), &p.owner)
+            (
+                &p.cover,
+                &p.name,
+                "Playlist",
+                format!("playlist:{}", p.id),
+                &p.owner,
+            )
         });
         let als = l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
-            let s = format!("Album \u{2022} {}", a.artist);
-            (&a.cover, &a.name, s, format!("album:{}", a.id), &a.artist)
+            (
+                &a.cover,
+                &a.name,
+                "Album",
+                format!("album:{}", a.id),
+                &a.artist,
+            )
         });
-        let ars = l.artists.iter().filter(|_| matches!(f, 0 | 3)).map(|a| {
-            let r = format!("artist:{}", a.id);
-            (&a.cover, &a.name, "Artist".into(), r, &a.name)
-        });
+        let ars = l
+            .artists
+            .iter()
+            .filter(|_| matches!(f, 0 | 3))
+            .map(|a| (&a.cover, &a.name, "", format!("artist:{}", a.id), &a.name));
         pls.chain(als).chain(ars)
     });
     let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();
@@ -561,7 +601,9 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         _ => {}
     }
     let pins = &app.cfg.settings.pins;
-    rows.sort_by_key(|r| pins.iter().position(|p| *p == r.3).unwrap_or(usize::MAX));
+    if !pins.is_empty() {
+        rows.sort_by_key(|r| pins.iter().position(|p| *p == r.3).unwrap_or(usize::MAX));
+    }
     let k = PINS
         .iter()
         .filter(|p| p.0 >> f & 1 == 1 && hit(p.3))
@@ -588,11 +630,12 @@ const PINS: [(u8, char, bool, &str, &str); 6] = [
 fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.lib_mini());
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
-    let hit = |name: &str| name.to_lowercase().contains(&q);
+    let hit = |name: &str| q.is_empty() || name.to_lowercase().contains(&q);
     let (sort, (view, cols, lw, rh)) = (app.cfg.settings.lib_sort, app.lib_layout());
     let px = [48.0, 48.0, lw - 8.0, lw - 24.0][view as usize];
     let item = |art: El<'a>, title: &'a str, sub: Cow<'a, str>, route: String| -> El<'a> {
-        let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
+        let same =
+            |r: &str| r == route || r.strip_prefix(&route).is_some_and(|s| s.starts_with(':'));
         let on = !app.ctx.is_empty() && same(&app.ctx);
         let fg = if on { ACCENT } else { TEXT };
         let tag = format!("lib:{route}");
@@ -740,9 +783,12 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         gap((n + k).div_ceil(cols) - hi.div_ceil(cols)),
     );
     let rows = rows.into_iter().take(span.end).skip(span.start);
-    let rows = rows.map(|(c, name, s, r, _)| {
-        let round = r.starts_with("artist:");
-        item(cover(app, c, px, round), name, s.into(), r)
+    let rows = rows.map(|(c, name, k, r, by)| {
+        let s: Cow<str> = match k {
+            "" => "Artist".into(),
+            _ => format!("{k} \u{2022} {by}").into(),
+        };
+        item(cover(app, c, px, k.is_empty()), name, s, r)
     });
     let mut tiles = pins.into_iter().filter(|_| lo == 0).chain(rows).peekable();
     let mut list = column![top];
@@ -755,7 +801,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let pad = (r.len()..cols).map(|_| Space::new().width(Fill).into());
         list = list.push(Row::with_children(r).extend(pad));
     }
-    let list = list.push(bottom);
+    let list = vgap(list.push(bottom), lo / cols);
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
     let find = task(|a| {
         a.lib_find = a.lib_find.is_none().then(String::new);

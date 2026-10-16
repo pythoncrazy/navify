@@ -15,7 +15,7 @@ use crate::theme::{
 };
 use crate::view::{
     El, SONGS_BG, art, artists_line, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, go,
-    icon_btn, liked_art, media, pane, tip, tool_btn,
+    icon_btn, liked_art, media, pane, tip, tool_btn, vgap,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -375,15 +375,20 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let count = app.plays.get(&s.id).copied().unwrap_or(0).max(s.play_count);
     let plays = || fmt_n(count as usize);
     let in_album = key.starts_with("album:");
-    let album = ell(&s.album, c.1, 14.0, Normal);
-    let album = link_btn(album, SUB, go("album", &s.album_id));
-    let second: El = match (pop, in_album) {
-        (true, _) => sub(plays(), 14.0).width(c.1).into(),
-        (_, true) => container(sub(plays(), 14.0).width(100).align_x(Right))
-            .width(c.1)
-            .into(),
-        _ => container(album).width(c.1).into(),
-    };
+    let second = (c.1 > 0.0).then(|| -> El {
+        match (pop, in_album) {
+            (true, _) => sub(plays(), 14.0).width(c.1).into(),
+            (_, true) => container(sub(plays(), 14.0).width(100).align_x(Right))
+                .width(c.1)
+                .into(),
+            _ => {
+                let album = ell(&s.album, c.1, 14.0, Normal);
+                container(link_btn(album, SUB, go("album", &s.album_id)))
+                    .width(c.1)
+                    .into()
+            }
+        }
+    });
     let more = hot.then(|| {
         let dot = || container(Space::new().width(3).height(3)).style(fill(TEXT, 1.5));
         let m = Message::MenuBelow(Box::new(Message::RowMenu(key.into(), n)), 0.0, 8.0);
@@ -399,8 +404,10 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let dur = (!app.cfg.settings.hide_duration).then_some(dur);
     let thumb = art.then(|| cover(app, &s.cover, 40.0, false));
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
-    let added = date([&s.created, &s.starred_at][usize::from(liked)], false);
-    let added = (c.2 > 0.0).then(|| sub(added, 14.0).width(c.2));
+    let added = (c.2 > 0.0).then(|| {
+        let d = date([&s.created, &s.starred_at][usize::from(liked)], false);
+        sub(d, 14.0).width(c.2)
+    });
     let cur_rate = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
     let stars = app.cfg.settings.ratings.then(|| {
         Row::with_children((1..=5u8).map(|k| {
@@ -411,9 +418,9 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         }))
     });
     let tail = row![container(heart).width(16), dur, container(more).width(16)].spacing(12);
-    let r = row![idx, name].push((c.1 > 0.0).then_some(second));
-    let count = sub(plays(), 14.0).width(64).align_x(Right);
-    let count = (app.cfg.settings.plays && !pop && !in_album).then_some(count);
+    let r = row![idx, name].push(second);
+    let count = (app.cfg.settings.plays && !pop && !in_album)
+        .then(|| sub(plays(), 14.0).width(64).align_x(Right));
     let r = r
         .push(added)
         .push(stars)
@@ -446,30 +453,28 @@ fn span(top: f32, bottom: f32, row_h: f32, n: usize, extra: usize) -> (usize, us
     (lo, (at(bottom) + extra + 1).clamp(lo, n))
 }
 
-fn gaps<'a>(
-    lo: usize,
-    hi: usize,
-    n: usize,
-    h: f32,
-    items: impl Iterator<Item = El<'a>>,
-) -> Column<'a, Message> {
+fn gaps<'a>(lo: usize, hi: usize, n: usize, h: f32, items: impl Iterator<Item = El<'a>>) -> El<'a> {
     let col = Column::new().push(Space::new().height(lo as f32 * h));
     let col = col.extend(items);
-    col.push(Space::new().height((n - hi) as f32 * h))
+    vgap(col.push(Space::new().height((n - hi) as f32 * h)), lo)
 }
 
 fn vlist<'a>(app: &'a App, songs: &'a [Song], key: &'a str, c: Cols, y0: f32) -> El<'a> {
     let discs = key.starts_with("album:") && songs.iter().any(|s| s.disc != songs[0].disc);
-    let rows: Vec<Result<usize, u32>> = (0..songs.len())
-        .flat_map(|n| {
-            let head = discs && (n == 0 || songs[n - 1].disc != songs[n].disc);
-            let head = head.then_some(Err(songs[n].disc));
-            head.into_iter().chain([Ok(n)])
-        })
-        .collect();
+    let rows = discs.then(|| {
+        (0..songs.len())
+            .flat_map(|n| {
+                let head = n == 0 || songs[n - 1].disc != songs[n].disc;
+                head.then_some(Err(songs[n].disc))
+                    .into_iter()
+                    .chain([Ok(n)])
+            })
+            .collect::<Vec<_>>()
+    });
+    let total = rows.as_ref().map_or(songs.len(), Vec::len);
     let (off, view) = app.scroll();
-    let (lo, hi) = span(off - y0, off - y0 + view, app.row_h(), rows.len(), 6);
-    let items = rows[lo..hi].iter().map(|r| match *r {
+    let (lo, hi) = span(off - y0, off - y0 + view, app.row_h(), total, 6);
+    let items = (lo..hi).map(|k| match rows.as_ref().map_or(Ok(k), |r| r[k]) {
         Ok(n) => track(app, &songs[n], n, key, c),
         Err(d) => {
             let disc = i(i::ALBUM, 16.0).color(SUB).width(16).center();
@@ -480,7 +485,7 @@ fn vlist<'a>(app: &'a App, songs: &'a [Song], key: &'a str, c: Cols, y0: f32) ->
                 .into()
         }
     });
-    let col = gaps(lo, hi, rows.len(), app.row_h(), items);
+    let col = gaps(lo, hi, total, app.row_h(), items);
     container(col).padding(Padding::new(PAD).top(0)).into()
 }
 
@@ -703,8 +708,11 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
         .padding(Padding::from([0.0, PAD]).left(PAD + 32.0))
         .height(136);
     let head = column![head, Space::new().height(34)];
-    let list = gaps(lo, hi, n, app.row_h(), rows).push(Space::new().height(64));
-    head.push(table_head(app, c, 16.0)).push(list).into()
+    let list = gaps(lo, hi, n, app.row_h(), rows);
+    head.push(table_head(app, c, 16.0))
+        .push(list)
+        .push(Space::new().height(64))
+        .into()
 }
 
 fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
