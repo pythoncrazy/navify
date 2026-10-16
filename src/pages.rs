@@ -286,7 +286,7 @@ fn playlist_card<'a>(app: &'a App, p: &'a Playlist) -> El<'a> {
     card(app, &p.cover, &p.name, by, r, MenuKind::Playlist(p.clone()))
 }
 
-fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
+fn table_head<'a>(app: &App, c: Cols, gap: f32) -> El<'a> {
     let h = |t: &'static str, w: f32| (w > 0.0).then(|| sub(t, 14.0).width(w));
     let half = c.0 / 2.0 - 8.0;
     let split = app.cfg.settings.compact && !app.route.starts_with("artist:");
@@ -313,7 +313,7 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     let r = r.push(clock.padding(padding::right(32)));
     let r = r.spacing(16).padding([0, 16]).height(36).align_y(Center);
     let r = mouse_area(r).on_right_press(Message::Menu(Box::new(MenuKind::Columns)));
-    let p = Padding::new(PAD).top(0).bottom(16);
+    let p = Padding::new(PAD).top(0).bottom(gap);
     container(column![r, rule()]).padding(p).into()
 }
 
@@ -705,7 +705,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
         .height(136);
     let head = column![head, Space::new().height(34)];
     let list = gaps(lo, hi, n, app.row_h(), rows).push(Space::new().height(64));
-    head.push(table_head(app, c)).push(list).into()
+    head.push(table_head(app, c, 16.0)).push(list).into()
 }
 
 fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
@@ -1173,7 +1173,7 @@ fn detail(app: &App) -> Option<El<'_>> {
         );
         container(row![add, edit].spacing(8)).padding(Padding::new(PAD).top(6).bottom(6))
     });
-    let head = (!empty && !(liked && songs.is_empty())).then(|| table_head(app, c));
+    let head = (!empty && !(liked && songs.is_empty())).then(|| table_head(app, c, 16.0));
     let body = column![tools, head];
     let body = body.push(vlist(app, songs, &app.route, c, y0));
     let none: El = match liked {
@@ -1293,8 +1293,8 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let head = bar(head.into(), theme::dark(color, 0.2));
     let cols = cols
         .filter(|_| off > list_y(app) - HEAD - 64.0)
-        .map(|c| table_head(app, c));
-    let cols = cols.map(|c| container(c).style(fill(color!(0x1a1a1a), 0.0)));
+        .map(|c| table_head(app, c, 0.0));
+    let cols = cols.map(|c| container(c).style(fill(ELEVATED, 0.0)));
     (off > top - 24.0).then(|| column![head].push(cols).into())
 }
 
@@ -1592,7 +1592,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
             let rows = songs_res.iter().enumerate();
             let rows = rows.map(|(n, s)| track(app, s, n, &app.route, c));
             let rows = container(Column::with_children(rows)).padding([0.0, PAD]);
-            column![table_head(app, c), rows].into()
+            column![table_head(app, c, 16.0), rows].into()
         }
         2 => tiles(albums_res.len(), &|n| {
             album_card(app, &albums_res[n], by(&albums_res[n]))
