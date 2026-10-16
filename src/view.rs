@@ -917,7 +917,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             let s = match k {
                 "size" => format!("{:.1} MB", x.as_f64()? / 1e6),
                 "duration" => fmt_dur(x.as_f64()? as f32),
-                "created" | "played" => pages::date(x.as_str()?),
+                "created" | "played" => pages::date(x.as_str()?, false),
                 "playCount" => {
                     let local = app.plays.get(id).copied().unwrap_or(0) as u64;
                     fmt_n(local.max(x.as_u64()?) as usize)

@@ -315,12 +315,28 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     container(column![r, rule()]).padding(p).into()
 }
 
-pub fn date(s: &str) -> String {
-    const M: &str = "JanFebMarAprMayJunJulAugSepOctNovDec";
+pub fn date(s: &str, full: bool) -> String {
+    const M: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
     let d = s.get(..10).unwrap_or("").split('-');
     let d = d.filter_map(|x| x.parse().ok());
     match d.collect::<Vec<usize>>()[..] {
-        [y, m @ 1..=12, day] => format!("{} {day}, {y}", &M[m * 3 - 3..m * 3]),
+        [y, m @ 1..=12, day] => {
+            let m = M[m - 1];
+            format!("{} {day}, {y}", if full { m } else { &m[..3] })
+        }
         _ => String::new(),
     }
 }
@@ -381,7 +397,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let dur = (!app.cfg.settings.hide_duration).then_some(dur);
     let thumb = art.then(|| cover(app, &s.cover, 40.0, false));
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
-    let added = date([&s.created, &s.starred_at][usize::from(liked)]);
+    let added = date([&s.created, &s.starred_at][usize::from(liked)], false);
     let added = (c.2 > 0.0).then(|| sub(added, 14.0).width(c.2));
     let cur_rate = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
     let stars = app.cfg.settings.ratings.then(|| {
@@ -1142,7 +1158,7 @@ fn detail(app: &App) -> Option<El<'_>> {
     let body = body.push((songs.is_empty() && !empty).then_some(none));
     let body = body.push(pl.map(|(p, _)| finder(app, p, empty)));
     let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
-        let day = Some(date(&a.release_date)).filter(|d| !d.is_empty());
+        let day = Some(date(&a.release_date, true)).filter(|d| !d.is_empty());
         let day = day.or((a.year > 0).then(|| a.year.to_string()));
         let label =
             (!a.labels.is_empty()).then(|| format!("\u{2117} {} {}", a.year, a.labels.join(", ")));
