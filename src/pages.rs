@@ -1264,6 +1264,9 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         return Some(b.padding(24).into());
     }
     if let Some((id, f, a, albums)) = disc_args(app) {
+        if off <= grid_y(app) - 120.0 {
+            return None;
+        }
         let rows = disc_rows(app, albums, f);
         let al = rows.iter().find(|r| r.0 + r.1 > off + 120.0).map(|r| r.2)?;
         let key = format!("album:{}", al.id);
@@ -1278,13 +1281,16 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let tools = tools.width(Fill).style(fill(theme::PANEL, 0.0));
         let grid = app.cfg.settings.disc_grid;
         let head = (!grid).then_some(head);
-        return (off > grid_y(app) - 120.0).then(|| column![head, tools].into());
+        return Some(column![head, tools].into());
+    }
+    if off <= hero_h(app) - 24.0 {
+        return None;
     }
     if app.route == "profile" {
         let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
         let t = ell(user, app.main_w() - 2.0 * PAD, 24.0, Bold);
         let bg = theme::dark(initial(user).1, 0.2);
-        return (off > hero_h(app) - 24.0).then(|| bar(t.into(), bg).into());
+        return Some(bar(t.into(), bg).into());
     }
     let artist = app.data::<(Artist, Vec<Album>)>(&app.route);
     let (title, color, cols, banner) = match artist {
@@ -1296,6 +1302,9 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         None => detail_of(app).map(|(p, _, c)| (p.title, p.color, Some(c), false))?,
     };
     let top = [hero_h(app), banner_h(app)][usize::from(banner)];
+    if off <= top - 24.0 {
+        return None;
+    }
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
     let play = play_btn(app, 48.0, &app.route);
     let head = row![play, title].spacing(8).align_y(Center);
@@ -1304,7 +1313,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         .filter(|_| off > list_y(app) - HEAD - 64.0)
         .map(|c| table_head(app, c, 0.0));
     let cols = cols.map(|c| container(c).style(fill(ELEVATED, 0.0)));
-    (off > top - 24.0).then(|| column![head].push(cols).into())
+    Some(column![head].push(cols).into())
 }
 
 pub fn plain(html: &str) -> String {
@@ -1956,6 +1965,12 @@ pub fn lyric_line(app: &App) -> Option<usize> {
     Some(lyric_at(app, app.current_song()?)?.1.unwrap_or(0))
 }
 
+pub fn synced_lyrics(app: &App) -> bool {
+    app.current_song()
+        .and_then(|s| lyric_at(app, s))
+        .is_some_and(|x| x.2)
+}
+
 fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, Option<usize>, bool)> {
     let all = app.data::<Vec<Lyrics>>(&format!("lyrics:{}", song.id))?;
     let any = |synced: bool| {
@@ -2503,28 +2518,7 @@ pub fn add_panel(app: &App) -> El<'_> {
 
 pub fn queue_panel(app: &App) -> El<'_> {
     let w = app.right_w() - 16.0;
-    let next = (app.index + 1..app.queue.len()).take(100);
-    let next = next.filter_map(|n| app.queue.get(app.real_at(n)).map(|s| (n, s)));
-    let next: Vec<El> = next.map(|(n, s)| queue_row(app, s, Some(n), w)).collect();
-    let more = app.queue.len().saturating_sub(app.index + 101);
-    let title = |t: String| {
-        let t = container(ell(t, w - 16.0, 16.0, Bold));
-        t.padding(Padding::new(8.0).top(16))
-    };
     let note = |t: String| container(sub(t, 14.0)).padding(8);
-    let from = match app.source.is_empty() {
-        true => "Next in queue".into(),
-        false => format!("Next from: {}", app.source),
-    };
-    let now = app
-        .current_song()
-        .map(|s| queue_row(app, s, Some(app.index), w));
-    let now = now.map(|r| column![title("Now playing".into()), r]);
-    let clear = link_btn(bold("Clear queue", 14.0), SUB, task(App::q_clear));
-    let from = row![ell(from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
-    let from = container(from).padding(Padding::new(8.0).top(16));
-    let list = column![now, (!next.is_empty()).then_some(from)].extend(next);
-    let list = list.push((more > 0).then(|| note(format!("{more} more songs"))));
     let tab = |t: &'static str, on: bool| {
         let edge = container(Space::new().width(Fill).height(2));
         let edge = edge.style(fill([CLEAR, ACCENT][usize::from(on)], 1.0));
@@ -2538,20 +2532,20 @@ pub fn queue_panel(app: &App) -> El<'_> {
             a.history()
         }))
     };
-    let past = recent(app).map(|s| queue_row(app, s, None, w));
-    let past = Column::with_children(past).padding(Padding::new(8.0).top(0));
-    let past = past.push(
-        recent(app)
-            .next()
-            .is_none()
-            .then(|| note("You did not play a track.".into())),
-    );
     let tabs = row![
         tab("Queue", !app.recent_tab),
         tab("Recently played", app.recent_tab)
     ];
     let head = container(panel_head(tabs.spacing(24), 2)).padding(padding::left(3));
     if app.recent_tab {
+        let past = recent(app).map(|s| queue_row(app, s, None, w));
+        let past = Column::with_children(past).padding(Padding::new(8.0).top(0));
+        let past = past.push(
+            recent(app)
+                .next()
+                .is_none()
+                .then(|| note("You did not play a track.".into())),
+        );
         return column![head, scrollable(pane(past)).style(theme::scroll)].into();
     }
     if app.queue.is_empty() {
@@ -2565,6 +2559,27 @@ pub fn queue_panel(app: &App) -> El<'_> {
         let body = container(body).padding([0, 22]).center(Fill);
         return column![head, body].into();
     }
+    let next = (app.index + 1..app.queue.len()).take(100);
+    let next = next.filter_map(|n| app.queue.get(app.real_at(n)).map(|s| (n, s)));
+    let next: Vec<El> = next.map(|(n, s)| queue_row(app, s, Some(n), w)).collect();
+    let more = app.queue.len().saturating_sub(app.index + 101);
+    let title = |t: String| {
+        let t = container(ell(t, w - 16.0, 16.0, Bold));
+        t.padding(Padding::new(8.0).top(16))
+    };
+    let from = match app.source.is_empty() {
+        true => "Next in queue".into(),
+        false => format!("Next from: {}", app.source),
+    };
+    let now = app
+        .current_song()
+        .map(|s| queue_row(app, s, Some(app.index), w));
+    let now = now.map(|r| column![title("Now playing".into()), r]);
+    let clear = link_btn(bold("Clear queue", 14.0), SUB, task(App::q_clear));
+    let from = row![ell(from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
+    let from = container(from).padding(Padding::new(8.0).top(16));
+    let list = column![now, (!next.is_empty()).then_some(from)].extend(next);
+    let list = list.push((more > 0).then(|| note(format!("{more} more songs"))));
     let list = list.padding(Padding::new(8.0).top(0));
     column![head, scrollable(pane(list)).style(theme::scroll)].into()
 }

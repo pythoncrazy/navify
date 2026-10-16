@@ -562,36 +562,28 @@ fn top_bar(app: &App) -> El<'_> {
     bar.padding([0, 8]).height(64).into()
 }
 
-type LibRow<'a> = (&'a String, &'a String, &'static str, String, &'a String);
+type LibRow<'a> = (&'a String, &'a String, &'static str, &'a str, &'a String);
 
 pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     let f = app.lib_filter;
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| q.is_empty() || name.to_lowercase().contains(&q);
     let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
-        let pls = l.playlists.iter().filter(|_| f < 2).map(|p| {
-            (
-                &p.cover,
-                &p.name,
-                "Playlist",
-                format!("playlist:{}", p.id),
-                &p.owner,
-            )
-        });
-        let als = l.albums.iter().filter(|_| matches!(f, 0 | 2)).map(|a| {
-            (
-                &a.cover,
-                &a.name,
-                "Album",
-                format!("album:{}", a.id),
-                &a.artist,
-            )
-        });
+        let pls = l
+            .playlists
+            .iter()
+            .filter(|_| f < 2)
+            .map(|p| (&p.cover, &p.name, "playlist", p.id.as_str(), &p.owner));
+        let als = l
+            .albums
+            .iter()
+            .filter(|_| matches!(f, 0 | 2))
+            .map(|a| (&a.cover, &a.name, "album", a.id.as_str(), &a.artist));
         let ars = l
             .artists
             .iter()
             .filter(|_| matches!(f, 0 | 3))
-            .map(|a| (&a.cover, &a.name, "", format!("artist:{}", a.id), &a.name));
+            .map(|a| (&a.cover, &a.name, "artist", a.id.as_str(), &a.name));
         pls.chain(als).chain(ars)
     });
     let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();
@@ -602,7 +594,11 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     }
     let pins = &app.cfg.settings.pins;
     if !pins.is_empty() {
-        rows.sort_by_key(|r| pins.iter().position(|p| *p == r.3).unwrap_or(usize::MAX));
+        let pos = |r: &LibRow| {
+            pins.iter()
+                .position(|p| p.split_once(':') == Some((r.2, r.3)))
+        };
+        rows.sort_by_key(|r| pos(r).unwrap_or(usize::MAX));
     }
     let k = PINS
         .iter()
@@ -783,12 +779,18 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         gap((n + k).div_ceil(cols) - hi.div_ceil(cols)),
     );
     let rows = rows.into_iter().take(span.end).skip(span.start);
-    let rows = rows.map(|(c, name, k, r, by)| {
+    let rows = rows.map(|(c, name, k, id, by)| {
         let s: Cow<str> = match k {
-            "" => "Artist".into(),
-            _ => format!("{k} \u{2022} {by}").into(),
+            "artist" => "Artist".into(),
+            "album" => format!("Album \u{2022} {by}").into(),
+            _ => format!("Playlist \u{2022} {by}").into(),
         };
-        item(cover(app, c, px, k.is_empty()), name, s, r)
+        item(
+            cover(app, c, px, k == "artist"),
+            name,
+            s,
+            format!("{k}:{id}"),
+        )
     });
     let mut tiles = pins.into_iter().filter(|_| lo == 0).chain(rows).peekable();
     let mut list = column![top];
