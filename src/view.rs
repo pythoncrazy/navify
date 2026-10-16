@@ -829,7 +829,7 @@ fn player_bar(app: &App) -> El<'_> {
         side(ic(i::QUEUE), app.panel == 2, "Queue", Message::Panel(2)),
     ];
     let right = row![
-        (!app.full).then(|| panels.spacing(4)),
+        (!app.full).then_some(panels),
         device.then(|| side(
             ic(i::DEVICE),
             app.panel == 3,
@@ -838,6 +838,7 @@ fn player_bar(app: &App) -> El<'_> {
         )),
         side(vol_icon, false, mute, act(|a| a.muted = !a.muted)),
         volume,
+        Space::new().width(8),
         match (app.full, song) {
             (false, None) => container(dic(i::FULL)).center(32).into(),
             (full, _) => side(
@@ -848,10 +849,13 @@ fn player_bar(app: &App) -> El<'_> {
             ),
         },
     ];
-    let right = container(right.spacing(4).align_y(Center)).align_right(FillPortion(3));
+    let right = container(right.align_y(Center)).align_right(FillPortion(3));
     let left = container(left).width(FillPortion(3));
     let bar = row![left, container(center).center_x(FillPortion(4)), right];
-    bar.align_y(Center).padding([0, 16]).height(72).into()
+    bar.align_y(Center)
+        .padding(padding::left(16).right(8))
+        .height(72)
+        .into()
 }
 
 fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
