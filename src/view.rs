@@ -1,8 +1,8 @@
 use iced::font::Weight::{Black, Medium, Normal};
 use iced::widget::tooltip::Position::{Bottom, Left, Right, Top};
 use iced::widget::{
-    Row, Space, button, column, container, image, mouse_area, row, scrollable, slider, stack, text,
-    text_editor, text_input, tooltip,
+    Row, Space, button, column, container, hover, image, mouse_area, row, scrollable, slider,
+    stack, text, text_editor, text_input, tooltip,
 };
 use iced::{Background, Border, Center, Color, Element, Fill, FillPortion, color, padding};
 use std::borrow::Cow;
@@ -356,6 +356,20 @@ pub fn fmt_long(s: f32) -> String {
     }
 }
 
+fn caps<'a>(combo: &str, size: f32, color: Color) -> Row<'a, Message> {
+    let edge = Border::default()
+        .color(color!(0x7c7c7c))
+        .width(1)
+        .rounded(4);
+    let cap = |k: &str| -> El<'a> {
+        let k = container(txt(k.to_string(), size).color(color)).padding([0, 6]);
+        k.center_y(24)
+            .style(move |_| container::Style::default().border(edge))
+            .into()
+    };
+    Row::with_children(combo.split('+').map(cap)).spacing(4)
+}
+
 pub fn tip<'a>(
     c: impl Into<El<'a>>,
     label: impl text::IntoFragment<'a>,
@@ -392,7 +406,8 @@ fn top_bar(app: &App) -> El<'_> {
         side: text_input::Side::Left,
     };
     let style = theme::input([ELEVATED, CHIP], [BG, TEXT], [0.0, 2.0], 500.0);
-    let search = text_input("What do you want to play?", &app.search_q);
+    let hint = "What do you want to play?";
+    let search = text_input(hint, &app.search_q);
     let search = search.id("search").on_input(Message::Search);
     let search = search.on_submit(Message::SearchGo(app.search_seq));
     let search = search.style(style).icon(glass).width(474).size(16);
@@ -424,6 +439,17 @@ fn top_bar(app: &App) -> El<'_> {
     let search = stack![mouse_area(search).on_release(browse)]
         .push(tail)
         .clip(true);
+    let search: El = match app.search_q.is_empty() && !app.binding("search").is_empty() {
+        true => {
+            let x = 66.0 + theme::width(hint, 16.0, Normal);
+            let keys = caps(&crate::app::key_label(app.binding("search")), 14.0, SUB);
+            hover(
+                search,
+                container(keys).padding(padding::left(x)).center_y(48),
+            )
+        }
+        false => search.into(),
+    };
     let fwd = app.hi + 1 < app.history.len();
     let settings = Message::Nav("settings".into());
     let menu = Message::Menu(Box::new(MenuKind::User));
@@ -842,19 +868,9 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     let close = focusable(x, Some(Message::MenuClose), 16.0, Some("layer"));
     let style = fill(theme::MENU, 8.0);
     if kind == 3 {
-        let cap = |k: &str| -> El<'a> {
-            let edge = Border::default()
-                .color(color!(0x7c7c7c))
-                .width(1)
-                .rounded(4);
-            let k = container(txt(k.to_string(), 16.0)).padding([2, 6]);
-            k.style(move |_| container::Style::default().border(edge))
-                .into()
-        };
         let caps = |id: &str| {
             let c = crate::app::key_label(app.binding(id));
-            let c = if c.is_empty() { "Not set".into() } else { c };
-            Row::with_children(c.split('+').map(cap).collect::<Vec<_>>()).spacing(4)
+            caps(if c.is_empty() { "Not set" } else { &c }, 16.0, TEXT)
         };
         let line = |k: &crate::app::KeyAction| -> El<'a> {
             let what = txt(k.1, 16.0).width(Fill);
