@@ -1287,7 +1287,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     (off > top - 24.0).then(|| column![head].push(cols).into())
 }
 
-fn plain(html: &str) -> String {
+pub fn plain(html: &str) -> String {
     let parts = html.split('<').enumerate();
     let parts = parts.map(|(n, p)| [p, p.split_once('>').map_or("", |x| x.1)][usize::from(n > 0)]);
     parts.collect::<String>().trim().to_string()
@@ -1413,10 +1413,33 @@ fn artist(app: &App) -> Option<El<'_>> {
     let appears = appears.into_iter().flatten().take(k);
     let appears = appears.map(|x| album_card(app, x, year_kind(x)));
     let about = info.filter(|i| !i.biography.is_empty()).map(|info| {
-        let bio = txt(plain(&info.biography), 16.0).color(SUB);
-        let bio = container(bio).padding(PAD).max_width(672);
-        let bio = container(bio.style(fill(ELEVATED, 8.0))).padding([0.0, PAD]);
-        column![heading("About", None), bio].spacing(8)
+        let w = about_w(app);
+        let pic = app.covers.get(&about_key(app, a), 640).map(|h| {
+            let img = image(h).width(w).height(516).border_radius(8.0);
+            img.content_fit(iced::ContentFit::Fill)
+        });
+        let shade = container(Space::new()).width(w).height(516).style(|_| {
+            let g = iced::gradient::Linear::new(std::f32::consts::PI);
+            let g = g.add_stop(0.0, CLEAR).add_stop(1.0, BG.scale_alpha(0.7));
+            container::Style::default()
+                .background(g)
+                .border(iced::border::rounded(8.0))
+        });
+        let plays = (a.play_count > 0)
+            .then(|| bold(format!("{} plays", fmt_n(a.play_count as usize)), 16.0));
+        let bio = container(txt(plain(&info.biography), 16.0))
+            .max_height(63.0)
+            .clip(true);
+        let text = container(column![plays, bio].spacing(8))
+            .padding(40)
+            .max_width(672);
+        let text = container(text).width(w).height(516).align_bottom(516);
+        let base = container(Space::new())
+            .width(w)
+            .height(516)
+            .style(fill(theme::MENU, 8.0));
+        let card = btn(stack![base, pic, shade, text], Message::Modal(id.into(), 6));
+        column![heading("About", None), container(card).padding([0.0, PAD])].spacing(8)
     });
     let pick = newest.map(|x| {
         let px = app.grid().1 - 24.0;
@@ -1455,6 +1478,14 @@ fn artist(app: &App) -> Option<El<'_>> {
         banner,
     };
     Some(page(app, p, body.into()))
+}
+
+fn about_w(app: &App) -> f32 {
+    ((2.0 * (app.main_w() - 2.0 * PAD) - 24.0) / 3.0).max(372.0)
+}
+
+pub fn about_key(app: &App, a: &Artist) -> String {
+    format!("b{}:{}", (about_w(app) / 51.6).round(), a.cover)
 }
 
 pub fn browse(app: &App) -> (f32, usize, f32, f32) {

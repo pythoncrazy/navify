@@ -2100,6 +2100,10 @@ impl App {
                     self.modal = Some((id, kind));
                     return load;
                 }
+                if kind == 6 {
+                    self.modal = Some((id, kind));
+                    return self.covers_now();
+                }
                 let Some(p) = self.playlist(&id) else {
                     return self.toast("The playlist is not available.");
                 };
@@ -2411,7 +2415,7 @@ impl App {
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
         let mut wide: [Vec<&String>; 4] = Default::default();
         let (_, gcols, tw, th) = crate::pages::browse(self);
-        let (mut head, mut banner): (Vec<&String>, _) = Default::default();
+        let (mut head, mut banner, mut about): (Vec<&String>, _, _) = Default::default();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
             big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
@@ -2444,6 +2448,9 @@ impl App {
             let appears = self.data::<Vec<Album>>(&format!("appears:{id}"));
             let shelf = crate::pages::disc_shelf(self, albums);
             head.push(&a.cover);
+            about = info
+                .filter(|i| !i.biography.is_empty())
+                .map(|_| (crate::pages::about_key(self, a), 640));
             banner = crate::pages::banner(self, a);
             small.extend(top.iter().flat_map(|v| v.iter().take(10)).map(|s| &s.cover));
             big.extend(shelf.iter().map(|x| &x.cover));
@@ -2561,6 +2568,13 @@ impl App {
             .flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b)))
             .chain(banner.map(|k| (k, 640)))
             .chain(lead)
+            .chain(about)
+            .chain(
+                self.modal
+                    .as_ref()
+                    .filter(|m| m.1 == 6)
+                    .map(|m| (format!("b18:{}", self.artist_cover(&m.0)), 640)),
+            )
             .collect()
     }
 
