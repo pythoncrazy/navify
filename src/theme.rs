@@ -35,6 +35,11 @@ pub fn shade(c: Color, k: f32) -> Color {
     Color::from_rgba(r, g, b, c.a)
 }
 
+pub fn dark(c: Color, l: f32) -> Color {
+    let k = (2.0 * l / (c.r.max(c.g).max(c.b) + c.r.min(c.g).min(c.b))).min(1.0);
+    Color::from_rgb(c.r * k, c.g * k, c.b * k)
+}
+
 pub fn fw(weight: Weight) -> Font {
     Font {
         weight,
