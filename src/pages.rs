@@ -665,7 +665,11 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let tables = ["album", "playlist", "liked", "songs"];
     let view = tables
         .contains(&app.route.split(':').next().unwrap_or(""))
-        .then(|| tool_btn(i::LIST, compact, set(|s, b| s.compact = b, !compact)));
+        .then(|| {
+            let label = txt(["List", "Compact"][usize::from(compact)], 14.0);
+            let c = row![label, i(i::LIST, 20.0)].spacing(8).align_y(Center);
+            link_btn(c, SUB, set(|s, b| s.compact = b, !compact))
+        });
     let empty = app
         .data::<(Playlist, Vec<Song>)>(&app.route)
         .is_some_and(|x| x.1.is_empty());
