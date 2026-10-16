@@ -2539,7 +2539,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let mut v = vec![open(1, i::PLUS, "Add to playlist")];
             if let MenuKind::SongIn(_, n) = &m.kind {
                 let rm = Message::PlRemove(n.clone());
-                v.push(it(i::TRASH, "Remove from this playlist", rm));
+                v.push(it(i::MINUS, "Remove from this playlist", rm));
             }
             let (star, k) = (Message::Star(ids(songs), !on), usize::from(on));
             v.push(it(['\0', i::SAVED][k], like[k], star));
