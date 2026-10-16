@@ -22,7 +22,7 @@ type Cols = (f32, f32, f32, f32);
 type Hit = (usize, usize);
 
 pub const PAD: f32 = 24.0;
-pub const GRID_Y: f32 = 136.0;
+pub const GRID_Y: f32 = 184.0;
 pub const DIR_Y: f32 = 90.0;
 pub const BAR: f32 = 84.0;
 pub const HEAD: f32 = 53.0;
@@ -145,9 +145,10 @@ fn huge(t: &str, tw: f32) -> text::Text<'_> {
 }
 
 pub fn grid_y(app: &App) -> f32 {
-    match app.route.starts_with("genre:") {
-        true => hero_h(app) + PAD,
-        false => GRID_Y,
+    match app.route.split(':').next() {
+        Some("genre") => hero_h(app) + PAD,
+        Some("artists") => GRID_Y - 40.0,
+        _ => GRID_Y,
     }
 }
 
@@ -556,7 +557,9 @@ fn discography(app: &App) -> Option<El<'_>> {
     let name = ell(&a.name, app.main_w() - 2.0 * PAD, 32.0, Bold);
     let name = link_btn(name, TEXT, go("artist", id));
     let head = container(column![name, disc_tools(app, albums, id, f)].spacing(16));
-    let head = head.padding(Padding::new(PAD).bottom(0)).height(GRID_Y);
+    let head = head
+        .padding(Padding::new(PAD).top(72).bottom(0))
+        .height(GRID_Y);
     let rows = disc_rows(app, albums, f);
     if app.cfg.settings.disc_grid {
         let (cols, cw) = app.grid();
@@ -1601,8 +1604,8 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
     }
     let head = column![bold(title, 32.0)].push(chips).spacing(16);
     let head = container(head)
-        .padding(Padding::new(PAD).bottom(0))
-        .height(GRID_Y);
+        .padding(Padding::new(PAD).top(72).bottom(0))
+        .height(grid_y(app));
     column![head, artists.or(albums)].into()
 }
 
