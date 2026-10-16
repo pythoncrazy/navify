@@ -2250,6 +2250,13 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     column![head, scrollable(body).style(theme::scroll)].into()
 }
 
+pub fn recent(app: &App) -> impl Iterator<Item = &Song> {
+    let server = app.data::<(Vec<Song>, usize)>("songs:recent");
+    let server = server.map_or(&[][..], |p| &p.0[..]).iter();
+    let server = server.filter(|s| !app.recent.iter().any(|r| r.id == s.id));
+    app.recent.iter().chain(server).take(50)
+}
+
 fn panel_head<'a>(title: impl Into<El<'a>>, n: u8) -> El<'a> {
     let title = container(title).width(Fill);
     let x = icon_btn(i::X, 16.0, Message::Panel(n));
@@ -2388,13 +2395,17 @@ pub fn queue_panel(app: &App) -> El<'_> {
         let b = button(b)
             .padding(0)
             .style(theme::link([SUB, TEXT][usize::from(on)]));
-        b.on_press(act(move |a| a.recent_tab = t != "Queue"))
+        b.on_press(task(move |a| {
+            a.recent_tab = t != "Queue";
+            a.history()
+        }))
     };
-    let past = app.recent.iter().map(|s| queue_row(app, s, None, w));
+    let past = recent(app).map(|s| queue_row(app, s, None, w));
     let past = Column::with_children(past).padding(Padding::new(8.0).top(0));
     let past = past.push(
-        app.recent
-            .is_empty()
+        recent(app)
+            .next()
+            .is_none()
             .then(|| note("You did not play a track.".into())),
     );
     let tabs = row![

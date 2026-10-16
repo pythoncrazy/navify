@@ -828,6 +828,14 @@ impl App {
         })
     }
 
+    pub(crate) fn history(&mut self) -> Task<Message> {
+        let native = self.session.as_ref().is_some_and(|s| s.server.native);
+        match native && self.panel == 2 && self.recent_tab {
+            true => self.request("songs:recent", 0),
+            false => Task::none(),
+        }
+    }
+
     pub(crate) fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
         let fresh = |(t, v): &(Instant, AnyData)| t.elapsed() < STALE && !v.is::<String>();
         if offset == 0 && self.cache.get(key).is_some_and(fresh) {
@@ -1824,7 +1832,8 @@ impl App {
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
                 let scan = (self.panel == 3).then(scan_devices);
-                return Task::batch([self.covers_now(), self.about()].into_iter().chain(scan));
+                let t = [self.covers_now(), self.about(), self.history()];
+                return Task::batch(t.into_iter().chain(scan));
             }
             Message::Drag(d) => {
                 self.drag = d;
@@ -2505,6 +2514,12 @@ impl App {
         small.extend(
             crate::pages::add_songs(self)
                 .filter(|_| self.panel == 4)
+                .map(|s| &s.cover),
+        );
+        small.extend(
+            crate::pages::recent(self)
+                .filter(|_| self.panel == 2 && self.recent_tab)
+                .take(20)
                 .map(|s| &s.cover),
         );
         let next = (self.index + 1..self.queue.len()).take(ahead);
