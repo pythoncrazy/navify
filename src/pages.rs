@@ -1167,7 +1167,13 @@ fn detail(app: &App) -> Option<El<'_>> {
         let label =
             (!a.labels.is_empty()).then(|| format!("\u{2117} {} {}", a.year, a.labels.join(", ")));
         let notes = column![day.map(|d| sub(d, 14.0)), label.map(|l| sub(l, 12.0))].spacing(2);
-        let year = |x: &Album| (x.year > 0).then(|| x.year.to_string()).unwrap_or_default();
+        let year = |x: &Album| {
+            if x.year > 0 {
+                x.year.to_string()
+            } else {
+                String::new()
+            }
+        };
         let more = more_by(app, a)
             .into_iter()
             .map(|x| album_card(app, x, year(x)));
