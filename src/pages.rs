@@ -784,7 +784,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
         let b = button(body.align_y(Center)).padding(0).width(tw).height(th);
         let b = b.clip(true).style(style);
         let b = b.on_press(Message::Nav(route.clone()));
-        let play = play_btn(app, 32.0, &route);
+        let play = play_btn(app, [32.0, 48.0][usize::from(big)], &route);
         let play = container(play).align_right(Fill).center_y(th);
         let play = play.padding([0, 8]);
         let (on, off) = (format!("tile:{cid}"), format!("tile:{cid}"));
