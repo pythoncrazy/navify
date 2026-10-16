@@ -709,16 +709,25 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         a.lib_find = a.lib_find.is_none().then(String::new);
         iced::widget::operation::focus("libfind")
     });
-    let find = icon_btn(i::SEARCH, 16.0, find);
-    let find = tip(find, "Search in Your Library", Bottom);
-    let field = app.lib_find.as_ref().map(|v| {
-        let style = theme::input([CHIP, CHIP], [CHIP, CHIP], [0.0, 0.0], 4.0);
-        let t = text_input("Search in Your Library", v).id("libfind");
-        let t = t.on_input(|v| act(move |a| a.lib_find = Some(v.clone())));
-        let t = t.on_submit(Message::Noop);
-        let t = t.style(style).font(theme::fw(Normal)).size(14);
-        t.padding([6, 8]).width(Fill)
-    });
+    let x = theme::sq(i(i::SEARCH, 20.0).center(), 32.0).style(theme::link(SUB));
+    let x = x.on_press(find);
+    let field: El = match &app.lib_find {
+        None => tip(x, "Search in Your Library", Bottom),
+        Some(v) => {
+            let style = theme::input([CHIP, CHIP], [CHIP, CHIP], [0.0, 0.0], 4.0);
+            let t = text_input("Search in Your Library", v)
+                .id("libfind")
+                .size(14);
+            let t = t.on_input(|v| act(move |a| a.lib_find = Some(v.clone())));
+            let t = t
+                .on_submit(Message::Noop)
+                .style(style)
+                .font(theme::fw(Normal));
+            let t = t.line_height(text::LineHeight::Absolute(18.0.into()));
+            let t = t.padding(iced::Padding::new(7.0).left(32)).width(Fill);
+            container(stack![t, x]).max_width(188).into()
+        }
+    };
     let icon = pages::LIB_VIEWS[view as usize];
     let order = row![txt(pages::LIB_SORTS[sort as usize], 14.0), i(icon, 16.0)].spacing(8);
     let menu = Message::Menu(Box::new(MenuKind::LibSort));
@@ -726,10 +735,10 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let order = theme::link_btn(order.align_y(Center), [SUB, TEXT][usize::from(open)], menu);
     let order = order.padding([4, 8]);
     let order = tip(order, "Change the sort order", Bottom);
-    let gap = field.is_none().then(|| Space::new().width(Fill));
-    let tools = row![find].push(field).push(gap).push(order);
+    let gap = app.lib_find.is_none().then(|| Space::new().width(Fill));
+    let tools = row![field].push(gap).push(order);
     let tools = tools.spacing(8).align_y(Center).width(Fill);
-    let tools = (!mini).then(|| container(tools).padding([0, 4]));
+    let tools = (!mini).then(|| container(tools).padding([0, 8]));
     let list = scrollable(list).style(theme::scroll).height(Fill);
     let list = list.on_scroll(|v| Message::LibScrolled(v.absolute_offset().y, v.bounds().height));
     let head = container(head).padding(iced::Padding::new(8.0).bottom(4));
