@@ -604,10 +604,9 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let t = t.style(style).font(theme::fw(Normal)).size(14);
         t.padding([6, 8]).width(Fill)
     });
-    let names = ["Custom order", "Alphabetical", "Creator"];
-    let order = row![txt(names[sort as usize], 14.0), i(i::LIST, 16.0)].spacing(8);
-    let next = set(|s, n| s.lib_sort = n, (sort + 1) % 3);
-    let order = theme::link_btn(order.align_y(Center), SUB, next).padding([4, 8]);
+    let order = row![txt(pages::LIB_SORTS[sort as usize], 14.0), i(i::LIST, 16.0)].spacing(8);
+    let menu = Message::Menu(Box::new(MenuKind::LibSort));
+    let order = theme::link_btn(order.align_y(Center), SUB, menu).padding([4, 8]);
     let order = tip(order, "Change the sort order", Bottom);
     let gap = field.is_none().then(|| Space::new().width(Fill));
     let tools = row![find].push(field).push(gap).push(order);
