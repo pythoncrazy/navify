@@ -1577,9 +1577,14 @@ impl App {
             Message::SearchGo(n) if n == self.search_seq => {
                 let q = self.search_q.trim();
                 let r = format!("search{}{q}", if q.is_empty() { "" } else { ":" });
-                return match r == self.route {
-                    true => self.request(&r, 0),
-                    false => self.nav(r),
+                return match (r == self.route, self.route.starts_with("search")) {
+                    (true, _) => self.request(&r, 0),
+                    (false, true) => {
+                        self.history.truncate(self.hi + 1);
+                        self.history[self.hi] = r;
+                        self.show()
+                    }
+                    (false, false) => self.nav(r),
                 };
             }
             Message::SearchGo(_) | Message::Noop => {}
