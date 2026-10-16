@@ -2653,19 +2653,31 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             return boxed(Row::with_children(stars).into(), 192.0, 48.0, 6);
         }
         MenuKind::User => {
-            let url = ell(user.map_or("", |s| &s.url), w - 32.0, 12.0, Normal);
-            let name = bold(user.map_or("", |s| &s.user), 14.0);
-            let who = column![name, url.color(SUB)].spacing(2);
-            head = Some(container(who).padding([0, 12]).center_y(40).into());
+            let url = user.map_or(String::new(), |s| s.url.clone());
+            let account = task(move |a| {
+                let (cmd, pre): (&str, &[&str]) = match std::env::consts::OS {
+                    "windows" => ("cmd", &["/c", "start", ""]),
+                    "macos" => ("open", &[]),
+                    _ => ("xdg-open", &[]),
+                };
+                match std::process::Command::new(cmd).args(pre).arg(&url).spawn() {
+                    Ok(mut c) => drop(std::thread::spawn(move || c.wait())),
+                    Err(e) => return a.toast(&format!("Could not open the browser. {e}")),
+                }
+                iced::Task::none()
+            });
             let active = |s: &&Server| app.cfg.active.as_ref() != Some(&s.id);
             let others = app.cfg.servers.iter().filter(active).map(|s| {
                 let label = format!("Switch to {}", s.name);
                 it(' ', &label, Message::UseServer(s.id.clone()))
             });
+            let account = it(i::EXTERNAL, "Account", account);
             let profile = it(' ', "Profile", Message::Nav("profile".into()));
+            let recents = it(' ', "Recents", Message::Nav("albums:recent".into()));
             let settings = it(' ', "Settings", Message::Nav("settings".into()));
             let out = it(' ', "Log out", Message::LogOut);
-            others.chain([profile, settings, out]).collect()
+            let top = [account, profile, recents, settings];
+            top.into_iter().chain(others).chain([out]).collect()
         }
         MenuKind::Song(s) | MenuKind::SongIn(s, _) if level == 1 => {
             let name = match &s[..] {
@@ -2791,7 +2803,10 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 '\0' => Some(crate::view::liked_art(16.0)),
                 c => Some(i(c, 16.0).into()),
             };
-            let r = Row::new().push(icon).push(label.width(Fill));
+            let r = match matches!(m.kind, MenuKind::User) {
+                true => Row::new().push(label.width(Fill)).push(icon),
+                false => Row::new().push(icon).push(label.width(Fill)),
+            };
             let enter = match sub {
                 true => msg.clone(),
                 false => opener(0),
