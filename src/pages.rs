@@ -1633,8 +1633,8 @@ fn pick<'a, T: Clone + Send + Sync + 'static>(
     let find = move |l: String| opts.iter().find(|o| o.1 == l).expect("an option").0.clone();
     let p = pick_list(labels, on, move |l| set(f, find(l)));
     let p = p.placeholder("The saved value is not available");
-    let p = p.text_size(14).font(theme::fw(Normal)).padding([8, 12]);
-    let p = p.width(268).style(theme::pick(false));
+    let p = p.text_size(14).font(theme::fw(Normal)).padding([7, 12]);
+    let p = p.width(271).style(theme::pick(false));
     p.menu_style(theme::pick_menu).into()
 }
 
@@ -1663,8 +1663,11 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     };
     let head = |t: &'static str| container(bold(t, 16.0)).padding(padding::top(PAD).bottom(8));
     fn line<'a>(label: impl text::IntoFragment<'a>, c: El<'a>) -> El<'a> {
-        let label = txt(label, 14.0).color(SUB).width(Fill);
-        row![label, c].align_y(Center).height(48).into()
+        let label = txt(label, 14.0).color(SUB).width(Fill).height(24);
+        row![label.align_y(Center), c]
+            .align_y(Center)
+            .padding([4, 0])
+            .into()
     }
     let mut rates = [0, 320, 256, 192, 128, 96].map(|b| (b, format!("{b} kbps")));
     rates[0].1 = "No limit".into();
@@ -1707,11 +1710,11 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let skip = text_input("live, remix, intro", &st.queue_skip);
     let skip = skip
         .on_input(|v| set(|s, v| s.queue_skip = v, v))
-        .width(268);
+        .width(271);
     let skip = skip.style(theme::input([ELEVATED; 2], [GREY; 2], [0.0, 1.0], 4.0));
     let skip = skip
         .font(theme::fw(Normal))
-        .padding([8, 12])
+        .padding([7, 12])
         .size(14)
         .into();
     let step = num(step, 1.0..=30.0, |s, v| s.seek_secs = v, l2);
@@ -1860,8 +1863,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         io,
     ));
     let col = col.push(head("About"));
-    let col = col.push(line("Version", version)).max_width(860);
-    container(col).padding(PAD).into()
+    let col = col.push(line("Version", version)).max_width(836);
+    container(col).padding(32).center_x(Fill).into()
 }
 
 pub fn now_playing<'a>(app: &'a App) -> El<'a> {
