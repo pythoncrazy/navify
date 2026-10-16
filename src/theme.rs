@@ -96,6 +96,7 @@ pub mod icon {
     pub const DEVICE: char = '\u{e210}';
     pub const WINDOW: char = '\u{e11a}';
     pub const LIBRARY: char = '\u{e100}';
+    pub const SIDE: char = '\u{e12a}';
     pub const QUEUE: char = '\u{e2e0}';
     pub const EQ: char = '\u{e55a}';
     pub const LYRICS: char = '\u{e349}';
