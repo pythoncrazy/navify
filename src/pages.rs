@@ -1254,15 +1254,15 @@ fn profile(app: &App) -> Option<El<'_>> {
     let rows = songs.iter().enumerate();
     let rows = rows.map(|(n, s)| container(track(app, s, n, "profile", c)).padding([0.0, PAD]));
     let all = Some("songs:frequent".to_string());
-    let tracks =
-        (!songs.is_empty()).then(|| column![head("Top tracks", all)].extend(rows.map(Into::into)));
+    let rows = Column::with_children(rows.map(Into::into));
+    let tracks = (!songs.is_empty()).then(|| column![head("Top tracks", all), rows]);
     let pls = public(app).collect::<Vec<_>>();
     let shelf = shelf(
         "Public Playlists",
         None,
         pls.iter().take(k).map(|p| playlist_card(app, p)),
     );
-    let body = column![top, tracks.map(|t| t.spacing(8)), shelf].spacing(40);
+    let body = column![top, tracks.map(|t| t.spacing(17)), shelf].spacing(40);
     let p = Page {
         art: avatar(user, art_px(app)).into(),
         kind: "Profile",
