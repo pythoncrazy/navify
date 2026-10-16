@@ -120,7 +120,6 @@ pub mod icon {
     pub const STAR: char = '\u{e176}';
     pub const FOLDER: char = '\u{e0d7}';
     pub const PENCIL: char = '\u{e1f9}';
-    pub const TRASH: char = '\u{e18e}';
     pub const PR: char = '\u{e431}';
     pub const LIST: char = '\u{e106}';
     pub const GRID: char = '\u{e0ff}';
