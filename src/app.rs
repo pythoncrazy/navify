@@ -65,6 +65,7 @@ pub enum MenuKind {
 pub struct Menu {
     pub x: f32,
     pub y: f32,
+    pub dy: f32,
     pub kind: MenuKind,
     pub sub: u8,
     pub sub_y: f32,
@@ -1723,6 +1724,7 @@ impl App {
                 self.menu = Some(Menu {
                     x,
                     y,
+                    dy: y - cursor().1,
                     kind: *kind,
                     sub: 0,
                     sub_y: 0.0,
@@ -1733,7 +1735,7 @@ impl App {
             Message::MenuBelow(m, dx, dy) => {
                 let t = self.update(*m);
                 if let Some(m) = &mut self.menu {
-                    (m.x, m.y) = (cursor().0 + dx, cursor().1 + dy);
+                    (m.x, m.y, m.dy) = (cursor().0 + dx, cursor().1 + dy, dy);
                 }
                 return t;
             }
