@@ -682,7 +682,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
     let (n, tw, th, gap) = home_tiles(app);
     let big = th > 48.0;
-    let tile = |art: El<'a>, name: &'a str, route: String| {
+    let tile = |art: El<'a>, name: &'a str, route: String, cid: &str| -> El<'a> {
         let name = ell(name, tw - th - 56.0, [14.0, 16.0][usize::from(big)], Bold);
         let body = row![art, name].spacing([8, 16][usize::from(big)]);
         let style = theme::btn([0.1, 0.2, 0.3].map(theme::tint), [TEXT; 3], 4.0);
@@ -692,15 +692,19 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
         let play = play_btn(app, 32.0, &route);
         let play = container(play).align_right(Fill).center_y(th);
         let play = play.padding([0, 8]);
-        play_over(app, b.into(), play.into(), &route)
+        let (on, off) = (format!("tile:{cid}"), format!("tile:{cid}"));
+        mouse_area(play_over(app, b.into(), play.into(), &route))
+            .on_enter(act(move |a| a.hover = Some(on.clone())))
+            .on_exit(act(move |a| a.hover = a.hover.take().filter(|h| *h != off)))
+            .into()
     };
     let pins = pls.iter().take(3);
     let pins = pins.map(|p| (&p.cover, &p.name, format!("playlist:{}", p.id)));
     let recent = h[0].iter();
     let recent = recent.map(|a| (&a.cover, &a.name, format!("album:{}", a.id)));
     let small = |c| cover(app, c, th, false);
-    let rest = pins.chain(recent).map(|(c, n, r)| tile(small(c), n, r));
-    let liked = tile(liked_art(th), "Liked Songs", "liked".into());
+    let rest = pins.chain(recent).map(|(c, n, r)| tile(small(c), n, r, c));
+    let liked = tile(liked_art(th), "Liked Songs", "liked".into(), "");
     let mut tiles = std::iter::once(liked).chain(rest).take(8);
     let rows = std::iter::from_fn(|| {
         let r: Vec<El> = tiles.by_ref().take(n).collect();
@@ -720,12 +724,18 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
             .map(|a| album_card(app, a, a.artist.clone()));
         shelf(t, Some(format!("albums:{s}")), cards)
     });
-    let c = h[0].first().map_or(GREY, |a| head_color(app, &a.cover));
+    let c = match app.hover.as_deref().and_then(|h| h.strip_prefix("tile:")) {
+        Some("") => LIKED,
+        Some(id) => head_color(app, id),
+        None => h[0].first().map_or(GREY, |a| head_color(app, &a.cover)),
+    };
     let pls = pls.iter().take(k).map(|p| playlist_card(app, p));
     let pls = shelf("Your playlists", None, pls);
     let tiles = container(Column::from_vec(rows.collect()).spacing(gap)).padding([0.0, PAD]);
     let col = column![tiles].extend(shelves).push(pls).spacing(40);
-    Some(fade(theme::shade(c, 0.5), 332.0, col.padding([PAD, 16.0])))
+    let k = 0.4 * (0.38 / (c.r.max(c.g).max(c.b) + c.r.min(c.g).min(c.b))).min(1.0);
+    let top = Color::from_rgb(c.r * k, c.g * k, c.b * k);
+    Some(fade(top, 256.0, col.padding([PAD, 16.0])))
 }
 
 struct Page<'a> {
