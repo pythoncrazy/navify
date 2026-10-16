@@ -1314,7 +1314,10 @@ fn artist(app: &App) -> Option<El<'_>> {
     let rows = top.iter().take(n).enumerate();
     let rows = rows.map(|(k, s)| track(app, s, k, key, c3));
     let rows = rows.map(|t| container(t).padding([0.0, PAD]).into());
-    let popular = column![heading("Popular", None)].extend(rows).push(more);
+    let popular = column![
+        heading("Popular", None),
+        Column::with_children(rows).push(more)
+    ];
     let k = app.grid().0;
     let has = |g: &str| albums.iter().any(|x| kind(x).1 == g);
     let chips = GROUPS.iter().enumerate();
@@ -1368,7 +1371,7 @@ fn artist(app: &App) -> Option<El<'_>> {
             .width(Fill)
     });
     let popular = (!top.is_empty()).then(|| {
-        let left = popular.spacing(8).width(app.main_w() - cut);
+        let left = popular.spacing(17).width(app.main_w() - cut);
         row![left].push(pick)
     });
     let discog = (!albums.is_empty()).then(|| discog.spacing(12));
