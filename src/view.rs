@@ -2,9 +2,9 @@ use iced::font::Weight::{Black, Medium, Normal};
 use iced::widget::tooltip::Position::{Bottom, Right, Top};
 use iced::widget::{
     Row, Space, button, column, container, image, mouse_area, row, scrollable, slider, stack, text,
-    text_input, tooltip,
+    text_editor, text_input, tooltip,
 };
-use iced::{Background, Center, Color, Element, Fill, FillPortion, color, padding};
+use iced::{Background, Border, Center, Color, Element, Fill, FillPortion, color, padding};
 use std::borrow::Cow;
 
 use crate::api::Artist;
@@ -708,12 +708,12 @@ fn player_bar(app: &App) -> El<'_> {
     bar.align_y(Center).padding([0, 16]).height(72).into()
 }
 
-fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
+fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     let lib = app.data::<Lib>("lib");
     let pl = lib.and_then(|l| l.playlists.iter().find(|p| p.id == id));
     let act = |label: &'static str, bg: [Color; 3], fg: Color, x: u16, m: Option<Message>| {
         let b = button(bold(label, 16.0)).style(theme::solid(bg, fg));
-        let b = b.padding([12, x]).on_press_maybe(m.clone());
+        let b = b.padding([14, x]).on_press_maybe(m.clone());
         focusable(b, m, 500.0, Some("layer"))
     };
     let x = icon_btn(i::X, 16.0, Message::MenuClose);
@@ -846,7 +846,7 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
         return container(body).style(fill(TEXT, 8.0)).into();
     }
     let named = !app.new_pl.trim().is_empty();
-    let (name, desc) = (app.new_pl.clone(), app.new_pl_desc.clone());
+    let (name, desc) = (app.new_pl.clone(), app.new_pl_desc.text());
     let ok = named.then(|| Message::Edit(id.into(), name, desc));
     let input = |hint: &'static str, v: &str, n: u8| {
         let edge = [color!(0x535353); 2];
@@ -859,13 +859,30 @@ fn modal(app: &App, id: &str, kind: u8) -> El<'static> {
     let error = (!named).then(|| txt("Enter a name.", 12.0).color(theme::ERR));
     let name = column![input("Add a name", &app.new_pl, 3)];
     let name = name.push(error).spacing(6);
-    let desc = input("Add an optional description", &app.new_pl_desc, 4);
+    let desc = text_editor(&app.new_pl_desc).id("layer");
+    let desc = desc.placeholder("Add an optional description");
+    let desc = desc
+        .on_action(Message::Desc)
+        .height(124)
+        .padding(8)
+        .size(14);
+    let desc = desc.font(theme::fw(Normal)).style(|t, s| {
+        let edge = color!(0x535353);
+        let w = f32::from(u8::from(matches!(s, text_editor::Status::Focused { .. })));
+        let mut st = text_editor::default(t, s);
+        (st.background, st.placeholder, st.value) = (theme::MENU_HOVER.into(), SUB, TEXT);
+        (st.border, st.selection) = (
+            Border::default().color(edge).width(w).rounded(4.0),
+            theme::tint(0.3),
+        );
+        st
+    });
     let art = cover(app, pl.map_or("", |p| p.cover.as_str()), 180.0, false);
     let white = [TEXT, color!(0xf0f0f0), color!(0xf0f0f0)];
     let save = container(act("Save", white, BG, 32, ok)).align_right(Fill);
     let head = row![bold("Edit details", 24.0).width(Fill), close].align_y(Center);
     let fields = row![art, column![name, desc].spacing(16)].spacing(16);
-    let body = column![head, fields, save].spacing(24);
+    let body = column![column![head, fields].spacing(24), save].spacing(8);
     let body = body.width(524).padding(24);
     container(body).style(style).into()
 }
