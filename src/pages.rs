@@ -1332,7 +1332,9 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                     .on_exit(act(move |a| a.hover = a.hover.take().filter(|x| *x != hk)))
                     .into()
             });
-            let col = column![top, Column::with_children(rows)].spacing(16).width(rw);
+            let col = column![top, Column::with_children(rows)]
+                .spacing(16)
+                .width(rw);
             container(col).padding(Padding::new(PAD).top(0)).into()
         }
     };
@@ -1344,7 +1346,11 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         artists_res.is_empty(),
         pls.is_empty(),
     ][tab];
-    Some(column![chips, if empty { none.into() } else { body }].width(Fill).into())
+    Some(
+        column![chips, if empty { none.into() } else { body }]
+            .width(Fill)
+            .into(),
+    )
 }
 
 pub fn search_hits(t: (&[Artist], &[Album], &[Song]), q: &str) -> (Option<Hit>, Vec<Hit>) {
