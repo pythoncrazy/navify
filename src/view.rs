@@ -385,10 +385,12 @@ pub fn tip<'a>(
     label: impl text::IntoFragment<'a>,
     at: tooltip::Position,
 ) -> El<'a> {
-    let body = container(txt(label, 14.0)).padding([4, 8]);
-    let body = body.style(fill(theme::MENU, 4.0));
+    let label = txt(label, 14.0).line_height(text::LineHeight::Absolute(20.0.into()));
+    let body = container(label)
+        .padding([4, 8])
+        .style(fill(theme::MENU, 4.0));
     let delay = std::time::Duration::from_millis(200);
-    tooltip(c, body, at).gap(8).delay(delay).into()
+    tooltip(c, body, at).gap(8).padding(0).delay(delay).into()
 }
 
 fn top_bar(app: &App) -> El<'_> {
