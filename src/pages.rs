@@ -76,7 +76,7 @@ fn own_pl(app: &App) -> Option<&(Playlist, Vec<Song>)> {
 
 pub fn list_y(app: &App) -> f32 {
     let tools = own_pl(app).is_some_and(|x| !x.1.is_empty());
-    hero_h(app) + BAR + HEAD + [0.0, 53.0][usize::from(tools)]
+    hero_h(app) + BAR + HEAD + [0.0, 42.0][usize::from(tools)]
 }
 
 pub fn add_songs(app: &App) -> impl Iterator<Item = &Song> {
@@ -1103,7 +1103,7 @@ fn detail(app: &App) -> Option<El<'_>> {
                 [theme::tint(0.1), theme::tint(0.2), theme::tint(0.2)],
                 [TEXT; 3],
             ];
-            let b = button(r).padding(Padding::new(7.0).left(12).right(16));
+            let b = button(r).padding(Padding::new(6.0).left(12).right(16));
             b.style(theme::solid(
                 bg[usize::from(on)],
                 [TEXT, BG][usize::from(on)],
@@ -1117,7 +1117,7 @@ fn detail(app: &App) -> Option<El<'_>> {
             false,
             Message::Modal(p.id.clone(), 1),
         );
-        container(row![add, edit].spacing(8)).padding(Padding::new(PAD).top(14).bottom(7))
+        container(row![add, edit].spacing(8)).padding(Padding::new(PAD).top(6).bottom(6))
     });
     let head = (!empty && !(liked && songs.is_empty())).then(|| table_head(app, c));
     let body = column![tools, head];
