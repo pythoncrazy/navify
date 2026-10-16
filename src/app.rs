@@ -576,7 +576,9 @@ impl App {
     }
 
     pub fn row_h(&self) -> f32 {
-        [56.0, 32.0][usize::from(self.cfg.settings.compact)]
+        let k = self.route.split(':').next().unwrap_or("");
+        let c = self.cfg.settings.compact && matches!(k, "album" | "playlist" | "liked" | "songs");
+        [56.0, 32.0][usize::from(c)]
     }
 
     pub fn lib_layout(&self) -> (u8, usize, f32, f32) {
@@ -2418,7 +2420,10 @@ impl App {
             (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
         };
         let y0 = crate::pages::list_y(self);
-        let rows = |v: &[Song]| span(v.len(), self.row_h(), 1, y0);
+        let rows = |v: &[Song]| match self.row_h() < 56.0 {
+            true => 0..0,
+            false => span(v.len(), 56.0, 1, y0),
+        };
         let tiles = |n: usize| span(n, cw + 52.0, cols, crate::pages::grid_y(self));
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
