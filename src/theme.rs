@@ -297,9 +297,9 @@ pub fn pick(flat: bool) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Styl
     move |t, s| {
         let hot = s != pick_list::Status::Active;
         let fg = if hot { TEXT } else { SUB };
-        let bg = [[CHIP, MENU_HOVER], [CLEAR; 2]][flat as usize][hot as usize];
+        let bg = [[ELEVATED, CHIP], [CLEAR; 2]][flat as usize][hot as usize];
         let mut st = pick_list::default(t, s);
-        (st.text_color, st.placeholder_color) = (if flat { fg } else { TEXT }, SUB);
+        (st.text_color, st.placeholder_color) = (fg, SUB);
         (st.handle_color, st.background) = (fg, bg.into());
         st.border = Border::default().rounded(if flat { 0 } else { 4 });
         st

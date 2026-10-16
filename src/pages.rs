@@ -1870,6 +1870,13 @@ fn pick<'a, T: Clone + Send + Sync + 'static>(
     let p = pick_list(labels, on, move |l| set(f, find(l)));
     let p = p.placeholder("The saved value is not available");
     let p = p.text_size(14).font(theme::fw(Normal)).padding([7, 12]);
+    let p = p.handle(pick_list::Handle::Static(pick_list::Icon {
+        font: theme::LUCIDE,
+        code_point: i::DOWN,
+        size: Some(16.into()),
+        line_height: Default::default(),
+        shaping: Default::default(),
+    }));
     let p = p.width(271).style(theme::pick(false));
     p.menu_style(theme::pick_menu).into()
 }
