@@ -19,7 +19,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 ## Layout
 
 - `src/` — app crate `navify` (iced UI, API client, caches, OS integration).
-- `crates/audio` — `navify-audio`: playback engine (symphonia 0.6 + `opus-decoder` + cpal + rubato + stream-download). No UI or Subsonic knowledge.
+- `crates/audio` — `navify-audio`: playback engine (symphonia 0.6 + `rusty-opus` + cpal + rubato + stream-download). No UI or Subsonic knowledge.
 
 ## Architecture decisions
 
@@ -113,7 +113,7 @@ Spotify-lookalike desktop client for Navidrome / any OpenSubsonic server. Rust, 
 
 ### Phase C: integration and release
 
-- Finish `crates/audio` (symphonia 0.6 + `opus-decoder` + cpal + rubato + stream-download): gapless, crossfade, seek, volume, pause stops the stream. Use the shared tokio runtime of the app.
+- Finish `crates/audio` (symphonia 0.6 + `rusty-opus` + cpal + rubato + stream-download): gapless, crossfade, seek, volume, pause stops the stream. Use the shared tokio runtime of the app.
 - souvlaki for MPRIS, SMTC, and macOS Now Playing (libdbus on Linux; HWND on Windows).
 - Measure RSS and idle CPU with wgpu and with `ICED_BACKEND=tiny-skia`. Count network requests for cold start, album open, and album reopen (reopen must make 0 requests in the stale time).
 - Check that `prek run --all-files`, clippy, and tests pass on all three platforms. Then tag a release.
