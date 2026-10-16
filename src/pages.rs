@@ -24,7 +24,7 @@ type Hit = (usize, usize);
 pub const PAD: f32 = 24.0;
 pub const GRID_Y: f32 = 184.0;
 pub const DIR_Y: f32 = 90.0;
-pub const BAR: f32 = 84.0;
+pub const BAR: f32 = 104.0;
 pub const HEAD: f32 = 53.0;
 const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
 const GREY: Color = color!(0x535353);
@@ -66,7 +66,7 @@ pub fn banner(app: &App, a: &Artist) -> Option<String> {
 }
 
 pub fn hero_h(app: &App) -> f32 {
-    art_px(app) + PAD + 64.0
+    art_px(app) + PAD + 72.0
 }
 
 fn own_pl(app: &App) -> Option<&(Playlist, Vec<Song>)> {
@@ -814,7 +814,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let info = column![kind, name, p.meta].spacing(8);
         let hero = row![click(p.art), info].spacing(PAD).align_y(iced::Bottom);
         let hero = container(hero)
-            .padding(Padding::new(PAD).top(64.0))
+            .padding(Padding::new(PAD).top(72.0))
             .width(Fill);
         hero.height(hero_h(app)).style(bg).into()
     };
@@ -849,8 +849,8 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let bar = Row::new().push((!empty).then_some(play));
     let bar = bar.push((!empty).then_some(shuffle));
     let bar = bar.extend(p.extra).push(view).spacing(PAD);
-    let bar = container(bar.align_y(Center)).height(BAR);
-    let bar = bar.padding(Padding::new(PAD).top(12).bottom(16));
+    let bar = container(bar.align_y(Center)).center_y(BAR);
+    let bar = bar.padding([0.0, PAD]);
     let top = Color::from_rgb(
         low.r * 0.7 + 0.3 * theme::PANEL.r,
         low.g * 0.7 + 0.3 * theme::PANEL.g,
