@@ -30,7 +30,9 @@ pub fn tint(alpha: f32) -> Color {
 }
 
 pub fn shade(c: Color, k: f32) -> Color {
-    Color::from_rgba(c.r * k, c.g * k, c.b * k, c.a)
+    let d = c.r.max(c.g).max(c.b) * (1.0 - k);
+    let [r, g, b] = [c.r, c.g, c.b].map(|v| (v - d).max(0.0));
+    Color::from_rgba(r, g, b, c.a)
 }
 
 pub fn fw(weight: Weight) -> Font {
