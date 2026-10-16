@@ -587,10 +587,14 @@ fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
         .skip(1)
         .find(|g| g.0 == f)
         .map_or("All", |g| g.1);
-    let filter = row![txt(label, 14.0), theme::filled(theme::fill::CARET, 14.0)].spacing(4);
+    let kind = app.menu.as_ref().map(|m| &m.kind);
+    let open = matches!(kind, Some(MenuKind::Disc));
+    let caret = [theme::fill::CARET, theme::fill::CARET_UP][usize::from(open)];
+    let filter = row![txt(label, 14.0), theme::filled(caret, 14.0)].spacing(4);
+    let fg = |open: bool| [SUB, TEXT][usize::from(open)];
     let filter = link_btn(
         filter.align_y(Center),
-        SUB,
+        fg(open),
         Message::Menu(Box::new(MenuKind::Disc)),
     );
     let view = [i::LIST, i::GRID][usize::from(app.cfg.settings.disc_grid)];
@@ -598,7 +602,11 @@ fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
     let order = row![txt(order, 14.0), i(view, 16.0)]
         .spacing(8)
         .align_y(Center);
-    let order = link_btn(order, SUB, Message::Menu(Box::new(MenuKind::View)));
+    let order = link_btn(
+        order,
+        fg(matches!(kind, Some(MenuKind::View))),
+        Message::Menu(Box::new(MenuKind::View)),
+    );
     let name = ell(&a.name, app.main_w() - 2.0 * PAD - 280.0, 24.0, Bold);
     let name = link_btn(name, TEXT, go("artist", id));
     row![name, Space::new().width(Fill), filter, order]
@@ -877,9 +885,10 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
                 txt(label, 14.0),
                 i([i::LIST, i::COMPACT][usize::from(compact)], 16.0)
             ];
+            let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::View));
             link_btn(
                 c.spacing(8).align_y(Center),
-                SUB,
+                [SUB, TEXT][usize::from(open)],
                 Message::Menu(Box::new(MenuKind::View)),
             )
         });
