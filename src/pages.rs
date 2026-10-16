@@ -157,6 +157,7 @@ pub fn grid_y(app: &App) -> f32 {
         Some("genre") => (0.4 * app.view_size().1).round() + PAD + 40.0,
         Some("artists") => GRID_Y - 40.0,
         Some("discography") => GRID_Y - 24.0,
+        Some("search") => 91.0,
         _ => GRID_Y,
     }
 }
@@ -1470,7 +1471,10 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let chips = Row::with_children(chips).spacing(8);
     let chips = container(chips).padding(Padding::new(16.0).left(x0).right(PAD));
     let (k, cw) = app.grid();
-    let tiles = |n, f: &dyn Fn(usize) -> El<'a>| grid(app, n, k, cw + 52.0, 64.0, f);
+    let tiles = |n, f: &dyn Fn(usize) -> El<'a>| {
+        let g = grid(app, n, k, cw + 52.0, grid_y(app), f);
+        container(g).padding(Padding::from([0, 12]).top(27)).into()
+    };
     let by = |a: &Album| match a.year {
         0 => a.artist.clone(),
         y => format!("{y}{DOT}{}", a.artist),

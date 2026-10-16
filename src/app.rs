@@ -627,7 +627,7 @@ impl App {
     }
 
     pub fn grid(&self) -> (usize, f32) {
-        let w = self.main_w() - 24.0;
+        let w = self.main_w() - [24.0, 48.0][usize::from(self.route.starts_with("search:"))];
         let n = ((w / 180.0) as usize).max(2);
         (n, w / n as f32)
     }
