@@ -2663,19 +2663,26 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
 
 pub fn key_label(c: &str) -> String {
     let cmd = ["Ctrl+", "Cmd+"][usize::from(cfg!(target_os = "macos"))];
-    c.replace("C+", cmd).replace("Arrow", "")
+    let c = c.replace("C+", cmd).replace("ArrowLeft", "\u{2190}");
+    let c = c
+        .replace("ArrowUp", "\u{2191}")
+        .replace("ArrowRight", "\u{2192}");
+    c.replace("ArrowDown", "\u{2193}")
 }
 
 pub type KeyAction = (&'static str, &'static str, &'static str, fn() -> Message);
 
 pub const KEY_GROUPS: [(&str, usize); 4] = [
-    ("Basic", 6),
+    ("Basic", 10),
     ("Playback", 10),
     ("Navigation", 4),
     ("Layout", 3),
 ];
 
-pub const KEYS: [KeyAction; 23] = [
+pub const KEYS: [KeyAction; 27] = [
+    ("new_playlist", "Create new playlist", "C+N", || {
+        Message::PlNew(String::new(), Vec::new())
+    }),
     ("search", "Search", "C+K", || {
         task(|a| {
             let go = !a.route.starts_with("search");
@@ -2684,6 +2691,23 @@ pub const KEYS: [KeyAction; 23] = [
         })
     }),
     ("select_all", "Select all", "C+A", || Message::SelectAll),
+    ("filter", "Filter", "C+F", || {
+        task(|a| {
+            let id = match a.route.as_str() {
+                "settings" => "setfind",
+                r if r.starts_with("playlist:") => "plfind",
+                _ => return Task::none(),
+            };
+            a.pl_find.get_or_insert_default();
+            op::focus(id)
+        })
+    }),
+    ("lib_find", "Search in Your Library", "C+Alt+F", || {
+        task(|a| {
+            a.lib_find.get_or_insert_default();
+            op::focus("libfind")
+        })
+    }),
     ("settings", "Settings", "C+,", || {
         Message::Nav("settings".into())
     }),
@@ -2694,6 +2718,7 @@ pub const KEYS: [KeyAction; 23] = [
         Message::Window(false)
     }),
     ("quit", "Quit", "C+Q", || Message::Close),
+    ("log_out", "Log out", "Alt+Shift+F6", || Message::LogOut),
     ("toggle", "Play or pause", "Space", || Message::Toggle),
     ("like", "Like the current song", "Alt+Shift+B", || {
         task(|a| {
