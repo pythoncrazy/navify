@@ -774,7 +774,8 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     };
     let pls = pls.iter().take(k).map(|p| playlist_card(app, p));
     let pls = shelf("Your playlists", None, pls);
-    let tiles = container(Column::from_vec(rows.collect()).spacing(gap)).padding([0.0, PAD]);
+    let tiles = Column::from_vec(rows.collect()).spacing(gap);
+    let tiles = container(tiles).padding(Padding::from([0.0, PAD]).bottom(16));
     let col = column![tiles].extend(shelves).push(pls).spacing(40);
     Some(fade(theme::dark(c, 0.08), 256.0, col.padding([PAD, 16.0])))
 }
