@@ -571,7 +571,7 @@ impl App {
 
     pub fn lib_mini(&self) -> bool {
         let s = &self.cfg.settings;
-        let right = [0.0, s.panels.1 + 8.0][usize::from(self.panel > 0)];
+        let right = [48.0, s.panels.1 + 8.0][usize::from(self.panel > 0)];
         s.lib_collapsed || self.view_size().0 - 24.0 - s.panels.0 - right < 400.0
     }
 
@@ -584,7 +584,7 @@ impl App {
     }
 
     pub fn main_w(&self) -> f32 {
-        let right = [0.0, self.right_w() + 8.0][usize::from(self.panel > 0)];
+        let right = [48.0, self.right_w() + 8.0][usize::from(self.panel > 0)];
         self.view_size().0 - 24.0 - self.lib_w() - right
     }
 
