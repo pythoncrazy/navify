@@ -651,7 +651,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let back = container(Space::new()).width(Fill).height(bh).style(bg);
         stack![back].push(img).push(dim).push(text).into()
     } else {
-        let kind = txt(p.kind, 14.0).font(theme::fw(Medium));
+        let kind = (!p.kind.is_empty()).then(|| txt(p.kind, 14.0).font(theme::fw(Medium)));
         let info = column![kind, title(app.main_w() - 3.0 * PAD - px), p.meta].spacing(8);
         let hero = row![p.art, info].spacing(PAD).align_y(iced::Bottom);
         let hero = container(hero)
@@ -1082,7 +1082,7 @@ fn artist(app: &App) -> Option<El<'_>> {
     let follow = theme::pill_btn(follow, Message::Star(vec![a.id.clone()], !on));
     let p = Page {
         art: cover(app, &a.cover, art_px(app), true),
-        kind: "Artist",
+        kind: "",
         title: &a.name,
         meta: sub(counts, 14.0).color(TEXT).into(),
         color: head_color(app, &a.cover),
