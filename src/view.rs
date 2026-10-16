@@ -66,7 +66,7 @@ pub fn focusable<'a>(
     id: Option<&'static str>,
 ) -> El<'a> {
     let id = id.map(iced::advanced::widget::Id::from);
-    Element::new(wrap::Wrap(c.into(), Some((msg, radius, id)), None, false))
+    Element::new(wrap::Wrap(c.into(), Some((msg, radius, id)), None, 0))
 }
 
 pub fn live<'a>(
@@ -79,12 +79,20 @@ pub fn live<'a>(
         build(p),
         None,
         Some((clock, Box::new(build), run, p)),
-        false,
+        0,
     ))
 }
 
 pub fn smooth(c: El<'_>, on: bool) -> El<'_> {
-    Element::new(wrap::Wrap(c, None, None, on))
+    Element::new(wrap::Wrap(c, None, None, u8::from(on)))
+}
+
+pub fn pane<'a>(c: impl Into<El<'a>>) -> El<'a> {
+    Element::new(wrap::Wrap(c.into(), None, None, 2))
+}
+
+pub fn bands<'a>(stops: &[(f32, Color)]) -> El<'a> {
+    Element::new(wrap::Bands(stops.to_vec()))
 }
 
 mod wrap {
@@ -107,12 +115,7 @@ mod wrap {
         f32,
     );
     type Focus = (Option<Message>, f32, Option<Id>);
-    pub struct Wrap<'a>(
-        pub El<'a>,
-        pub Option<Focus>,
-        pub Option<Live<'a>>,
-        pub bool,
-    );
+    pub struct Wrap<'a>(pub El<'a>, pub Option<Focus>, pub Option<Live<'a>>, pub u8);
     #[derive(Default)]
     struct Ring(bool, f32, Option<std::time::Instant>, Point, bool);
     impl Focusable for Ring {
@@ -126,6 +129,46 @@ mod wrap {
             self.0 = false;
         }
     }
+    pub struct Bands(pub Vec<(f32, Color)>);
+    impl Widget<Message, T, R> for Bands {
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fill, Length::Fill)
+        }
+        fn layout(&mut self, _: &mut Tree, _: &R, l: &layout::Limits) -> layout::Node {
+            layout::Node::new(l.max())
+        }
+        fn draw(&self, _: &Tree, r: &mut R, _: &T, _: &Style, l: Layout, _: Cursor, v: &Rect) {
+            let b = l.bounds();
+            let n = (b.height / 4.0).ceil().max(1.0);
+            let at = |f: f32| {
+                let i = self
+                    .0
+                    .iter()
+                    .position(|s| s.0 >= f)
+                    .unwrap_or(self.0.len() - 1);
+                let (a, z) = (self.0[i.saturating_sub(1)], self.0[i]);
+                let k = ((f - a.0) / (z.0 - a.0)).clamp(0.0, 1.0);
+                let m = |x: f32, y: f32| x + (y - x) * if k.is_nan() { 1.0 } else { k };
+                let (a, z) = (a.1, z.1);
+                Color::from_rgba(m(a.r, z.r), m(a.g, z.g), m(a.b, z.b), m(a.a, z.a))
+            };
+            for i in 0..n as usize {
+                let y = b.y + b.height * i as f32 / n;
+                let h = b.y + b.height * (i + 1) as f32 / n - y;
+                let q = Rect::new(Point::new(b.x, y.round()), Size::new(b.width, h.round()));
+                let c = at((i as f32 + 0.5) / n);
+                if q.intersects(v) && c.a > 0.0 {
+                    r.fill_quad(
+                        Quad {
+                            bounds: q,
+                            ..Quad::default()
+                        },
+                        c,
+                    );
+                }
+            }
+        }
+    }
     impl Widget<Message, T, R> for Wrap<'_> {
         fn size(&self) -> Size<Length> {
             self.0.as_widget().size()
@@ -134,7 +177,15 @@ mod wrap {
             self.0.as_widget_mut().layout(&mut t.children[0], r, l)
         }
         fn draw(&self, t: &Tree, r: &mut R, th: &T, s: &Style, l: Layout, c: Cursor, v: &Rect) {
-            self.0.as_widget().draw(&t.children[0], r, th, s, l, c, v);
+            let w = self.0.as_widget();
+            match l.bounds().intersection(v).filter(|_| self.3 == 2) {
+                Some(mut b) => {
+                    b.height -= (v.y * 0.618).fract() * 0.01;
+
+                    r.with_layer(b, |r| w.draw(&t.children[0], r, th, s, l, c, &b));
+                }
+                None => w.draw(&t.children[0], r, th, s, l, c, v),
+            }
             if let Some((_, rad, _)) = self.1
                 && t.state.downcast_ref::<Ring>().0
             {
@@ -191,6 +242,7 @@ mod wrap {
             }
             use std::sync::atomic::Ordering::Relaxed;
             match (e, &self.1, &self.2) {
+                _ if self.3 == 2 => {}
                 (Event::Mouse(CursorMoved { position: p }), None, None) => {
                     let bits = (p.x.to_bits() as u64) << 32 | p.y.to_bits() as u64;
                     crate::app::CURSOR.store(bits, Relaxed);
@@ -205,7 +257,7 @@ mod wrap {
                 Event::Keyboard(ModifiersChanged(m)) => ring.4 = !m.is_empty(),
                 Event::Mouse(WheelScrolled {
                     delta: ScrollDelta::Lines { x, y },
-                }) if self.3 && *x == 0.0 && !ring.4 && c.position().is_some() => {
+                }) if self.3 == 1 && *x == 0.0 && !ring.4 && c.position().is_some() => {
                     ring.3 = c.position().expect("the cursor is on the window");
                     if ring.1 * y < 0.0 {
                         ring.1 = 0.0;
@@ -739,7 +791,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let tools = row![field].push(gap).push(order);
     let tools = tools.spacing(8).align_y(Center).width(Fill);
     let tools = (!mini).then(|| container(tools).padding([0, 8]));
-    let list = scrollable(list).style(theme::scroll).height(Fill);
+    let list = scrollable(pane(list)).style(theme::scroll).height(Fill);
     let list = list.on_scroll(|v| Message::LibScrolled(v.absolute_offset().y, v.bounds().height));
     let head = container(head).padding(iced::Padding::new(8.0).bottom(4));
     let body = column![head, chips, column![tools, list].spacing(8)];
@@ -939,7 +991,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
                 .into()
         });
         let list = iced::widget::Column::with_children(groups.collect::<Vec<El>>()).spacing(24);
-        let list = scrollable(list.padding(padding::right(16))).height(Fill);
+        let list = scrollable(pane(list.padding(padding::right(16)))).height(Fill);
         let head = row![bold("Keyboard Shortcuts", 32.0)];
         let hint = row![
             txt("Press", 16.0),
@@ -1008,7 +1060,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             .map(|(n, l)| column![bold(fmt_n(n as usize), 32.0), sub(l, 14.0)].into());
         let stats = iced::widget::Column::with_children(stats.collect::<Vec<El>>()).spacing(40);
         let body = row![stats.width(180), txt(bio, 16.0).color(SUB).width(Fill)].padding(40);
-        let body = scrollable(column![top, body]).style(theme::scroll);
+        let body = scrollable(pane(column![top, body])).style(theme::scroll);
         let h = app.view_size().1 * 0.7;
         return container(body)
             .width(768)
@@ -1101,7 +1153,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let list = iced::widget::Column::with_children(groups.collect::<Vec<El>>())
             .push(note)
             .spacing(32);
-        let list = scrollable(list.padding([24, 24]).width(Fill))
+        let list = scrollable(pane(list.padding([24, 24]).width(Fill)))
             .height(Fill)
             .style(theme::scroll);
         let title = v
@@ -1284,7 +1336,7 @@ pub fn view(app: &App) -> El<'_> {
         let body = column![from.map(|f| f.spacing(4)), Space::new().height(Fill)].push(info);
         let body = column![body.padding(48).height(Fill), player_bar(app)];
         let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];
-        let body = container(body).style(theme::down(&bg));
+        let body = stack![body].push_under(bands(&bg));
         let top = [modal, menu]
             .into_iter()
             .flatten()
@@ -1292,10 +1344,12 @@ pub fn view(app: &App) -> El<'_> {
             .chain(toast.map(El::from));
         return stack![body].extend(top).into();
     }
-    let scroll = scrollable(pages::route(app)).id(SCROLL).on_scroll(|v| {
-        let (b, c) = (v.bounds().height, v.content_bounds().height);
-        Message::Scrolled(v.absolute_offset().y, b, c)
-    });
+    let scroll = scrollable(pane(pages::route(app)))
+        .id(SCROLL)
+        .on_scroll(|v| {
+            let (b, c) = (v.bounds().height, v.content_bounds().height);
+            Message::Scrolled(v.absolute_offset().y, b, c)
+        });
     let scroll = scroll.style(theme::scroll).height(Fill);
     let main = stack![scroll].extend(pages::sticky(app));
     let main = container(main).width(Fill).height(Fill).clip(true);

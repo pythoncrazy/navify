@@ -14,8 +14,8 @@ use crate::theme::{
     self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
 };
 use crate::view::{
-    El, SONGS_BG, art, artists_line, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, go, icon_btn,
-    liked_art, media, tip, tool_btn,
+    El, SONGS_BG, art, artists_line, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, go,
+    icon_btn, liked_art, media, pane, tip, tool_btn,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -170,8 +170,7 @@ fn genre_color(app: &App, name: &str) -> Color {
 }
 
 fn fade<'a>(top: Color, h: f32, body: impl Into<El<'a>>) -> El<'a> {
-    let g = container(Space::new()).width(Fill).height(h);
-    let g = g.style(theme::down(&[(0.0, top), (1.0, theme::PANEL)]));
+    let g = container(bands(&[(0.0, top), (1.0, theme::PANEL)])).height(h);
     stack![body.into()].push_under(g).into()
 }
 
@@ -846,19 +845,19 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let px = art_px(app);
     let title = |tw: f32| huge(p.title, tw);
     let low = theme::dark(p.color, 0.2);
-    let bg = theme::down(&[(0.0, p.color), (1.0, low)]);
+    let bg = [(0.0, p.color), (1.0, low)];
     let hero: El = if let Some(key) = &p.banner {
         let bh = banner_h(app);
         let img = app.covers.get(key, 640);
         let img = img.map(|h| image(h).width(Fill).height(bh));
         let img = img.map(|i| i.content_fit(iced::ContentFit::Fill));
         let a = |x| BG.scale_alpha(x);
-        let dim = container(Space::new()).width(Fill).height(bh);
-        let dim = dim.style(theme::down(&[(0.0, CLEAR), (0.5, a(0.1)), (1.0, a(0.6))]));
+        let dim = bands(&[(0.0, CLEAR), (0.5, a(0.1)), (1.0, a(0.6))]);
+        let dim = container(dim).height(bh);
         let text = column![title(app.main_w() - 2.0 * PAD), p.meta].spacing(8);
         let text = container(text).padding(PAD);
         let text = text.width(Fill).height(bh).align_bottom(bh);
-        let back = container(Space::new()).width(Fill).height(bh).style(bg);
+        let back = container(bands(&bg)).width(Fill).height(bh);
         stack![back].push(img).push(dim).push(text).into()
     } else {
         let id = app.route.strip_prefix("playlist:");
@@ -878,7 +877,9 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let hero = container(hero)
             .padding(Padding::new(PAD).top(72.0))
             .width(Fill);
-        hero.height(hero_h(app)).style(bg).into()
+        stack![hero.height(hero_h(app))]
+            .push_under(bands(&bg))
+            .into()
     };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
     let play = play_btn(app, 56.0, &app.route);
@@ -1828,7 +1829,7 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
         let h = grid_y(app) - PAD - 40.0;
         let head = container(huge(arg, app.main_w() - 2.0 * PAD)).padding(PAD);
         let head = head.width(Fill).height(h).align_bottom(h);
-        let head = head.style(theme::down(&[(0.0, c), (1.0, theme::shade(c, 0.5))]));
+        let head = stack![head].push_under(bands(&[(0.0, c), (1.0, theme::shade(c, 0.5))]));
         let title = container(heading("Albums", None)).height(32);
         let body = column![Space::new().height(PAD), title, Space::new().height(8)];
         let body = body.push(albums).width(Fill);
@@ -2369,7 +2370,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let body = body.spacing(16).padding(Padding::new(16.0).top(0));
     let src = [&app.source, &s.album][usize::from(app.source.is_empty())];
     let head = panel_head(ell(src, app.right_w() - 64.0, 16.0, Bold), 1);
-    column![head, scrollable(body).style(theme::scroll)].into()
+    column![head, scrollable(pane(body)).style(theme::scroll)].into()
 }
 
 pub fn recent(app: &App) -> impl Iterator<Item = &Song> {
@@ -2457,7 +2458,7 @@ pub fn device_panel(app: &App) -> El<'_> {
         .extend(rows)
         .padding(padding::bottom(16));
     let head = panel_head(bold("Connect", 16.0), 3);
-    column![head, scrollable(list).style(theme::scroll)].into()
+    column![head, scrollable(pane(list)).style(theme::scroll)].into()
 }
 
 pub fn add_panel(app: &App) -> El<'_> {
@@ -2487,7 +2488,7 @@ pub fn add_panel(app: &App) -> El<'_> {
             .into()
     });
     let list = column![label, Column::with_children(rows)].padding(padding::bottom(16));
-    column![head, field, scrollable(list).style(theme::scroll)].into()
+    column![head, field, scrollable(pane(list)).style(theme::scroll)].into()
 }
 
 pub fn queue_panel(app: &App) -> El<'_> {
@@ -2541,7 +2542,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
     ];
     let head = container(panel_head(tabs.spacing(24), 2)).padding(padding::left(3));
     if app.recent_tab {
-        return column![head, scrollable(past).style(theme::scroll)].into();
+        return column![head, scrollable(pane(past)).style(theme::scroll)].into();
     }
     if app.queue.is_empty() {
         let hint = "Click \"Add to queue\" in the menu of a song to show it here.";
@@ -2555,7 +2556,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
         return column![head, body].into();
     }
     let list = list.padding(Padding::new(8.0).top(0));
-    column![head, scrollable(list).style(theme::scroll)].into()
+    column![head, scrollable(pane(list)).style(theme::scroll)].into()
 }
 
 type Item = Option<(char, String, Message, bool)>;
@@ -3002,7 +3003,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         }
         None => rule(),
     });
-    let list = scrollable(Column::new().push(head).extend(rows));
+    let list = scrollable(pane(Column::new().push(head).extend(rows)));
     boxed(list.style(theme::scroll).into(), w, h, 4)
 }
 
@@ -3065,7 +3066,7 @@ pub fn login(app: &App) -> El<'_> {
     let card = card.width(width).center_x(Fill);
     let card = card.max_width(734).style(fill(theme::PANEL, 8.0));
     let page = container(card).center_x(Fill).padding(32);
-    let bg = theme::down(&[(0.0, color!(0x2a2a2a)), (1.0, BG)]);
-    let page = scrollable(page).style(theme::scroll).height(Fill);
-    container(page).height(Fill).style(bg).into()
+    let bg = bands(&[(0.0, color!(0x2a2a2a)), (1.0, BG)]);
+    let page = scrollable(pane(page)).style(theme::scroll).height(Fill);
+    stack![page].push_under(bg).into()
 }
