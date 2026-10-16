@@ -176,6 +176,7 @@ pub enum Message {
     Queue(Vec<Song>, bool),
     QDel(usize),
     Menu(Box<MenuKind>),
+    MenuBelow(Box<Message>, f32, f32),
     MenuClose,
     PlAdd(String, Vec<String>),
     AddCtx(String, String),
@@ -1717,7 +1718,7 @@ impl App {
                     MenuKind::View => (self.lib_w() + self.main_w() - 148.0, cursor().1 + 24.0),
                     MenuKind::Disc => (cursor().0 - 16.0, cursor().1 + 24.0),
                     MenuKind::LibSort => (self.lib_w() - 220.0, cursor().1 + 24.0),
-                    _ => cursor(),
+                    _ => (cursor().0, cursor().1 + 8.0),
                 };
                 self.menu = Some(Menu {
                     x,
@@ -1728,6 +1729,13 @@ impl App {
                     find: String::new(),
                 });
                 return Task::none();
+            }
+            Message::MenuBelow(m, dx, dy) => {
+                let t = self.update(*m);
+                if let Some(m) = &mut self.menu {
+                    (m.x, m.y) = (cursor().0 + dx, cursor().1 + dy);
+                }
+                return t;
             }
             Message::MenuClose if self.full && self.menu.is_none() && self.modal.is_none() => {
                 return self.set_full(false);

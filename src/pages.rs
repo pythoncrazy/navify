@@ -208,7 +208,10 @@ fn bar_btn<'a>(c: char, m: Message) -> El<'a> {
 }
 
 fn dots<'a>(k: MenuKind) -> El<'a> {
-    bar_btn(i::DOTS, Message::Menu(Box::new(k)))
+    bar_btn(
+        i::DOTS,
+        Message::MenuBelow(Box::new(Message::Menu(Box::new(k))), -16.0, 36.0),
+    )
 }
 
 fn heading<'a>(t: impl text::IntoFragment<'a>, all: Option<String>) -> El<'a> {
@@ -363,7 +366,13 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
             .into(),
         _ => container(album).width(c.1).into(),
     };
-    let more = hot.then(|| icon_btn(i::DOTS, 16.0, Message::RowMenu(key.into(), n)));
+    let more = hot.then(|| {
+        icon_btn(
+            i::DOTS,
+            16.0,
+            Message::MenuBelow(Box::new(Message::RowMenu(key.into(), n)), -8.0, 24.0),
+        )
+    });
     let liked = key == "liked";
     let heart = (hot || starred && !liked).then(|| heart_btn(&s.id, starred, 16.0));
     let dur = sub(fmt_dur(s.duration), 14.0).width(56).align_x(Right);
@@ -1616,7 +1625,13 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 let lead = row![hover(thumb, over), text.spacing(2)].spacing(12);
                 let tag = container(bold(kinds[h.0], 12.0).color(SUB)).padding([0, 4]);
                 let tag = tag.style(fill(theme::tint(0.1), 4.0));
-                let dots = hot.then(|| icon_btn(i::DOTS, 16.0, menu.clone()));
+                let dots = hot.then(|| {
+                    icon_btn(
+                        i::DOTS,
+                        16.0,
+                        Message::MenuBelow(Box::new(menu.clone()), -8.0, 24.0),
+                    )
+                });
                 let tail = row![save(h.0, id, on)]
                     .push(dots)
                     .spacing(8)
