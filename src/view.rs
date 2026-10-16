@@ -49,6 +49,16 @@ pub fn tool_btn<'a>(c: char, lit: bool, msg: Message) -> Btn<'a, Message> {
         .on_press(msg)
 }
 
+pub fn queue_icon<'a>(s: f32, c: Color) -> El<'a> {
+    let bar = move |h: f32| container(Space::new().width(s * 1.03).height(h));
+    let rect = bar(s * 0.375).style(move |_| {
+        let b = iced::border::rounded(s * 0.17).width(s * 0.11).color(c);
+        container::Style::default().border(b)
+    });
+    let line = || bar(s * 0.125).style(fill(c, 0.0));
+    column![rect, line(), line()].spacing(s * 0.19).into()
+}
+
 pub fn focusable<'a>(
     c: impl Into<El<'a>>,
     msg: Option<Message>,
@@ -729,7 +739,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
 
 fn player_bar(app: &App) -> El<'_> {
     let song = app.current_song();
-    let side = |t: Txt<'static>, on: bool, label: &'static str, m: Message| {
+    let side = |t: El<'static>, on: bool, label: &'static str, m: Message| {
         let dot = container(Space::new().width(4).height(4)).style(fill(ACCENT, 2.0));
         let dot = on.then(|| container(dot).center_x(Fill).align_bottom(Fill));
         let b = theme::sq(stack![container(t).center(Fill)].push(dot), 32.0);
@@ -752,7 +762,7 @@ fn player_bar(app: &App) -> El<'_> {
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));
         let lines = column![title, artists_line(&s.artists, 12.0, tw)].spacing(2);
-        let heart = (!radio).then(|| side(theme::saved(on, 16.0), false, label, like));
+        let heart = (!radio).then(|| side(theme::saved(on, 16.0).into(), false, label, like));
         row![art, lines, heart].spacing(12).align_y(Center)
     });
     let dur = song.map_or(0.0, |s| s.duration).max(1.0);
@@ -801,11 +811,21 @@ fn player_bar(app: &App) -> El<'_> {
     let repeat = ["Enable repeat", "Enable repeat one", "Disable repeat"][rep];
     let repeat_icon = dic([i::REPEAT, i::REPEAT, i::REPEAT1][rep]);
     let controls = row![
-        side(dic(i::SHUFFLE), on, shuffle, Message::Shuffle),
-        side(dfi(theme::fill::PREV), false, "Previous", Message::Prev),
+        side(dic(i::SHUFFLE).into(), on, shuffle, Message::Shuffle),
+        side(
+            dfi(theme::fill::PREV).into(),
+            false,
+            "Previous",
+            Message::Prev
+        ),
         play,
-        side(dfi(theme::fill::NEXT), false, "Next", Message::Next(true)),
-        side(repeat_icon, rep > 0, repeat, act(App::repeat)),
+        side(
+            dfi(theme::fill::NEXT).into(),
+            false,
+            "Next",
+            Message::Next(true)
+        ),
+        side(repeat_icon.into(), rep > 0, repeat, act(App::repeat)),
     ];
     let center = column![controls.spacing(8).align_y(Center), progress];
     let center = center.spacing(8).align_x(Center).max_width(722);
@@ -827,26 +847,37 @@ fn player_bar(app: &App) -> El<'_> {
     let words = words[usize::from(lyrics)].clone();
     let mute = if app.muted { "Unmute" } else { "Mute" };
     let np = Message::Panel(1);
+    let hot = app.hover.as_deref() == Some("queue");
     let panels = row![
-        song.map(|_| side(ic(i::PR), app.panel == 1, "Now playing view", np)),
-        song.map(|_| side(ic(i::LYRICS), lyrics, "Lyrics", words)),
-        side(ic(i::QUEUE), app.panel == 2, "Queue", Message::Panel(2)),
+        song.map(|_| side(ic(i::PR).into(), app.panel == 1, "Now playing view", np)),
+        song.map(|_| side(ic(i::LYRICS).into(), lyrics, "Lyrics", words)),
+        mouse_area(side(
+            queue_icon(
+                14.5,
+                [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(app.panel == 2)]
+            ),
+            app.panel == 2,
+            "Queue",
+            Message::Panel(2)
+        ))
+        .on_enter(act(|a| a.hover = Some("queue".into())))
+        .on_exit(act(|a| a.hover = a.hover.take().filter(|h| h != "queue"))),
     ];
     let right = row![
         (!app.full).then_some(panels),
         device.then(|| side(
-            ic(i::DEVICE),
+            ic(i::DEVICE).into(),
             app.panel == 3,
             "Connect to a device",
             Message::Panel(3)
         )),
-        side(vol_icon, false, mute, act(|a| a.muted = !a.muted)),
+        side(vol_icon.into(), false, mute, act(|a| a.muted = !a.muted)),
         volume,
         Space::new().width(8),
         match (app.full, song) {
             (false, None) => container(dic(i::FULL)).center(32).into(),
             (full, _) => side(
-                ic([i::FULL, i::WINDOW][usize::from(full)]),
+                ic([i::FULL, i::WINDOW][usize::from(full)]).into(),
                 false,
                 ["Full screen", "Exit full screen"][usize::from(full)],
                 task(move |a| a.set_full(!full)),

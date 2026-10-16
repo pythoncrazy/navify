@@ -1211,7 +1211,7 @@ fn detail(app: &App) -> Option<El<'_>> {
 }
 
 fn blank<'a>(
-    icon: Option<char>,
+    icon: Option<El<'a>>,
     title: text::Text<'a>,
     hint: text::Text<'a>,
     find: &'a str,
@@ -1219,11 +1219,12 @@ fn blank<'a>(
     let find = button(bold(find, 16.0)).padding([12, 32]);
     let find = find.style(theme::solid([TEXT, color!(0xf0f0f0), color!(0xb7b7b7)], BG));
     let find = find.on_press(Message::Nav("search".into()));
-    let head = column![icon.map(|c| i(c, 40.0)), title].spacing(40);
+    let top = [16, 32][usize::from(icon.is_some())];
+    let head = column![icon, title].spacing(40);
     let col = column![
         head.align_x(Center),
         hint.align_x(Center),
-        container(find).padding(padding::top([16, 32][usize::from(icon.is_some())]))
+        container(find).padding(padding::top(top))
     ];
     col.spacing(8).align_x(Center).into()
 }
@@ -2340,9 +2341,11 @@ pub fn recent(app: &App) -> impl Iterator<Item = &Song> {
 
 fn panel_head<'a>(title: impl Into<El<'a>>, n: u8) -> El<'a> {
     let title = container(title).width(Fill);
-    let x = icon_btn(i::X, 16.0, Message::Panel(n));
-    let r = row![title, x].spacing(8).align_y(Center);
-    r.padding(Padding::new(8.0).left(16)).into()
+    let x = theme::sq(i(i::X, 20.0).center(), 32.0).style(theme::link(SUB));
+    let r = row![title, x.on_press(Message::Panel(n))]
+        .spacing(8)
+        .align_y(Center);
+    r.padding(Padding::new(8.0).left(16).right(16)).into()
 }
 
 fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> {
@@ -2472,7 +2475,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
         let edge = container(Space::new().width(Fill).height(2));
         let edge = edge.style(fill([CLEAR, ACCENT][usize::from(on)], 1.0));
         let b = column![bold(t, 14.0).wrapping(text::Wrapping::None), edge];
-        let b = b.spacing(6).width(Shrink);
+        let b = b.spacing(6).padding(padding::top(8)).width(Shrink);
         let b = button(b)
             .padding(0)
             .style(theme::link([SUB, TEXT][usize::from(on)]));
@@ -2493,14 +2496,14 @@ pub fn queue_panel(app: &App) -> El<'_> {
         tab("Queue", !app.recent_tab),
         tab("Recently played", app.recent_tab)
     ];
-    let head = container(panel_head(tabs.spacing(24), 2)).padding(padding::top(13));
+    let head = container(panel_head(tabs.spacing(24), 2)).padding(padding::top(8).left(3));
     if app.recent_tab {
         return column![head, scrollable(past).style(theme::scroll)].into();
     }
     if app.queue.is_empty() {
         let hint = "Click \"Add to queue\" in the menu of a song to show it here.";
         let body = blank(
-            Some(i::QUEUE),
+            Some(crate::view::queue_icon(32.0, TEXT)),
             bold("Add to your queue", 24.0),
             sub(hint, 16.0),
             "Find something to play",
