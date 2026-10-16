@@ -127,7 +127,8 @@ fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let plays = ["album:", "discography:"]
         .iter()
         .any(|p| app.route.starts_with(p));
-    let (album, date) = (album && (plays || !st.hide_album), date && !st.hide_added);
+    let shown = [!st.hide_album, !st.hide_plays][usize::from(plays)];
+    let (album, date) = (album && shown, date && !st.hide_added);
     let (a, d) = (f32::from(album && w > 480.0), f32::from(date && w > 640.0));
     let w = w - 16.0 * (a + d);
     let fr = w / (6.0 + 4.0 * a + 3.0 * d);
@@ -2361,10 +2362,10 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
     } else {
         250.0
     };
-    let entry = |r: Row<'a, Message>, msg: Message| -> El<'a> {
+    let entry = |r: Row<'a, Message>, msg: Message, h: f32| -> El<'a> {
         let hover = [theme::CLEAR, theme::MENU_HOVER, theme::MENU_HOVER];
         let b = button(container(r.spacing(12).align_y(Center)).center_y(Fill));
-        let b = b.padding([0, 12]).height(40).width(Fill);
+        let b = b.padding([0, 12]).height(h).width(Fill);
         let b = b.style(theme::btn(hover, [theme::tint(0.9); 3], 2.0));
         focusable(b.on_press(msg.clone()), Some(msg), 2.0, Some("layer"))
     };
@@ -2379,7 +2380,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         let fg = if on { ACCENT } else { theme::tint(0.9) };
         let r = Row::new().push(c.map(|c| i(c, 16.0).color(fg)));
         let r = r.push(txt(l, 14.0).color(fg).width(Fill));
-        entry(r.push(on.then(|| i(tail, 16.0).color(fg))), msg)
+        entry(r.push(on.then(|| i(tail, 16.0).color(fg))), msg, 40.0)
     };
     let opener = |n: u8| {
         act(move |a| {
@@ -2551,7 +2552,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         }
         MenuKind::Columns => {
             let st = &app.cfg.settings;
-            let album = app.route.starts_with("album:");
+            let album = ["album:", "discography:"].iter().any(|p| app.route.starts_with(p));
             let dated = app.route.starts_with("playlist:") || app.route == "liked";
             let check = |l: &'a str, on: bool, msg: Message| {
                 let c = container(on.then(|| i(i::CHECK, 12.0).color(BG))).center(16);
@@ -2560,19 +2561,20 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 let bg = if on { ACCENT } else { Color::TRANSPARENT };
                 let c = c.style(move |_| container::Style::default().background(bg).border(border));
                 let fg = if on { ACCENT } else { theme::tint(0.9) };
-                entry(row![txt(l, 14.0).color(fg).width(Fill), c], msg)
+                entry(row![txt(l, 14.0).color(fg).width(Fill), c], msg, 48.0)
             };
             let flip =
                 |l, on: bool, f: fn(&mut crate::config::Settings, bool)| check(l, on, set(f, !on));
             let rows = [
                 (!album).then(|| flip("Album", !st.hide_album, |s, b| s.hide_album = !b)),
                 dated.then(|| flip("Date added", !st.hide_added, |s, b| s.hide_added = !b)),
+                album.then(|| flip("Plays", !st.hide_plays, |s, b| s.hide_plays = !b)),
                 Some(flip("Rating", st.ratings, |s, b| s.ratings = b)),
                 (!album).then(|| flip("Plays", st.plays, |s, b| s.plays = b)),
             ];
             let n = rows.iter().flatten().count();
             let col = column![section("Columns")].extend(rows.into_iter().flatten());
-            return boxed(col.into(), 160.0, 41.0 + 40.0 * n as f32 + 8.0, 4);
+            return boxed(col.into(), 160.0, 41.0 + 48.0 * n as f32 + 8.0, 4);
         }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if level == 2 && v.len() == 1 => {
             let id = &v[0].id;
@@ -2729,7 +2731,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 true => msg.clone(),
                 false => opener(0),
             };
-            let e = entry(r.push(arrow), msg);
+            let e = entry(r.push(arrow), msg, 40.0);
             match level == 0 {
                 true => mouse_area(e).on_enter(enter).into(),
                 false => e,
