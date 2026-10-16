@@ -58,6 +58,8 @@ pub struct Settings {
     pub vol_step: f32,
     pub lyrics_align: u8,
     pub smooth: bool,
+    pub hide_album: bool,
+    pub hide_added: bool,
 }
 
 impl Settings {
@@ -118,6 +120,8 @@ impl Default for Settings {
             scrobble_secs: 240.0,
             lyrics_follow: true,
             smooth: true,
+            hide_album: false,
+            hide_added: false,
             play_mode: 0,
             ratings: false,
             plays: false,

@@ -56,6 +56,7 @@ pub enum MenuKind {
     User,
     Create,
     View,
+    Columns,
 }
 
 #[derive(Clone, Debug)]
