@@ -1255,6 +1255,7 @@ impl App {
     fn show(&mut self) -> Task<Message> {
         let route = self.history[self.hi].clone();
         (self.route, self.pl_find, self.pl_more) = (route.clone(), None, None);
+        self.panel = [self.panel, 0][usize::from(self.panel == 4)];
         (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
         (self.popular_all, self.disc_chip) = (false, 0);
         if !route.starts_with("search") {
@@ -1987,7 +1988,7 @@ impl App {
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
             Message::Arrow(up) => {
-                use crate::pages::{BAR, DIR_Y, HEAD};
+                use crate::pages::DIR_Y;
                 let Some((key, n)) = self.sel.clone() else {
                     return Task::none();
                 };
@@ -2013,7 +2014,7 @@ impl App {
                 let discs = (1 + discs) * usize::from(multi && kind == "album");
                 let top = match kind {
                     "folder" => DIR_Y,
-                    _ => crate::pages::hero_h(self) + BAR + HEAD,
+                    _ => crate::pages::list_y(self),
                 };
                 let top = top + (n + discs) as f32 * self.row_h();
                 let (off, view) = self.scroll();
@@ -2343,12 +2344,12 @@ impl App {
     fn visible_covers(&self) -> Vec<(String, u32)> {
         let (off, view) = self.scroll();
         let (cols, cw) = self.grid();
-        use crate::pages::{BAR, DIR_Y, HEAD, PAD};
+        use crate::pages::{DIR_Y, PAD};
         let span = |n: usize, h: f32, per: usize, y0: f32| {
             let lo = ((off - y0) / h).max(0.0) as usize;
             (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
         };
-        let y0 = crate::pages::hero_h(self) + BAR + HEAD;
+        let y0 = crate::pages::list_y(self);
         let rows = |v: &[Song]| span(v.len(), self.row_h(), 1, y0);
         let tiles = |n: usize| span(n, cw + 52.0, cols, crate::pages::grid_y(self));
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
@@ -2461,7 +2462,12 @@ impl App {
         }
         let now = self.current_song().map(|s| &s.cover);
         small.extend(now);
-        let ahead = [0, 1, 100, 0][self.panel as usize];
+        let ahead = [0, 1, 100, 0, 0][self.panel as usize];
+        small.extend(
+            crate::pages::add_songs(self)
+                .filter(|_| self.panel == 4)
+                .map(|s| &s.cover),
+        );
         let next = (self.index + 1..self.queue.len()).take(ahead);
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
         let (rows, span) = crate::view::lib_rows(self);

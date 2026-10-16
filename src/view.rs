@@ -1038,8 +1038,12 @@ pub fn view(app: &App) -> El<'_> {
         g.on_press(Message::Drag(Some(n)))
     };
     let right: El = if app.panel > 0 {
-        let p = [pages::now_playing, pages::queue_panel, pages::device_panel]
-            [app.panel as usize - 1](app);
+        let p = [
+            pages::now_playing,
+            pages::queue_panel,
+            pages::device_panel,
+            pages::add_panel,
+        ][app.panel as usize - 1](app);
         row![grip(1), container(p).width(app.right_w()).height(Fill)].into()
     } else {
         let show = tip(

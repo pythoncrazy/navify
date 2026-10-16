@@ -67,6 +67,51 @@ pub fn hero_h(app: &App) -> f32 {
     art_px(app) + PAD + 64.0
 }
 
+fn own_pl(app: &App) -> Option<&(Playlist, Vec<Song>)> {
+    let pl = app.data::<(Playlist, Vec<Song>)>(&app.route);
+    pl.filter(|(p, _)| app.owns(p))
+}
+
+pub fn list_y(app: &App) -> f32 {
+    let tools = own_pl(app).is_some_and(|x| !x.1.is_empty());
+    hero_h(app) + BAR + HEAD + [0.0, 53.0][usize::from(tools)]
+}
+
+pub fn add_songs(app: &App) -> impl Iterator<Item = &Song> {
+    let q = app.pl_more.as_deref().unwrap_or("").trim();
+    let hits = app
+        .data::<Trio>(&format!("search:{q}"))
+        .filter(|_| !q.is_empty());
+    let recent = q.is_empty().then_some(&app.recent[..]);
+    let all = hits.map(|t| &t.2[..]).or(recent).unwrap_or(&[]);
+    all.iter().take(20)
+}
+
+fn find_input<'a>(q: &str, id: &'static str) -> iced::widget::TextInput<'a, Message> {
+    let field = text_input("Search for songs", q).id(id);
+    let field = field.on_input(|v| {
+        task(move |a| {
+            a.pl_more = Some(v.clone());
+            let v = v.trim().to_string();
+            let go = task(
+                move |a| match a.pl_more.as_deref().map(str::trim) == Some(&v) {
+                    true if !v.is_empty() => a.request(&format!("search:{v}"), 0),
+                    _ => iced::Task::none(),
+                },
+            );
+            later(0.25, go)
+        })
+    });
+    let glass = text_input::Icon {
+        font: theme::LUCIDE,
+        code_point: i::SEARCH,
+        size: Some(16.0.into()),
+        spacing: 8.0,
+        side: text_input::Side::Left,
+    };
+    field.icon(glass).font(theme::fw(Normal))
+}
+
 fn plural(n: u32, word: &str) -> String {
     let s = if n == 1 { "" } else { "s" };
     format!("{} {word}{s}", fmt_n(n as usize))
@@ -921,42 +966,19 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
 }
 
 fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
-    let Some(q) = app.pl_more.as_deref().or(empty.then_some("")) else {
-        let open = act(|a| a.pl_more = Some(String::new()));
-        let open = link_btn(bold("Find more", 14.0), TEXT, open);
-        return container(open).padding([16.0, PAD]).into();
-    };
-    let title = bold("Find songs for your playlist", 24.0);
-    let close = (!empty).then(|| icon_btn(i::X, 20.0, act(|a| a.pl_more = None)));
-    let head = row![title, Space::new().width(Fill)]
-        .push(close)
-        .align_y(Center);
+    if !empty {
+        let m = (app.panel != 4).then_some(Message::Panel(4));
+        let open = button(bold("Find more", 14.0))
+            .padding(0)
+            .style(theme::link(TEXT));
+        return container(open.on_press_maybe(m))
+            .padding([16.0, PAD])
+            .into();
+    }
+    let q = app.pl_more.as_deref().unwrap_or("");
+    let head = bold("Find songs for your playlist", 24.0);
     let style = theme::input([ELEVATED; 2], [ELEVATED; 2], [0.0; 2], 4.0);
-    let field = text_input("Search for songs", q)
-        .id("plmore")
-        .width(360)
-        .size(14);
-    let field = field.on_input(|v| {
-        task(move |a| {
-            a.pl_more = Some(v.clone());
-            let v = v.trim().to_string();
-            let go = task(
-                move |a| match a.pl_more.as_deref().map(str::trim) == Some(&v) {
-                    true if !v.is_empty() => a.request(&format!("search:{v}"), 0),
-                    _ => iced::Task::none(),
-                },
-            );
-            later(0.25, go)
-        })
-    });
-    let glass = text_input::Icon {
-        font: theme::LUCIDE,
-        code_point: i::SEARCH,
-        size: Some(16.0.into()),
-        spacing: 8.0,
-        side: text_input::Side::Left,
-    };
-    let field = field.icon(glass).style(style).font(theme::fw(Normal));
+    let field = find_input(q, "plmore").width(360).size(14).style(style);
     let q = q.trim();
     let hits = app
         .data::<Trio>(&format!("search:{q}"))
@@ -996,12 +1018,37 @@ pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
 
 fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
-    let y0 = hero_h(app) + BAR + HEAD;
-    let pl = app.data::<(Playlist, Vec<Song>)>(&app.route);
-    let pl = pl.filter(|(p, _)| app.owns(p));
+    let y0 = list_y(app);
+    let pl = own_pl(app);
     let empty = pl.is_some_and(|x| x.1.is_empty());
     let liked = app.route == "liked";
-    let body = column![(!empty && !(liked && songs.is_empty())).then(|| table_head(app, c))];
+    let tools = pl.filter(|_| !empty).map(|(p, _)| {
+        let pill = |c, label, on: bool, m| {
+            let r = row![i(c, 16.0), bold(label, 14.0)]
+                .spacing(8)
+                .align_y(Center);
+            let bg = [
+                [theme::tint(0.1), theme::tint(0.2), theme::tint(0.2)],
+                [TEXT; 3],
+            ];
+            let b = button(r).padding(Padding::new(7.0).left(12).right(16));
+            b.style(theme::solid(
+                bg[usize::from(on)],
+                [TEXT, BG][usize::from(on)],
+            ))
+            .on_press(m)
+        };
+        let add = pill(i::PLUS, "Add", app.panel == 4, Message::Panel(4));
+        let edit = pill(
+            i::PENCIL,
+            "Name & details",
+            false,
+            Message::Modal(p.id.clone(), 1),
+        );
+        container(row![add, edit].spacing(8)).padding(Padding::new(PAD).top(14).bottom(7))
+    });
+    let head = (!empty && !(liked && songs.is_empty())).then(|| table_head(app, c));
+    let body = column![tools, head];
     let body = body.push(vlist(app, songs, &app.route, c, y0));
     let none: El = match liked {
         true => container(blank(
@@ -1094,7 +1141,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let head = row![play, title].spacing(8).align_y(Center);
     let head = bar(head.into(), theme::shade(color, 0.5));
     let cols = cols
-        .filter(|_| off > top + BAR - 64.0)
+        .filter(|_| off > list_y(app) - HEAD - 64.0)
         .map(|c| table_head(app, c));
     let cols = cols.map(|c| container(c).style(fill(color!(0x1a1a1a), 0.0)));
     (off > top - 64.0).then(|| column![head].push(cols).into())
@@ -2088,6 +2135,36 @@ pub fn device_panel(app: &App) -> El<'_> {
         .padding(padding::bottom(16));
     let head = panel_head(bold("Connect", 16.0), 3);
     column![head, scrollable(list).style(theme::scroll)].into()
+}
+
+pub fn add_panel(app: &App) -> El<'_> {
+    let head = panel_head(bold("Add to playlist", 16.0), 4);
+    let Some((p, have)) = own_pl(app) else {
+        return head;
+    };
+    let q = app.pl_more.as_deref().unwrap_or("");
+    let style = theme::input([ELEVATED; 2], [ELEVATED; 2], [0.0; 2], 500.0);
+    let field = find_input(q, "pladd")
+        .size(16)
+        .padding(Padding::new(12.0).left(16));
+    let field = container(field.style(style)).padding([8, 16]);
+    let label =
+        (q.trim().is_empty() && !app.recent.is_empty()).then(|| sub("Recently played", 14.0));
+    let label = label.map(|l| container(l).padding(Padding::new(16.0).bottom(8)));
+    let w = app.right_w() - 152.0;
+    let rows = add_songs(app).map(|s| {
+        let on = have.iter().any(|x| x.id == s.id);
+        let add = theme::sq(theme::saved(on, 16.0).center(), 32.0).style(theme::link(SUB));
+        let add =
+            add.on_press_maybe((!on).then(|| Message::PlAdd(p.id.clone(), vec![s.id.clone()])));
+        let art = cover(app, &s.cover, 48.0, false);
+        let r = row![media(art, &s.title, &s.artist, w, TEXT), add];
+        container(r.spacing(12).align_y(Center))
+            .padding([8, 16])
+            .into()
+    });
+    let list = column![label, Column::with_children(rows)].padding(padding::bottom(16));
+    column![head, field, scrollable(list).style(theme::scroll)].into()
 }
 
 pub fn queue_panel(app: &App) -> El<'_> {
