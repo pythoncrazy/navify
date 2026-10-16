@@ -190,16 +190,20 @@ fn card<'a>(
     let play = container(play).align_right(Fill).align_bottom(Fill);
     let over = |art| play_over(app, art, play.padding(8).into(), &route);
     let art = if round { art } else { over(art) };
+    let tag = format!("card:{:p}", title.as_ptr());
     let title = ell(title, img, 16.0, Normal);
     let lines = column![title, ell(sub, img, 14.0, Normal).color(SUB)].spacing(4);
-    let idle = [theme::CLEAR, ELEVATED][usize::from(app.menu_on(&route))];
+    let on = app.menu_on(&route) && app.hover.as_deref() == Some(tag.as_str());
+    let idle = [theme::CLEAR, ELEVATED][usize::from(on)];
     let style = theme::btn([idle, ELEVATED, BG], [TEXT; 3], 6.0);
     let b = button(column![art, lines].spacing(8)).padding(12);
     let b = b.style(style).width(cw).height(cw + 52.0);
     let b = b.on_press(Message::Nav(route));
-    mouse_area(b)
-        .on_right_press(Message::Menu(Box::new(k)))
-        .into()
+    let menu = task(move |a| {
+        a.hover = Some(tag.clone());
+        a.update(Message::Menu(Box::new(k.clone())))
+    });
+    mouse_area(b).on_right_press(menu).into()
 }
 
 fn album_card<'a>(app: &'a App, a: &'a Album, sub: String) -> El<'a> {
