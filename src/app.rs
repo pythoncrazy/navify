@@ -1718,7 +1718,7 @@ impl App {
                     MenuKind::Create => (self.lib_w() - 108.0, 123.0),
                     MenuKind::User => (self.view_size().0 - 338.0, 64.0),
                     MenuKind::View => (self.lib_w() + self.main_w() - 148.0, cursor().1 + 24.0),
-                    MenuKind::Disc => (cursor().0 - 16.0, cursor().1 + 24.0),
+                    MenuKind::Disc => (crate::pages::disc_x(self), cursor().1 + 24.0),
                     MenuKind::LibSort => (self.lib_w() - 220.0, cursor().1 + 24.0),
                     _ => (cursor().0, cursor().1 + 8.0),
                 };

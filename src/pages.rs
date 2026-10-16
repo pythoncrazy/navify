@@ -581,12 +581,23 @@ pub fn disc_view(app: &App) -> Vec<&Album> {
     }
 }
 
-fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
-    let label = GROUPS
+fn disc_label(f: &str) -> &'static str {
+    GROUPS
         .iter()
         .skip(1)
         .find(|g| g.0 == f)
-        .map_or("All", |g| g.1);
+        .map_or("All", |g| g.1)
+}
+
+pub fn disc_x(app: &App) -> f32 {
+    let f = disc_args(app).map_or("all", |d| d.1);
+    let order = ["Release date", "Name"][usize::from(app.disc_name)];
+    let w = |s| theme::width(s, 14.0, Normal);
+    app.lib_w() + 16.0 + app.main_w() - PAD - w(order) - 24.0 - 16.0 - w(disc_label(f)) - 18.0 - 8.0
+}
+
+fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
+    let label = disc_label(f);
     let kind = app.menu.as_ref().map(|m| &m.kind);
     let open = matches!(kind, Some(MenuKind::Disc));
     let caret = [theme::fill::CARET, theme::fill::CARET_UP][usize::from(open)];
