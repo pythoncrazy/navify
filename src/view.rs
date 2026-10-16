@@ -1118,7 +1118,11 @@ pub fn view(app: &App) -> El<'_> {
         let (ww, wh) = app.view_size();
         let (el, w, h) = pages::menu(app, m, 0);
         let x = if m.x + w + 8.0 > ww { m.x - w } else { m.x };
-        let y = if m.y + h + 8.0 > wh { m.y - h } else { m.y };
+        let y = if m.y + h + 8.0 > wh {
+            m.y - 2.0 * m.dy - h
+        } else {
+            m.y
+        };
         let (x, y) = (x.min(ww - w - 8.0).max(8.0), y.min(wh - h - 8.0).max(8.0));
         let child = (m.sub > 0).then(|| {
             let (el, sw, sh) = pages::menu(app, m, m.sub);
