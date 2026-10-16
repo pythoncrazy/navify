@@ -8,7 +8,7 @@ use std::{
 
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::operation::{self as op, AbsoluteOffset};
-use iced::{Color, Task, widget::image};
+use iced::{Color, Task, widget::image, widget::text_editor};
 use navify_audio::Track;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -179,6 +179,7 @@ pub enum Message {
     Panel(u8),
     Drag(Option<u8>),
     LField(u8, String),
+    Desc(text_editor::Action),
     LSubmit,
     LogOut,
     UseServer(String),
@@ -323,7 +324,7 @@ pub struct App {
     expired: (Vec<String>, Option<Instant>),
     pub recording: Option<&'static str>,
     awake: (bool, Option<std::sync::mpsc::Sender<bool>>),
-    pub new_pl_desc: String,
+    pub new_pl_desc: text_editor::Content,
     pub shot: Option<String>,
     pub new_pl: String,
     pub sel: Option<(String, usize)>,
@@ -1775,8 +1776,11 @@ impl App {
             Message::LField(i, v) => {
                 let l = &mut self.login;
                 let f = [&mut l.url, &mut l.user, &mut l.pass, &mut self.new_pl];
-                *f.into_iter().nth(i.into()).unwrap_or(&mut self.new_pl_desc) = v;
+                *f.into_iter()
+                    .nth(i.into())
+                    .expect("a login or playlist field") = v;
             }
+            Message::Desc(a) => self.new_pl_desc.perform(a),
             Message::LSubmit if self.login.busy => {}
             Message::LSubmit => {
                 let l = &mut self.login;
@@ -2022,7 +2026,8 @@ impl App {
                     return self.toast("The playlist is not available.");
                 };
                 let cover = p.cover.clone();
-                (self.new_pl, self.new_pl_desc) = (p.name.clone(), p.comment.clone());
+                (self.new_pl, self.new_pl_desc) =
+                    (p.name.clone(), text_editor::Content::with_text(&p.comment));
                 self.modal = Some((id, kind));
                 let all = op::select_all(iced::widget::Id::new("layer"));
                 let focus = layer_focus(true, |_, n| n.min(2) - 1).chain(all);
