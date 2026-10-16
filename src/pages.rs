@@ -1844,14 +1844,18 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
         let m = Message::Star(vec![id.into()], k == 0);
         it([i::SAVE, i::SAVED][k], [no, yes][k], m)
     };
-    let ctx = |kind: &str, id: &str| {
-        let r = format!("{kind}:{id}");
-        let p = |n| Message::PlayCtx(r.clone(), n);
-        vec![
-            it(i::PLAY, "Play", p(0)),
-            it(i::SHUFFLE, "Shuffle", p(1)),
-            it(i::LISTPLUS, "Add to queue", p(2)),
-        ]
+    let queue = |r: &str| it(i::LISTPLUS, "Add to queue", Message::PlayCtx(r.into(), 2));
+    let to_pl = |r: String, skip: &str| -> Vec<Item> {
+        let pls = app.data::<Lib>("lib").into_iter();
+        let pls = pls.flat_map(|l| l.playlists.iter());
+        let add = |p: &Playlist| it(i::MUSIC, &p.name, Message::AddCtx(r.clone(), p.id.clone()));
+        let new = it(
+            i::PLUS,
+            "New playlist",
+            Message::AddCtx(r.clone(), String::new()),
+        );
+        let pls = pls.filter(|p| mine(p) && p.id != skip).map(add);
+        [new, None].into_iter().chain(pls).collect()
     };
     let ids = |s: &[Song]| s.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
     let mut head: Option<El> = None;
@@ -1951,26 +1955,48 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
             }
             v
         }
+        MenuKind::Album(a) if m.sub == 1 => to_pl(format!("album:{}", a.id), ""),
         MenuKind::Album(a) => {
-            let mut v = ctx("album", &a.id);
-            let save = ["Remove from Your Library", "Save to Your Library"];
-            v.push(star(&a.id, a.starred, save[0], save[1]));
-            let artist = it(i::USER, "Go to artist", go("artist", &a.artist_id));
-            v.extend((!a.artist_id.is_empty()).then_some(artist));
+            let save = ["Remove from Your Library", "Add to Your Library"];
+            let r = format!("album:{}", a.id);
+            let mut v = vec![star(&a.id, a.starred, save[0], save[1]), queue(&r)];
+            let art = Some(&a.artist_id).filter(|id| !id.is_empty());
+            let radio =
+                art.map(|id| it(i::RADIO, "Go to artist radio", Message::Radio(id.clone())));
+            let art = art.filter(|id| app.route != format!("artist:{id}"));
+            v.extend(
+                radio
+                    .into_iter()
+                    .chain(art.map(|id| it(i::USER, "Go to artist", go("artist", id)))),
+            );
+            v.extend([None, open(1, i::PLUS, "Add to playlist")]);
             v
         }
         MenuKind::Artist(a) => {
-            let mut v = ctx("artist", &a.id);
-            v.push(star(&a.id, a.starred, "Unfollow", "Follow"));
             let radio = Message::Radio(a.id.clone());
-            v.push(it(i::RADIO, "Go to artist radio", radio));
-            v
+            let follow = star(&a.id, a.starred, "Unfollow", "Follow");
+            vec![follow, it(i::RADIO, "Go to artist radio", radio)]
         }
+        MenuKind::Playlist(p) if m.sub == 1 => to_pl(format!("playlist:{}", p.id), &p.id),
         MenuKind::Playlist(p) => {
-            let mut v = ctx("playlist", &p.id);
-            let edit = it(i::PENCIL, "Edit details", Message::Modal(p.id.clone(), 1));
-            let del = it(i::TRASH, "Delete", Message::Modal(p.id.clone(), 2));
-            v.extend(mine(p).then_some([edit, None, del]).into_iter().flatten());
+            let mut v = vec![queue(&format!("playlist:{}", p.id)), None];
+            if mine(p) {
+                let modal = |n| Message::Modal(p.id.clone(), n);
+                let (c, l) =
+                    [(i::GLOBE, "Make public"), (i::LOCK, "Make private")][usize::from(p.public)];
+                let flip =
+                    Message::Edit(p.id.clone(), p.name.clone(), p.comment.clone(), !p.public);
+                let new = Message::PlNew(String::new(), Vec::new());
+                v.extend([
+                    it(i::PENCIL, "Edit details", modal(1)),
+                    it(i::MINUS, "Delete", modal(2)),
+                    None,
+                    it(i::MUSIC, "Create playlist", new),
+                    None,
+                    it(c, l, flip),
+                ]);
+            }
+            v.push(open(1, i::PLUS, "Add to other playlist"));
             v
         }
     };

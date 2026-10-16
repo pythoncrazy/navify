@@ -173,6 +173,8 @@ pub enum Message {
     Menu(Box<MenuKind>),
     MenuClose,
     PlAdd(String, Vec<String>),
+    AddCtx(String, String),
+    LibMenu(String),
     PlNew(String, Vec<String>),
     PlDel(String),
     PlRemove(Vec<usize>),
@@ -1872,44 +1874,43 @@ impl App {
                 if mode < 2 {
                     self.ctx.clone_from(&route);
                 }
-                let part = self
-                    .data::<Page<Song>>(&route)
-                    .is_some_and(|p| p.0.len() < p.1);
-                if let Some((v, src)) = self
-                    .songs_of(&route)
-                    .filter(|(v, _)| !v.is_empty() && !part)
-                {
-                    let v = v.iter().filter(|s| !s.is_dir).cloned().collect();
-                    return self.play_songs(v, src, mode);
-                }
                 let key = route.clone();
-                let load = |s: Session| async move {
-                    let (kind, id) = route.split_once(':').unwrap_or((&route, ""));
-                    let all = |sort| s.songs(sort, 0, PAGE * 5);
-                    let sort = if id.is_empty() { "name" } else { id };
-                    Ok::<_, anyhow::Error>(match kind {
-                        "album" => s.album(id).await.map(|(a, v)| (v, a.name))?,
-                        "playlist" => s.playlist(id).await.map(|(p, v)| (v, p.name))?,
-                        "artist" => {
-                            let ((a, _), t) = tokio::try_join!(s.artist(id), s.top_songs(id))?;
-                            (t, a.name)
-                        }
-                        "liked" => (all("starred").await?.0, "Liked Songs".into()),
-                        "songs" => (all(sort).await?.0, "Songs".into()),
-                        _ => (Vec::new(), String::new()),
+                let play = move |a: &mut App, v, src| match mode >= 2 || a.ctx == key {
+                    true => a.play_songs(v, src, mode),
+                    false => Task::none(),
+                };
+                return self.ctx_songs(route, "Nothing to play.", "Could not play.", play);
+            }
+            Message::LibMenu(route) => {
+                let lib = self.data::<Lib>("lib").expect("the library is loaded");
+                let kind = match route.split_once(':') {
+                    Some(("playlist", id)) => self.playlist(id).cloned().map(MenuKind::Playlist),
+                    Some(("album", id)) => lib
+                        .albums
+                        .iter()
+                        .find(|a| a.id == id)
+                        .cloned()
+                        .map(|a| MenuKind::Album(Box::new(a))),
+                    Some(("artist", id)) => lib
+                        .artists
+                        .iter()
+                        .find(|a| a.id == id)
+                        .cloned()
+                        .map(MenuKind::Artist),
+                    _ => None,
+                };
+                return kind.map_or_else(Task::none, |k| self.update(Message::Menu(Box::new(k))));
+            }
+            Message::AddCtx(route, pid) => {
+                self.menu = None;
+                let add = move |a: &mut App, v: Vec<Song>, src| {
+                    let ids = v.into_iter().map(|s| s.id).collect();
+                    a.update(match pid.is_empty() {
+                        true => Message::PlNew(src, ids),
+                        false => Message::PlAdd(pid.clone(), ids),
                     })
                 };
-                let ok = move |(v, src): (Vec<Song>, String)| match v.is_empty() {
-                    true => say("Nothing to play.".into()),
-                    false => {
-                        let key = key.clone();
-                        task(move |a| match mode >= 2 || a.ctx == key {
-                            true => a.play_songs(v.clone(), src.clone(), mode),
-                            false => Task::none(),
-                        })
-                    }
-                };
-                return self.call(load, "Could not play.", ok);
+                return self.ctx_songs(route, "Nothing to add.", "Could not add the songs.", add);
             }
             Message::RowMenu(key, n) => {
                 if !self.sel.as_ref().is_some_and(|s| s.0 == key) || !self.picked.contains(&n) {
@@ -2268,6 +2269,49 @@ impl App {
                 Task::batch([done, self.toast(&format!("Playback failed. {e}"))])
             }
         }
+    }
+
+    fn ctx_songs(
+        &mut self,
+        route: String,
+        empty: &'static str,
+        fail: &'static str,
+        then: impl Fn(&mut App, Vec<Song>, String) -> Task<Message> + Clone + Send + Sync + 'static,
+    ) -> Task<Message> {
+        let part = self
+            .data::<Page<Song>>(&route)
+            .is_some_and(|p| p.0.len() < p.1);
+        if let Some((v, src)) = self
+            .songs_of(&route)
+            .filter(|(v, _)| !v.is_empty() && !part)
+        {
+            let v = v.iter().filter(|s| !s.is_dir).cloned().collect();
+            return then(self, v, src);
+        }
+        let load = |s: Session| async move {
+            let (kind, id) = route.split_once(':').unwrap_or((&route, ""));
+            let all = |sort| s.songs(sort, 0, PAGE * 5);
+            let sort = if id.is_empty() { "name" } else { id };
+            Ok::<_, anyhow::Error>(match kind {
+                "album" => s.album(id).await.map(|(a, v)| (v, a.name))?,
+                "playlist" => s.playlist(id).await.map(|(p, v)| (v, p.name))?,
+                "artist" => {
+                    let ((a, _), t) = tokio::try_join!(s.artist(id), s.top_songs(id))?;
+                    (t, a.name)
+                }
+                "liked" => (all("starred").await?.0, "Liked Songs".into()),
+                "songs" => (all(sort).await?.0, "Songs".into()),
+                _ => (Vec::new(), String::new()),
+            })
+        };
+        let ok = move |(v, src): (Vec<Song>, String)| match v.is_empty() {
+            true => say(empty.into()),
+            false => {
+                let then = then.clone();
+                task(move |a| then(a, v.clone(), src.clone()))
+            }
+        };
+        self.call(load, fail, ok)
     }
 
     fn play_songs(&mut self, songs: Vec<Song>, src: String, mode: u8) -> Task<Message> {
