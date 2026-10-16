@@ -29,6 +29,14 @@ pub const HEAD: f32 = 53.0;
 const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
 const GREY: Color = color!(0x535353);
 const LIKED: Color = color!(0x5038a0);
+const ORDER: [&str; 6] = [
+    "Custom order",
+    "Title",
+    "Artist",
+    "Album",
+    "Date added",
+    "Duration",
+];
 pub const DOT: &str = " \u{2022} ";
 const GROUPS: [(&str, &str); 4] = [
     ("all", "Popular releases"),
@@ -701,9 +709,19 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let view = tables
         .contains(&app.route.split(':').next().unwrap_or(""))
         .then(|| {
-            let label = txt(["List", "Compact"][usize::from(compact)], 14.0);
-            let c = row![label, i(i::LIST, 20.0)].spacing(8).align_y(Center);
-            link_btn(c, SUB, set(|s, b| s.compact = b, !compact))
+            let label = match app.route.starts_with("playlist:") {
+                true => ORDER[usize::from(app.pl_sort & 15)],
+                false => ["List", "Compact"][usize::from(compact)],
+            };
+            let c = row![
+                txt(label, 14.0),
+                i([i::LIST, i::COMPACT][usize::from(compact)], 16.0)
+            ];
+            link_btn(
+                c.spacing(8).align_y(Center),
+                SUB,
+                Message::Menu(Box::new(MenuKind::View)),
+            )
         });
     let empty = app
         .data::<(Playlist, Vec<Song>)>(&app.route)
@@ -769,14 +787,6 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             0 => String::new(),
             n => format!("{DOT}{}, {len}", plural(n, "song")),
         };
-        const ORDER: [&str; 6] = [
-            "Custom order",
-            "Title",
-            "Artist",
-            "Album",
-            "Date added",
-            "Duration",
-        ];
         let find: El = match &app.pl_find {
             None => {
                 let open = task(|a| {
@@ -807,12 +817,6 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                     .into()
             }
         };
-        let to = |l: &str| ORDER.iter().position(|x| *x == l).expect("an order label") as u8;
-        let sort = pick_list(ORDER, Some(ORDER[app.pl_sort as usize]), move |l| {
-            act(move |a| a.pl_sort = to(l))
-        });
-        let sort = sort.text_size(14).font(theme::fw(Normal)).padding([8, 12]);
-        let sort = sort.style(theme::pick(true)).menu_style(theme::pick_menu);
         let some = !songs.is_empty();
         let comment = (!p.comment.is_empty()).then(|| sub(&p.comment, 14.0));
         let meta = column![comment, meta(bold(&p.owner, 14.0), rest)];
@@ -826,7 +830,6 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                 dots(MenuKind::Playlist(p.clone())),
                 Space::new().width(Fill).into(),
                 some.then_some(find).into(),
-                some.then_some(sort).into(),
             ],
             banner: None,
         };
@@ -2063,6 +2066,55 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 .style(theme::btn(hover, [TEXT; 3], 6.0))
                 .on_press(msg.clone());
             return boxed(focusable(b, Some(msg), 6.0, Some("layer")), 367.0, 72.0, 4);
+        }
+        MenuKind::View => {
+            let (key, desc, compact) = (
+                app.pl_sort & 15,
+                app.pl_sort & 16 != 0,
+                app.cfg.settings.compact,
+            );
+            let head = |t: &'a str| -> El<'a> {
+                let t = bold(t, 12.0).color(theme::tint(0.7));
+                container(t)
+                    .padding(Padding::new(12.0).top(14))
+                    .height(41)
+                    .into()
+            };
+            let item = |l: &'a str, c: Option<char>, on: bool, tail: char, msg: Message| {
+                let fg = if on { ACCENT } else { theme::tint(0.9) };
+                let r = Row::new().push(c.map(|c| i(c, 16.0).color(fg)));
+                let r = r.push(txt(l, 14.0).color(fg).width(Fill));
+                entry(r.push(on.then(|| i(tail, 16.0).color(fg))), msg)
+            };
+            let sorts = app.route.starts_with("playlist:").then(|| {
+                let arrow = [i::ARROW_UP, i::ARROW_DOWN][usize::from(desc)];
+                let rows = ORDER.iter().zip(0u8..).map(|(l, n)| {
+                    let next = if n == key {
+                        app.pl_sort ^ 16
+                    } else {
+                        n | (16 * u8::from(n == 4))
+                    };
+                    item(l, None, n == key, arrow, act(move |a| a.pl_sort = next))
+                });
+                column![head("Sort by")].extend(rows)
+            });
+            let views = [("Compact", i::COMPACT, true), ("List", i::LIST, false)];
+            let views = views.map(|(l, c, v)| {
+                item(
+                    l,
+                    Some(c),
+                    compact == v,
+                    i::CHECK,
+                    set(|s, b| s.compact = b, v),
+                )
+            });
+            let n = sorts.as_ref().map_or(0, |_| ORDER.len());
+            let h = 41.0 * (1 + usize::from(n > 0)) as f32 + 40.0 * (n + 2) as f32 + 8.0;
+            let col = Column::new()
+                .push(sorts)
+                .push(head("View as"))
+                .extend(views);
+            return boxed(col.into(), 160.0, h, 4);
         }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if m.sub == 2 && v.len() == 1 => {
             let id = &v[0].id;

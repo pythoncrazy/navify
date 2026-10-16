@@ -56,6 +56,7 @@ pub enum MenuKind {
     User,
     Device,
     Create,
+    View,
 }
 
 #[derive(Clone, Debug)]
@@ -636,13 +637,16 @@ impl App {
         };
         let mut idx: Vec<usize> = (0..songs.len()).filter(|&n| hit(&songs[n])).collect();
         let low = |s: &String| s.to_lowercase();
-        match self.pl_sort {
+        match self.pl_sort & 15 {
             1 => idx.sort_by_cached_key(|&n| low(&songs[n].title)),
             2 => idx.sort_by_cached_key(|&n| low(&songs[n].artist)),
             3 => idx.sort_by_cached_key(|&n| low(&songs[n].album)),
             4 => idx.sort_by_key(|&n| &songs[n].created),
             5 => idx.sort_by_key(|&n| (songs[n].duration * 1000.0) as u32),
             _ => {}
+        }
+        if self.pl_sort & 16 != 0 {
+            idx.reverse();
         }
         Some((idx.iter().map(|&n| songs[n].clone()).collect(), idx))
     }
@@ -1674,6 +1678,7 @@ impl App {
                 let (x, y) = match *kind {
                     MenuKind::Create => (self.lib_w() - 108.0, 115.0),
                     MenuKind::User => (self.view_size().0 - 338.0, 64.0),
+                    MenuKind::View => (self.lib_w() + self.main_w() - 148.0, cursor().1 + 24.0),
                     _ => cursor(),
                 };
                 let scan = matches!(*kind, MenuKind::Device).then(scan_devices);
