@@ -1582,13 +1582,14 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 let hk = format!("{}#m{n}", app.route);
                 let hot = app.hover.as_deref() == Some(hk.as_str());
                 let round = h.0 == 0;
+                let bw = [64.0, 64.0, 114.0][h.0];
                 let bg = app
                     .covers
                     .color(cid)
-                    .filter(|_| !round)
+                    .filter(|_| h.0 == 2)
                     .unwrap_or(Color::TRANSPARENT);
                 let thumb = container(cover(app, cid, 64.0, round))
-                    .center_x(114)
+                    .center_x(bw)
                     .center_y(64);
                 let thumb = thumb.style(fill(bg, 4.0));
                 let shade = Color { a: 0.5, ..BG };
@@ -1597,9 +1598,10 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                     play.clone(),
                 );
                 let over = container(over.width(64).height(64))
-                    .center_x(114)
+                    .center_x(bw)
                     .center_y(64);
                 let over = container(over).style(fill(shade, if round { 32.0 } else { 4.0 }));
+                let tw = tw + 114.0 - bw;
                 let text = column![ell(name, tw, 16.0, Normal)];
                 let text = text
                     .push((!artist.is_empty()).then(|| ell(artist, tw, 14.0, Normal).color(SUB)));
