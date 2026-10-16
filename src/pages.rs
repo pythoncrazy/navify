@@ -616,7 +616,7 @@ pub fn route(app: &App) -> El<'_> {
 }
 
 pub fn home_tiles(app: &App) -> (usize, f32, f32, f32) {
-    let w = app.main_w() - 2.0 * PAD;
+    let w = app.main_w() - 80.0;
     let n = if w >= 720.0 { 4 } else { 2 };
     let fit = |gap: f32| (w - gap * (n - 1) as f32) / n as f32;
     let th = match fit(12.0) {
@@ -676,7 +676,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let pls = shelf("Your playlists", None, pls);
     let tiles = container(Column::from_vec(rows.collect()).spacing(gap)).padding([0.0, PAD]);
     let col = column![tiles].extend(shelves).push(pls).spacing(40);
-    Some(fade(theme::shade(c, 0.5), 332.0, col.padding([PAD, 0.0])))
+    Some(fade(theme::shade(c, 0.5), 332.0, col.padding([PAD, 16.0])))
 }
 
 struct Page<'a> {
