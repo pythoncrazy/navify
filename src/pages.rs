@@ -1730,7 +1730,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
     };
     let note = |t: String| container(sub(t, 14.0)).padding(8);
     let from = match app.source.is_empty() {
-        true => "Next up".into(),
+        true => "Next in queue".into(),
         false => format!("Next from: {}", app.source),
     };
     let now = app
