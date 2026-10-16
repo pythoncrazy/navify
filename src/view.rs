@@ -723,28 +723,44 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     let close = focusable(x, Some(Message::MenuClose), 16.0, Some("layer"));
     let style = fill(theme::MENU, 8.0);
     if kind == 3 {
-        let chip = |k: &str| {
-            let k = container(bold(k.to_string(), 12.0)).padding([4, 8]);
-            k.style(fill(ELEVATED, 4.0)).into()
-        };
-        let line = |k: &crate::app::KeyAction| {
-            let c = crate::app::key_label(app.binding(k.0));
-            let c = if c.is_empty() { "Not set".into() } else { c };
-            let chips = Row::with_children(c.split('+').map(chip));
-            let what = txt(k.1, 14.0).color(SUB).width(Fill);
-            row![what, chips.spacing(4)]
-                .align_y(Center)
-                .height(40)
+        let cap = |k: &str| -> El<'a> {
+            let edge = Border::default()
+                .color(color!(0x7c7c7c))
+                .width(1)
+                .rounded(4);
+            let k = container(txt(k.to_string(), 16.0)).padding([2, 6]);
+            k.style(move |_| container::Style::default().border(edge))
                 .into()
         };
-        let list = iced::widget::Column::with_children(crate::app::KEYS.iter().map(line));
-        let list = scrollable(list.padding(padding::right(16)))
-            .height(440)
-            .style(theme::scroll);
-        let head = row![bold("Keyboard shortcuts", 24.0).width(Fill), close];
-        let hint = sub("You can change the shortcuts in Settings.", 14.0);
-        let body = column![head.align_y(Center), hint, list].spacing(16);
-        return container(body.width(480).padding(24)).style(style).into();
+        let caps = |id: &str| {
+            let c = crate::app::key_label(app.binding(id));
+            let c = if c.is_empty() { "Not set".into() } else { c };
+            Row::with_children(c.split('+').map(cap).collect::<Vec<_>>()).spacing(4)
+        };
+        let line = |k: &crate::app::KeyAction| -> El<'a> {
+            let what = txt(k.1, 16.0).width(Fill);
+            row![what, caps(k.0)].align_y(Center).height(32).into()
+        };
+        let mut keys = crate::app::KEYS.iter();
+        let groups = crate::app::KEY_GROUPS.iter().map(|&(name, n)| {
+            let rows = iced::widget::Column::with_children(keys.by_ref().take(n).map(line));
+            column![bold(name, 24.0), rows.spacing(16)]
+                .spacing(16)
+                .into()
+        });
+        let list = iced::widget::Column::with_children(groups.collect::<Vec<El>>()).spacing(24);
+        let list = scrollable(list.padding(padding::right(16))).height(Fill);
+        let head = row![bold("Keyboard Shortcuts", 32.0).width(Fill), close];
+        let hint = row![
+            txt("Press", 16.0),
+            caps("shortcuts"),
+            txt("to open or close this dialog.", 16.0)
+        ];
+        let top = column![head.align_y(Center), hint.spacing(6).align_y(Center)].spacing(12);
+        let body = column![top, list.style(theme::scroll)].spacing(40);
+        let h = (app.view_size().1 - 220.0).max(300.0);
+        let body = container(body.padding(24)).width(500).height(h);
+        return body.style(fill(ELEVATED, 4.0)).into();
     }
     if kind == 5 {
         let key = format!("song:{id}");
