@@ -47,3 +47,4 @@ circle-minus 0xe07e
 menu 0xe115
 arrow-down 0xe042
 arrow-up 0xe04a
+archive 0xe041

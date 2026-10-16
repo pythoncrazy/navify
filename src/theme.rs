@@ -127,6 +127,7 @@ pub mod icon {
     pub const COMPACT: char = '\u{e115}';
     pub const ARROW_DOWN: char = '\u{e042}';
     pub const ARROW_UP: char = '\u{e04a}';
+    pub const BROWSE: char = '\u{e041}';
 }
 
 fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
