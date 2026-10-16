@@ -1297,7 +1297,7 @@ fn artist(app: &App) -> Option<El<'_>> {
     let n = if all { 10 } else { 5 }.min(top.len());
     let newest = by_date(albums.iter()).first().copied();
     let newest = newest.filter(|_| app.main_w() >= 1000.0 && !top.is_empty());
-    let cut = (app.main_w() - 2.0 * PAD) * [0.0, 0.4][usize::from(newest.is_some())];
+    let cut = (app.main_w() - 2.0 * PAD) * [0.0, 0.5][usize::from(newest.is_some())];
     let c = cols(app, false, false, n);
     let c3 = (
         c.0 + 80.0 * f32::from(app.cfg.settings.plays) - cut - 136.0,
