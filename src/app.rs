@@ -2673,7 +2673,11 @@ impl App {
                 matches!(e, Event::Mouse(M::ButtonReleased(_))).then(|| task(App::q_drop))
             }));
         }
-        if self.playing && !self.hidden && (self.route == "lyrics" || self.panel == 1) {
+        if self.playing
+            && !self.hidden
+            && (self.route == "lyrics" || self.panel == 1)
+            && crate::pages::synced_lyrics(self)
+        {
             let ms = if self.route == "lyrics" { 250 } else { 1000 };
             subs.push(
                 iced::time::every(Duration::from_millis(ms)).map(|_| act(|a| a.position = a.pos())),
