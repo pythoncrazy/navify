@@ -174,7 +174,7 @@ fn fade<'a>(top: Color, h: f32, body: impl Into<El<'a>>) -> El<'a> {
     stack![body.into()].push_under(g).into()
 }
 
-fn rule<'a>() -> El<'a> {
+pub fn rule<'a>() -> El<'a> {
     let line = container(Space::new().width(Fill).height(1));
     line.style(fill(theme::tint(0.1), 0.0)).into()
 }
