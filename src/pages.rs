@@ -972,18 +972,15 @@ fn detail(app: &App) -> Option<El<'_>> {
     let body = column![(!empty && !(liked && songs.is_empty())).then(|| table_head(app, c))];
     let body = body.push(vlist(app, songs, &app.route, c, y0));
     let none: El = match liked {
-        true => {
-            let find = button(bold("Find songs", 16.0)).padding([12, 32]);
-            let find = find.style(theme::solid([TEXT, color!(0xf0f0f0), color!(0xb7b7b7)], BG));
-            let find = find.on_press(Message::Nav("search".into()));
-            let title = bold("Songs that you like show here", 32.0);
-            let hint = txt("To save a song, click the plus icon.", 16.0);
-            let col = column![title, hint, container(find).padding(padding::top(16))];
-            container(col.spacing(8).align_x(Center))
-                .center_x(Fill)
-                .padding(64)
-                .into()
-        }
+        true => container(blank(
+            None,
+            bold("Songs that you like show here", 32.0),
+            txt("To save a song, click the plus icon.", 16.0),
+            "Find songs",
+        ))
+        .center_x(Fill)
+        .padding(64)
+        .into(),
         false => container(sub("There are no songs to show.", 16.0))
             .padding(PAD)
             .into(),
@@ -1006,6 +1003,24 @@ fn detail(app: &App) -> Option<El<'_>> {
             .padding(padding::bottom(PAD))
     });
     Some(page(app, p, body.push(foot).into()))
+}
+
+fn blank<'a>(
+    icon: Option<char>,
+    title: text::Text<'a>,
+    hint: text::Text<'a>,
+    find: &'a str,
+) -> El<'a> {
+    let find = button(bold(find, 16.0)).padding([12, 32]);
+    let find = find.style(theme::solid([TEXT, color!(0xf0f0f0), color!(0xb7b7b7)], BG));
+    let find = find.on_press(Message::Nav("search".into()));
+    let head = column![icon.map(|c| i(c, 40.0)), title].spacing(40);
+    let col = column![
+        head.align_x(Center),
+        hint.align_x(Center),
+        container(find).padding(padding::top([16, 32][usize::from(icon.is_some())]))
+    ];
+    col.spacing(8).align_x(Center).into()
 }
 
 pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
@@ -1967,8 +1982,6 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let from = container(from).padding(Padding::new(8.0).top(16));
     let list = column![now, (!next.is_empty()).then_some(from)].extend(next);
     let list = list.push((more > 0).then(|| note(format!("{more} more songs"))));
-    let empty = app.queue.is_empty();
-    let list = list.push(empty.then(|| note("The queue is empty.".into())));
     let tab = |t: &'static str, on: bool| {
         let edge = container(Space::new().width(Fill).height(2));
         let edge = edge.style(fill([CLEAR, ACCENT][usize::from(on)], 1.0));
@@ -1992,6 +2005,17 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let head = panel_head(tabs.spacing(24), 2);
     if app.recent_tab {
         return column![head, scrollable(past).style(theme::scroll)].into();
+    }
+    if app.queue.is_empty() {
+        let hint = "Click \"Add to queue\" in the menu of a song to show it here.";
+        let body = blank(
+            Some(i::QUEUE),
+            bold("Add to your queue", 24.0),
+            sub(hint, 16.0),
+            "Find something to play",
+        );
+        let body = container(body).padding([0, 22]).center(Fill);
+        return column![head, body].into();
     }
     let list = list.padding(Padding::new(8.0).top(0));
     column![head, scrollable(list).style(theme::scroll)].into()
