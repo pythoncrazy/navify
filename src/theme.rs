@@ -124,6 +124,9 @@ pub mod icon {
     pub const GLOBE: char = '\u{e0e8}';
     pub const LOCK: char = '\u{e10b}';
     pub const MINUS: char = '\u{e07e}';
+    pub const COMPACT: char = '\u{e115}';
+    pub const ARROW_DOWN: char = '\u{e042}';
+    pub const ARROW_UP: char = '\u{e04a}';
 }
 
 fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
