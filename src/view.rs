@@ -1024,13 +1024,24 @@ pub fn view(app: &App) -> El<'_> {
         stack![scrim(BG.scale_alpha(dim)), card]
     });
     let menu = app.menu.as_ref().map(|m| {
-        let (el, w, h) = pages::menu(app, m);
         let (ww, wh) = app.view_size();
+        let (el, w, h) = pages::menu(app, m, 0);
         let x = if m.x + w + 8.0 > ww { m.x - w } else { m.x };
         let y = if m.y + h + 8.0 > wh { m.y - h } else { m.y };
         let (x, y) = (x.min(ww - w - 8.0).max(8.0), y.min(wh - h - 8.0).max(8.0));
+        let child = (m.sub > 0).then(|| {
+            let (el, sw, sh) = pages::menu(app, m, m.sub);
+            let sx = if x + w + sw + 4.0 > ww {
+                x - sw + 4.0
+            } else {
+                x + w - 4.0
+            };
+            let sy = y + ((m.sub_y - y - 4.0) / 40.0).floor() * 40.0;
+            let sy = sy.min(wh - sh - 8.0).max(8.0);
+            container(el).padding(padding::top(sy).left(sx.max(8.0)))
+        });
         let at = padding::top(y).left(x);
-        stack![scrim(theme::CLEAR), container(el).padding(at)]
+        stack![scrim(theme::CLEAR), container(el).padding(at)].push(child)
     });
     let toast = app.toast.as_ref().map(|(_, t)| {
         let t = txt(t, 14.0).font(theme::fw(Medium)).color(BG);
