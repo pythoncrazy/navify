@@ -5,7 +5,7 @@ use iced::widget::{
     Column, Row, Space, button, column, container, hover, image, mouse_area, pick_list, row,
     scrollable, slider, stack, text, text_input, toggler,
 };
-use iced::{Center, Color, Fill, Padding, Right, color, padding};
+use iced::{Center, Color, Fill, FillPortion, Padding, Right, color, padding};
 
 use crate::api::{Album, Artist, Genre, Info, Lyrics, Playlist, Server, Song, Trio};
 use crate::app::{App, Home, Lib, Menu, MenuKind, Message, act, later, set, task};
@@ -19,6 +19,7 @@ use crate::view::{
 };
 
 type Cols = (f32, f32, f32, f32);
+type Hit = (usize, usize);
 
 pub const PAD: f32 = 24.0;
 pub const GRID_Y: f32 = 136.0;
@@ -1160,68 +1161,222 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         let col = column![title, hint].spacing(16).align_x(Center);
         return Some(container(col).center_x(Fill).padding(80).into());
     }
-    let w = app.main_w() - 3.0 * PAD;
-    let lw = (w * 0.4).clamp(280.0, 420.0);
-    let ql = q.to_lowercase();
-    let art = |a: &'a Artist| {
-        (
-            &a.cover,
-            &a.name,
-            "Artist".into(),
-            go("artist", &a.id),
-            true,
-        )
-    };
-    let album = |x: &'a Album| {
-        let s = format!("Album{DOT}{}", x.artist);
-        (&x.cover, &x.name, s, go("album", &x.id), false)
-    };
-    let starts = |n: &str| n.to_lowercase().starts_with(&ql);
-    let exact = artists_res.iter().find(|a| a.name.to_lowercase() == ql);
-    let exact = exact.or_else(|| artists_res.iter().find(|a| starts(&a.name)));
-    let albums = albums_res
-        .iter()
-        .find(|a| starts(&a.name))
-        .or(albums_res.first());
-    let best = exact.map(art).or_else(|| albums.map(album));
-    let best = best.or_else(|| artists_res.first().map(art)).or_else(|| {
-        let s = songs_res.first()?;
-        let sub = format!("Song{DOT}{}", s.artist);
-        Some((&s.cover, &s.title, sub, go("album", &s.album_id), false))
-    });
-    let top = best.map(|(cid, name, s, to, round)| {
-        let art = cover(app, cid, 92.0, round);
-        let body = column![art, ell(name, lw - 40.0, 32.0, Bold), sub(s, 14.0)];
-        let card = color!(0x181818);
-        let style = theme::btn([card, theme::MENU, card], [TEXT; 3], 8.0);
-        let b = button(body.spacing(12)).padding(20).width(lw).style(style);
-        column![bold("Top result", 24.0), b.on_press(to)].spacing(8)
-    });
-    let sw = w - lw;
-    let sc = (sw - 200.0, 0.0, 0.0, 16.0);
-    let k = app.grid().0;
-    let songs = songs_res.iter().take(4).enumerate();
-    let songs = songs.map(|(n, s)| track(app, s, n, &app.route, sc));
-    let songs = column![bold("Songs", 24.0)].extend(songs);
-    let songs = songs.spacing(8).width(sw);
-    let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
-    let pls = pls.iter().filter(|p| p.name.to_lowercase().contains(&ql));
-    let pls = pls.take(k);
-    let albums = albums_res.iter().take(k);
+    let tab = app.search_tab;
+    let chips = ["All", "Songs", "Albums", "Artists", "Playlists"]
+        .into_iter()
+        .enumerate();
+    let chips = chips.map(|(n, l)| theme::chip_btn(l, tab == n, act(move |a| a.search_tab = n)));
+    let chips = container(Row::with_children(chips).spacing(8)).padding([16.0, PAD]);
+    let (k, cw) = app.grid();
+    let tiles = |n, f: &dyn Fn(usize) -> El<'a>| grid(app, n, k, cw + 52.0, 64.0, f);
     let by = |a: &Album| match a.year {
         0 => a.artist.clone(),
         y => format!("{y}{DOT}{}", a.artist),
     };
-    let albums = albums.map(|a| album_card(app, a, by(a)));
-    let artists = artists_res.iter().take(k).map(|a| artist_card(app, a));
-    let best = container(row![top, songs].spacing(PAD)).padding([0.0, PAD]);
-    let col = column![
-        best,
-        shelf("Artists", None, artists),
-        shelf("Albums", None, albums),
-        shelf("Playlists", None, pls.map(|p| playlist_card(app, p))),
+    let ql = q.to_lowercase();
+    let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
+    let pls: Vec<&Playlist> = pls
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&ql))
+        .collect();
+    let body: El = match tab {
+        1 => {
+            let c = cols(app, true, false, songs_res.len());
+            let rows = songs_res.iter().enumerate();
+            let rows = rows.map(|(n, s)| track(app, s, n, &app.route, c));
+            let rows = container(Column::with_children(rows)).padding([0.0, PAD]);
+            column![table_head(app, c), rows].into()
+        }
+        2 => tiles(albums_res.len(), &|n| {
+            album_card(app, &albums_res[n], by(&albums_res[n]))
+        }),
+        3 => tiles(artists_res.len(), &|n| artist_card(app, &artists_res[n])),
+        4 => tiles(pls.len(), &|n| playlist_card(app, pls[n])),
+        _ => {
+            let (top, mix) = search_hits((artists_res, albums_res, songs_res), q);
+            let rw = (app.main_w() - 2.0 * PAD).min(1152.0);
+            let pick = |(k, i): Hit| match k {
+                0 => {
+                    let a = &artists_res[i];
+                    let play = Message::PlayCtx(format!("artist:{}", a.id), 0);
+                    let menu = Message::Menu(Box::new(MenuKind::Artist(a.clone())));
+                    (
+                        &a.cover,
+                        &a.name,
+                        "",
+                        &a.id,
+                        a.starred,
+                        go("artist", &a.id),
+                        play,
+                        menu,
+                    )
+                }
+                1 => {
+                    let a = &albums_res[i];
+                    let play = Message::PlayCtx(format!("album:{}", a.id), 0);
+                    let menu = Message::Menu(Box::new(MenuKind::Album(Box::new(a.clone()))));
+                    (
+                        &a.cover,
+                        &a.name,
+                        &a.artist[..],
+                        &a.id,
+                        a.starred,
+                        go("album", &a.id),
+                        play,
+                        menu,
+                    )
+                }
+                _ => {
+                    let s = &songs_res[i];
+                    let (play, menu) = (
+                        Message::PlayAt(app.route.clone(), i),
+                        Message::RowMenu(app.route.clone(), i),
+                    );
+                    (
+                        &s.cover,
+                        &s.title,
+                        &s.artist[..],
+                        &s.id,
+                        s.starred,
+                        go("album", &s.album_id),
+                        play,
+                        menu,
+                    )
+                }
+            };
+            let save = |k: usize, id: &str, on: bool| -> El<'a> {
+                let on = app.is_starred(id, on);
+                match k {
+                    0 => theme::pill_btn(
+                        bold(["Follow", "Following"][usize::from(on)], 14.0),
+                        Message::Star(vec![id.into()], !on),
+                    )
+                    .into(),
+                    _ => heart_btn(id, on, 16.0),
+                }
+            };
+            let kinds = ["Artist", "Album", "Song"];
+            let top = top.map(|h| {
+                let (cid, name, artist, id, on, nav, play, _) = pick(h);
+                let line = match h.0 {
+                    0 => kinds[0].to_string(),
+                    k => format!("{}{DOT}{artist}", kinds[k]),
+                };
+                let tw = rw - 32.0 - 72.0 - 24.0 - 3.0 * 16.0 - 100.0 - 48.0;
+                let text = column![ell(name, tw, 24.0, Bold), sub(line, 14.0)].spacing(2);
+                let green = theme::filled(theme::fill::PLAY, 19.0).color(BG).center();
+                let green = theme::sq(green, 48.0).style(theme::accent).on_press(play);
+                let r = row![cover(app, cid, 72.0, h.0 == 0), text.width(Fill)].spacing(24);
+                let r = r.push(row![save(h.0, id, on), green].spacing(16).align_y(Center));
+                let style = theme::btn(
+                    [theme::tint(0.1), theme::tint(0.2), theme::tint(0.1)],
+                    [TEXT; 3],
+                    6.0,
+                );
+                button(r.align_y(Center))
+                    .padding(16)
+                    .style(style)
+                    .on_press(nav)
+            });
+            let tw = (rw - 28.0 - 120.0 - 32.0) * 6.0 / 7.0 - 126.0;
+            let rows = mix.into_iter().enumerate().map(|(n, h)| -> El<'a> {
+                let (cid, name, artist, id, on, nav, play, menu) = pick(h);
+                let hk = format!("{}#m{n}", app.route);
+                let hot = app.hover.as_deref() == Some(hk.as_str());
+                let round = h.0 == 0;
+                let bg = app
+                    .covers
+                    .color(cid)
+                    .filter(|_| !round)
+                    .unwrap_or(Color::TRANSPARENT);
+                let thumb = container(cover(app, cid, 64.0, round))
+                    .center_x(114)
+                    .center_y(64);
+                let thumb = thumb.style(fill(bg, 4.0));
+                let shade = Color { a: 0.5, ..BG };
+                let over = btn(
+                    theme::filled(theme::fill::PLAY, 24.0).center(),
+                    play.clone(),
+                );
+                let over = container(over.width(64).height(64))
+                    .center_x(114)
+                    .center_y(64);
+                let over = container(over).style(fill(shade, if round { 32.0 } else { 4.0 }));
+                let text = column![ell(name, tw, 16.0, Normal)];
+                let text = text
+                    .push((!artist.is_empty()).then(|| ell(artist, tw, 14.0, Normal).color(SUB)));
+                let lead = row![hover(thumb, over), text.spacing(2)].spacing(12);
+                let tag = container(bold(kinds[h.0], 12.0).color(SUB)).padding([0, 4]);
+                let tag = tag.style(fill(theme::tint(0.1), 4.0));
+                let dots = hot.then(|| icon_btn(i::DOTS, 16.0, menu.clone()));
+                let tail = row![save(h.0, id, on)]
+                    .push(dots)
+                    .spacing(8)
+                    .align_y(Center);
+                let r = row![
+                    lead.align_y(Center).width(FillPortion(6)),
+                    container(tag).width(FillPortion(1)),
+                    container(tail).align_right(120)
+                ];
+                let r = r.spacing(16).align_y(Center).height(80);
+                let r = container(r.padding(Padding::new(8.0).left(12).right(16)));
+                let r = if hot {
+                    r.style(fill(theme::tint(0.1), 4.0))
+                } else {
+                    r
+                };
+                let m = mouse_area(r).on_right_press(menu).on_double_click(play);
+                let m = if h.0 == 2 { m } else { m.on_press(nav) };
+                let enter = hk.clone();
+                m.on_enter(act(move |a| a.hover = Some(enter.clone())))
+                    .on_exit(act(move |a| a.hover = a.hover.take().filter(|x| *x != hk)))
+                    .into()
+            });
+            let col = column![top, Column::with_children(rows)].spacing(16).width(rw);
+            container(col).padding(Padding::new(PAD).top(0)).into()
+        }
+    };
+    let none = container(sub("There are no results to show.", 16.0)).padding([0.0, PAD]);
+    let empty = [
+        false,
+        songs_res.is_empty(),
+        albums_res.is_empty(),
+        artists_res.is_empty(),
+        pls.is_empty(),
+    ][tab];
+    Some(column![chips, if empty { none.into() } else { body }].width(Fill).into())
+}
+
+pub fn search_hits(t: (&[Artist], &[Album], &[Song]), q: &str) -> (Option<Hit>, Vec<Hit>) {
+    let names: [Vec<&str>; 3] = [
+        t.0.iter().map(|a| a.name.as_str()).collect(),
+        t.1.iter().map(|a| a.name.as_str()).collect(),
+        t.2.iter().map(|s| s.title.as_str()).collect(),
     ];
-    Some(col.spacing(40).padding([PAD, 0.0]).into())
+    let (ql, names) = (q.to_lowercase(), &names);
+    let first = |f: &dyn Fn(String) -> bool| {
+        (0..3).find_map(|k| {
+            names[k]
+                .iter()
+                .position(|n| f(n.to_lowercase()))
+                .map(|i| (k, i))
+        })
+    };
+    let top = first(&|n| n == ql).or_else(|| first(&|n| n.starts_with(&ql)));
+    let top = top.or_else(|| {
+        [2, 1, 0]
+            .into_iter()
+            .find(|&k| !names[k].is_empty())
+            .map(|k| (k, 0))
+    });
+    let take = |k: usize, r: std::ops::Range<usize>| {
+        r.filter(move |&i| i < names[k].len()).map(move |i| (k, i))
+    };
+    let mix = take(2, 0..6)
+        .chain(take(0, 0..2))
+        .chain(take(1, 0..4))
+        .chain(take(2, 6..10));
+    (top, mix.filter(|h| Some(*h) != top).collect())
 }
 
 fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
