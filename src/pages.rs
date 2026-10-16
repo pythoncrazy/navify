@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use iced::font::Weight::{Black, Bold, Medium, Normal};
 use iced::widget::{
     Column, Row, Space, button, column, container, hover, image, mouse_area, pick_list, row,
-    scrollable, slider, stack, text, text_input, toggler,
+    scrollable, slider, stack, text, text_input,
 };
 use iced::{Center, Color, Fill, FillPortion, Padding, Right, Shrink, color, padding};
 
@@ -1885,7 +1885,10 @@ fn pick<'a, T: Clone + Send + Sync + 'static>(
     let find = move |l: String| opts.iter().find(|o| o.1 == l).expect("an option").0.clone();
     let p = pick_list(labels, on, move |l| set(f, find(l)));
     let p = p.placeholder("The saved value is not available");
-    let p = p.text_size(14).font(theme::fw(Normal)).padding([7, 12]);
+    let p = p
+        .text_size(14)
+        .font(theme::fw(Normal))
+        .padding(Padding::from([7, 12]).left(16));
     let p = p.handle(pick_list::Handle::Static(pick_list::Icon {
         font: theme::LUCIDE,
         code_point: i::DOWN,
@@ -1916,10 +1919,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         El::from(r.spacing(12).align_y(Center))
     };
     let db = |v: f32, f| num(v, -15.0..=15.0, f, format!("{v:+.1} dB"));
-    let tog = |v: bool, f: fn(&mut Settings, bool)| -> El<'_> {
-        let t = toggler(v).on_toggle(move |b| set(f, b));
-        t.style(theme::tog).size(20).into()
-    };
+    let tog =
+        |v: bool, f: fn(&mut Settings, bool)| -> El<'_> { theme::switch(v, set(f, !v)).into() };
     let head = |t: &'a str| -> (bool, String, El<'a>) {
         let h = container(bold(t, 16.0)).padding(padding::top(PAD).bottom(8));
         (true, String::new(), h.into())
@@ -2935,9 +2936,11 @@ pub fn login(app: &App) -> El<'_> {
     let saved = column![bold("Saved servers", 14.0)].extend(saved);
     let saved = saved.spacing(4).width(W);
     let flip = || act(|a| a.login.remember = !a.login.remember);
-    let remember = toggler(l.remember).on_toggle(|b| act(move |a| a.login.remember = b));
-    let remember = remember.style(theme::tog).size(20);
-    let remember = row![remember, txt("Remember password", 14.0)].spacing(12);
+    let remember = row![
+        theme::switch(l.remember, flip()),
+        txt("Remember password", 14.0)
+    ]
+    .spacing(12);
     let remember = btn(remember.align_y(Center), flip());
     let go = (!l.busy).then_some(Message::LSubmit);
     let label = bold(if l.busy { "Wait…" } else { "Log In" }, 16.0).color(BG);
