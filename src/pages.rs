@@ -154,7 +154,7 @@ fn huge(t: &str, tw: f32) -> text::Text<'_> {
 
 pub fn grid_y(app: &App) -> f32 {
     match app.route.split(':').next() {
-        Some("genre") => hero_h(app) + PAD,
+        Some("genre") => (0.4 * app.view_size().1).round() + PAD + 40.0,
         Some("artists") => GRID_Y - 40.0,
         Some("discography") => GRID_Y - 24.0,
         _ => GRID_Y,
@@ -1199,7 +1199,7 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     if let Some(g) = app.route.strip_prefix("genre:") {
         let t = ell(g, app.main_w() - 2.0 * PAD, 24.0, Bold);
         let bg = theme::shade(genre_color(app, g), 0.5);
-        return (off > hero_h(app) - 64.0).then(|| bar(t.into(), bg).into());
+        return (off > grid_y(app) - PAD - 104.0).then(|| bar(t.into(), bg).into());
     }
     if app.route == "profile" {
         let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
@@ -1717,13 +1717,13 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
     let albums = albums.map(|v| g(v.len(), &|n| album_card(app, &v[n], v[n].artist.clone())));
     if kind == "genre" {
         let c = genre_color(app, arg);
+        let h = grid_y(app) - PAD - 40.0;
         let head = container(huge(arg, app.main_w() - 2.0 * PAD)).padding(PAD);
-        let head = head
-            .width(Fill)
-            .height(hero_h(app))
-            .align_bottom(hero_h(app));
+        let head = head.width(Fill).height(h).align_bottom(h);
         let head = head.style(theme::down(&[(0.0, c), (1.0, theme::shade(c, 0.5))]));
-        let body = column![Space::new().height(PAD)].push(albums).width(Fill);
+        let title = container(heading("Albums", None)).height(32);
+        let body = column![Space::new().height(PAD), title, Space::new().height(8)];
+        let body = body.push(albums).width(Fill);
         return column![head, fade(theme::shade(c, 0.4), 232.0, body)].into();
     }
     let head = column![bold(title, 32.0)].push(chips).spacing(16);
