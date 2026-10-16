@@ -2477,8 +2477,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
     let section = |t: &'a str| -> El<'a> {
         let t = bold(t, 12.0).color(theme::tint(0.7));
         container(t)
-            .padding(Padding::new(12.0).top(14))
-            .height(41)
+            .padding(Padding::new(12.0).top(13))
+            .height(42)
             .into()
     };
     let item = |l: &'a str, c: Option<char>, on: bool, tail: char, msg: Message| {
@@ -2586,7 +2586,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 view("List", i::LIST, false),
                 view("Grid", i::GRID, true),
             ];
-            return boxed(col.into(), 160.0, 41.0 * 2.0 + 40.0 * 4.0 + 8.0, 4);
+            return boxed(col.into(), 160.0, 42.0 * 2.0 + 40.0 * 4.0 + 8.0, 4);
         }
         MenuKind::View => {
             let (key, desc) = (app.pl_sort & 15, app.pl_sort & 16 != 0);
@@ -2608,7 +2608,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 item(l, Some(c), on, i::CHECK, set(|s, b| s.compact = b, v))
             });
             let n = sorts.as_ref().map_or(0, |_| ORDER.len());
-            let h = 41.0 * (1 + usize::from(n > 0)) as f32 + 40.0 * (n + 2) as f32 + 8.0;
+            let h = 42.0 * (1 + usize::from(n > 0)) as f32 + 40.0 * (n + 2) as f32 + 8.0;
             let col = Column::new()
                 .push(sorts)
                 .push(section("View as"))
@@ -2624,7 +2624,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let views = LIB_VIEWS.iter().zip(0u8..).map(|(&c, v)| {
                 let on = app.cfg.settings.lib_view == v;
                 let fg = if on { ACCENT } else { SUB };
-                let b = button(i(c, 16.0).color(fg).center()).width(Fill).height(32);
+                let b = button(i(c, 16.0).color(fg).center()).width(48).height(32);
                 let b = b.style(theme::btn(
                     [
                         theme::tint(f32::from(u8::from(on)) * 0.1),
@@ -2636,13 +2636,15 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 ));
                 b.on_press(set(|s, v| s.lib_view = v, v)).into()
             });
-            let views = container(Row::with_children(views).spacing(4)).padding([4, 4]);
+            let views = container(Row::with_children(views)).padding(4);
             let col = column![section("Sort by")].extend(rows);
-            let col = col.push(rule()).push(section("View as")).push(views);
+            let line = container(rule()).padding(padding::top(2).bottom(3));
+            let col = col.push(line).push(section("View as"));
+            let col = col.push(views.style(fill(ELEVATED, 4.0)));
             return boxed(
                 col.into(),
                 208.0,
-                41.0 * 2.0 + 40.0 * 3.0 + 1.0 + 40.0 + 8.0,
+                42.0 * 2.0 + 40.0 * 3.0 + 6.0 + 40.0 + 8.0,
                 4,
             );
         }
@@ -2694,7 +2696,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             ];
             let n = rows.iter().flatten().count();
             let col = column![section("Columns")].extend(rows.into_iter().flatten());
-            return boxed(col.into(), 160.0, 41.0 + 48.0 * n as f32 + 8.0, 4);
+            return boxed(col.into(), 160.0, 42.0 + 48.0 * n as f32 + 8.0, 4);
         }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if level == 2 && v.len() == 1 => {
             let id = &v[0].id;
