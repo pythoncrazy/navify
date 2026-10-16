@@ -2703,7 +2703,11 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         }
         MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
-            let like = ["Add to Liked Songs", "Remove from your Liked Songs"];
+            let liked = usize::from(app.route == "liked");
+            let like = [
+                "Add to Liked Songs",
+                ["Remove from your Liked Songs", "Remove from Liked Songs"][liked],
+            ];
             let q = |next| Message::Queue(songs.clone(), next);
             let mut v = vec![open(1, i::PLUS, "Add to playlist")];
             if let MenuKind::SongIn(_, n) = &m.kind {
@@ -2711,7 +2715,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 v.push(it(i::MINUS, "Remove from this playlist", rm));
             }
             let (star, k) = (Message::Star(ids(songs), !on), usize::from(on));
-            v.push(it(['\0', i::SAVED][k], like[k], star));
+            v.push(it(['\0', [i::SAVED, '\0'][liked]][k], like[k], star));
             v.push(it(i::LISTPLUS, "Add to queue", q(false)));
             v.push(it(i::QUEUE, "Play next", q(true)));
             if let [s] = &songs[..] {
