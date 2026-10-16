@@ -2423,7 +2423,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
         tab("Queue", !app.recent_tab),
         tab("Recently played", app.recent_tab)
     ];
-    let head = panel_head(tabs.spacing(24), 2);
+    let head = container(panel_head(tabs.spacing(24), 2)).padding(padding::top(13));
     if app.recent_tab {
         return column![head, scrollable(past).style(theme::scroll)].into();
     }
