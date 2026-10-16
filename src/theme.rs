@@ -146,13 +146,15 @@ pub mod icon {
 
 fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
     use iced::advanced::graphics::text::{cosmic_text as ct, font_system, to_attributes};
-    type Memo = HashMap<(String, u32, Weight), Rc<[(f32, usize)]>>;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    type Memo = HashMap<u64, Rc<[(f32, usize)]>>;
     thread_local!(static MEMO: RefCell<Memo> = RefCell::default());
     MEMO.with_borrow_mut(|m| {
-        if m.len() > 2048 {
+        if m.len() > 8192 {
             m.clear();
         }
-        let key = (s.to_string(), size.to_bits(), w);
+        let mut h = DefaultHasher::new();
+        (s, size.to_bits(), w).hash(&mut h);
         let shape = || {
             let mut fs = font_system().write().expect("font system");
             let fs = fs.raw();
@@ -162,7 +164,7 @@ fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
             let runs = b.layout_runs().flat_map(|r| r.glyphs.iter().map(end));
             runs.collect()
         };
-        m.entry(key).or_insert_with(shape).clone()
+        m.entry(h.finish()).or_insert_with(shape).clone()
     })
 }
 
@@ -172,18 +174,21 @@ pub fn width(s: &str, size: f32, w: Weight) -> f32 {
 
 pub fn ell<'a>(s: impl Into<std::borrow::Cow<'a, str>>, px: f32, size: f32, w: Weight) -> Txt<'a> {
     let (s, breaks) = (s.into(), ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}']);
-    let s = match s.contains(breaks) {
+    let mut s = match s.contains(breaks) {
         true => s.replace(breaks, " ").into(),
         false => s,
     };
     let g = glyphs(&s, size, w);
-    let room = px - width("\u{2026}", size, w);
-    let cut = g.iter().take_while(|g| g.0 <= room).last();
-    let t = match g.last().is_none_or(|g| g.0 <= px) {
-        true => s,
-        false => format!("{}\u{2026}", s[..cut.map_or(0, |g| g.1)].trim_end()).into(),
-    };
-    txt(t, size).font(fw(w)).wrapping(text::Wrapping::None)
+    if g.last().is_some_and(|g| g.0 > px) {
+        let room = px - width("\u{2026}", size, w);
+        let end = g
+            .iter()
+            .take_while(|g| g.0 <= room)
+            .last()
+            .map_or(0, |g| g.1);
+        s = format!("{}\u{2026}", s[..end].trim_end()).into();
+    }
+    txt(s, size).font(fw(w)).wrapping(text::Wrapping::None)
 }
 
 pub fn btn(bg: [Color; 3], fg: [Color; 3], r: f32) -> impl Fn(&Theme, Status) -> BtnStyle {

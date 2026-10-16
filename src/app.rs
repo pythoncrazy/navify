@@ -1556,7 +1556,10 @@ impl App {
             Message::Back | Message::Fwd => {}
             Message::Scrolled(off, view, content) => {
                 let key = self.route.clone();
-                self.scrolls.insert(key.clone(), (off, view));
+                let old = self
+                    .scrolls
+                    .insert(key.clone(), (off, view))
+                    .unwrap_or_default();
                 let max = (content - view).max(0.0);
                 if key == "lyrics" && self.lyric.1.is_some_and(|y| (y.min(max) - off).abs() > 2.0) {
                     self.lyric.1 = None;
@@ -1565,7 +1568,8 @@ impl App {
                 let more = v.and_then(|v| pager!(v, p => (p.0.len() < p.1).then_some(p.0.len())));
                 let more = more.filter(|_| content > 0.0 && off + view * 3.0 >= content);
                 let more = Task::batch(more.map(|n| self.request(&key, n)));
-                return Task::batch([more, self.disc_load()]);
+                let moved = old.0 as usize / 28 != off as usize / 28 || old.1 != view;
+                return Task::batch([more, Task::batch(moved.then(|| self.disc_load()))]);
             }
             Message::LyricAt(y) if self.route == "lyrics" && self.lyric.1.is_some() => {
                 self.lyric.1 = Some(y);
