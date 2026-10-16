@@ -126,6 +126,7 @@ pub struct Song {
     #[serde(alias = "rating")]
     pub user_rating: u8,
     pub starred: bool,
+    pub starred_at: String,
     #[serde(alias = "createdAt")]
     pub created: String,
     pub cover: String,
@@ -232,7 +233,8 @@ fn normalize(v: &mut Value) {
                 m.insert("releaseDate".into(), date.into());
             }
             if let Some(s) = m.get_mut("starred").filter(|s| !s.is_boolean()) {
-                *s = s.as_str().is_some_and(|s| !s.is_empty()).into();
+                let at = std::mem::replace(s, s.as_str().is_some_and(|s| !s.is_empty()).into());
+                m.entry("starredAt").or_insert(at);
             }
             if let Some(Value::Array(lines)) = m.get_mut("line") {
                 for l in lines.iter_mut().filter(|l| l.is_object()) {
