@@ -28,6 +28,7 @@ pub const BAR: f32 = 84.0;
 pub const HEAD: f32 = 53.0;
 const DISC_HEAD: f32 = 136.0 + 16.0 + HEAD;
 const GREY: Color = color!(0x535353);
+const LIKED: Color = color!(0x5038a0);
 pub const DOT: &str = " \u{2022} ";
 const GROUPS: [(&str, &str); 4] = [
     ("all", "Popular releases"),
@@ -655,7 +656,11 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let size = [96.0, 72.0, 48.0].into_iter().find(fits).unwrap_or(32.0);
         ell(p.title, tw, size, Black).line_height(1.1)
     };
-    let bg = theme::down(&[(0.0, p.color), (1.0, theme::shade(p.color, 0.5))]);
+    let low = |k: f32| match p.color == LIKED {
+        true => Color::from_rgb(p.color.r * k, p.color.g * k, p.color.b * k),
+        false => theme::shade(p.color, k),
+    };
+    let bg = theme::down(&[(0.0, p.color), (1.0, low(0.5))]);
     let hero: El = if let Some(key) = &p.banner {
         let bh = banner_h(app);
         let img = app.covers.get(key, 640);
@@ -708,7 +713,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let bar = bar.extend(p.extra).push(view).spacing(PAD);
     let bar = container(bar.align_y(Center)).height(BAR);
     let bar = bar.padding(Padding::new(PAD).top(12).bottom(16));
-    let rest = fade(theme::shade(p.color, 0.4), 232.0, column![bar, body]);
+    let rest = fade(low(0.4), 232.0, column![bar, body]);
     column![hero, rest].into()
 }
 
@@ -855,7 +860,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     let sort = (!liked && native).then_some(sort);
     let heads = [
         ("Library", "Songs", color!(0x1e6b52)),
-        ("Playlist", "Liked Songs", color!(0x5038a0)),
+        ("Playlist", "Liked Songs", LIKED),
     ];
     let (kind, title, color) = heads[usize::from(liked)];
     let art = match liked {
@@ -957,9 +962,26 @@ fn detail(app: &App) -> Option<El<'_>> {
     let pl = app.data::<(Playlist, Vec<Song>)>(&app.route);
     let pl = pl.filter(|(p, _)| app.owns(p));
     let empty = pl.is_some_and(|x| x.1.is_empty());
-    let body = column![(!empty).then(|| table_head(app, c))];
+    let liked = app.route == "liked";
+    let body = column![(!empty && !(liked && songs.is_empty())).then(|| table_head(app, c))];
     let body = body.push(vlist(app, songs, &app.route, c, y0));
-    let none = container(sub("There are no songs to show.", 16.0)).padding(PAD);
+    let none: El = match liked {
+        true => {
+            let find = button(bold("Find songs", 16.0)).padding([12, 32]);
+            let find = find.style(theme::solid([TEXT, color!(0xf0f0f0), color!(0xb7b7b7)], BG));
+            let find = find.on_press(Message::Nav("search".into()));
+            let title = bold("Songs that you like show here", 32.0);
+            let hint = txt("To save a song, click the plus icon.", 16.0);
+            let col = column![title, hint, container(find).padding(padding::top(16))];
+            container(col.spacing(8).align_x(Center))
+                .center_x(Fill)
+                .padding(64)
+                .into()
+        }
+        false => container(sub("There are no songs to show.", 16.0))
+            .padding(PAD)
+            .into(),
+    };
     let body = body.push((songs.is_empty() && !empty).then_some(none));
     let body = body.push(pl.map(|(p, _)| finder(app, p, empty)));
     let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
