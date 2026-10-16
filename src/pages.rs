@@ -1888,13 +1888,15 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         let t = toggler(v).on_toggle(move |b| set(f, b));
         t.style(theme::tog).size(20).into()
     };
-    let head = |t: &'static str| container(bold(t, 16.0)).padding(padding::top(PAD).bottom(8));
-    fn line<'a>(label: impl text::IntoFragment<'a>, c: El<'a>) -> El<'a> {
-        let label = txt(label, 14.0).color(SUB).width(Fill).height(24);
-        row![label.align_y(Center), c]
-            .align_y(Center)
-            .padding([4, 0])
-            .into()
+    let head = |t: &'a str| -> (bool, String, El<'a>) {
+        let h = container(bold(t, 16.0)).padding(padding::top(PAD).bottom(8));
+        (true, String::new(), h.into())
+    };
+    fn line<'a>(label: impl Into<String>, c: El<'a>) -> (bool, String, El<'a>) {
+        let label: String = label.into();
+        let t = txt(label.clone(), 14.0).color(SUB).width(Fill).height(24);
+        let r = row![t.align_y(Center), c].align_y(Center).padding([4, 0]);
+        (false, label, r.into())
     }
     let mut rates = [0, 320, 256, 192, 128, 96].map(|b| (b, format!("{b} kbps")));
     rates[0].1 = "No limit".into();
@@ -1971,12 +1973,13 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             line($label, tog(st.$f, |s, b| s.$f = b))
         };
     }
-    let server = |s: &'a Server| -> El<'a> {
+    let server = |s: &'a Server| {
         let active = app.cfg.active.as_ref() == Some(&s.id);
         let who = sub(format!("{}{DOT}{}", s.user, s.url), 14.0);
         let info = column![txt(&s.name, 14.0), who].spacing(2).width(Fill);
         let out = active.then(|| theme::pill_btn(bold("Log out", 14.0), Message::LogOut));
-        row![info, out].align_y(Center).height(56).into()
+        let r = row![info, out].align_y(Center).height(56);
+        (false, format!("{} {}", s.name, s.url), r.into())
     };
     let mb = |b: u64| b as f32 / 1_048_576.0;
     let disk = mb(app.data::<u64>("disk").copied().unwrap_or(0));
@@ -1986,48 +1989,51 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let clear = theme::pill_btn(bold("Clear", 14.0), Message::ClearCache);
     let cache = row![cache, clear].spacing(16).align_y(Center).into();
     let version = sub(env!("CARGO_PKG_VERSION"), 14.0).into();
-    let col = column![
-        bold("Settings", 32.0),
-        head("Playback"),
-        line("Output device", device),
-        line("ReplayGain", gain),
-        line("Preamp", preamp),
-        line("Gain for tracks without ReplayGain", fallback),
-        on!("Limit the gain to stop clipping", rg_clip),
-        line("Crossfade", fade),
-        line("Seek step for keys and media controls", step),
-        line("Volume step for keys and the mouse wheel", vol_step),
-        line("Action of the play buttons and double-click", mode),
-        head("Queue"),
-        on!("Ask before you replace the queue", confirm_queue),
-        line("Do not add songs with these words (use commas)", skip),
-        head("Streaming"),
-        line("Transcode format", format),
-        line("Maximum bitrate", rate),
-        head("Library"),
-        on!("Sync the play queue with the server", queue_sync),
-        on!("Send played tracks to the server (scrobble)", scrobble),
-        line("Scrobble by", by),
-        line("Scrobble after", pct),
-        head("Display"),
-        line("Zoom", zoom),
-        on!(banners_label, banners),
-        on!("Show the rating column", ratings),
-        on!("Show the play count column", plays),
-        on!("Smooth scrolling", smooth),
-        on!("Scroll the lyrics with the track", lyrics_follow),
-        line("Lyrics offset (positive shows the lines later)", lag),
-        line("Lyrics text size", size),
-        line("Lyrics alignment", align),
+    let rows = [
+        Some(head("Playback")),
+        Some(line("Output device", device)),
+        Some(line("ReplayGain", gain)),
+        Some(line("Preamp", preamp)),
+        Some(line("Gain for tracks without ReplayGain", fallback)),
+        Some(on!("Limit the gain to stop clipping", rg_clip)),
+        Some(line("Crossfade", fade)),
+        Some(line("Seek step for keys and media controls", step)),
+        Some(line("Volume step for keys and the mouse wheel", vol_step)),
+        Some(line("Action of the play buttons and double-click", mode)),
+        Some(head("Queue")),
+        Some(on!("Ask before you replace the queue", confirm_queue)),
+        Some(line("Do not add songs with these words (use commas)", skip)),
+        Some(head("Streaming")),
+        Some(line("Transcode format", format)),
+        Some(line("Maximum bitrate", rate)),
+        Some(head("Library")),
+        Some(on!("Sync the play queue with the server", queue_sync)),
+        Some(on!("Send played tracks to the server (scrobble)", scrobble)),
+        Some(line("Scrobble by", by)),
+        Some(line("Scrobble after", pct)),
+        Some(head("Display")),
+        Some(line("Zoom", zoom)),
+        Some(on!(banners_label, banners)),
+        Some(on!("Show the rating column", ratings)),
+        Some(on!("Show the play count column", plays)),
+        Some(on!("Smooth scrolling", smooth)),
+        Some(on!("Scroll the lyrics with the track", lyrics_follow)),
+        Some(line("Lyrics offset (positive shows the lines later)", lag)),
+        Some(line("Lyrics text size", size)),
+        Some(line("Lyrics alignment", align)),
         cfg!(target_os = "linux").then(|| on!(frame_label, system_frame)),
-        on!(tray_label, tray),
-        on!("Start minimized", start_min),
-        on!("Show a notification when a new track starts", notify),
-        on!("Keep the computer awake while music plays", awake),
-        on!("Hide in the tray when you minimize the window", min_tray),
-        head("Keyboard shortcuts"),
+        Some(on!(tray_label, tray)),
+        Some(on!("Start minimized", start_min)),
+        Some(on!("Show a notification when a new track starts", notify)),
+        Some(on!("Keep the computer awake while music plays", awake)),
+        Some(on!(
+            "Hide in the tray when you minimize the window",
+            min_tray
+        )),
+        Some(head("Keyboard shortcuts")),
     ];
-    let col = col.extend(crate::app::KEYS.iter().map(|k| {
+    let mut rows: Vec<_> = rows.into_iter().flatten().collect();
+    rows.extend(crate::app::KEYS.iter().map(|k| {
         let on = app.recording == Some(k.0);
         let label = match crate::app::key_label(app.binding(k.0)) {
             _ if on => "Press a key".to_string(),
@@ -2047,11 +2053,12 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         )
     }));
     let reset = theme::pill_btn(bold("Reset", 14.0), set(|s, ()| s.keys.clear(), ()));
-    let col = col.push(line("Use the default shortcuts", reset.into()));
-    let col = col.push(head("Servers"));
-    let col = col.extend(app.cfg.servers.iter().map(server));
-    let col = col.push(head("Storage"));
-    let col = col.push(line("Cover cache", cache));
+    rows.extend([
+        line("Use the default shortcuts", reset.into()),
+        head("Servers"),
+    ]);
+    rows.extend(app.cfg.servers.iter().map(server));
+    rows.extend([head("Storage"), line("Cover cache", cache)]);
     let copy = task(|a| {
         let json = serde_json::to_string_pretty(&a.cfg.settings).expect("settings are JSON");
         iced::Task::batch([
@@ -2085,12 +2092,61 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let copy = theme::pill_btn(bold("Copy", 14.0), copy);
     let paste = theme::pill_btn(bold("Paste", 14.0), paste);
     let io = row![copy, paste].spacing(8).into();
-    let col = col.push(line(
-        "Copy the settings to the clipboard, or paste them",
-        io,
-    ));
-    let col = col.push(head("About"));
-    let col = col.push(line("Version", version)).max_width(836);
+    rows.extend([
+        line("Copy the settings to the clipboard, or paste them", io),
+        head("About"),
+        line("Version", version),
+    ]);
+    let q = app.pl_find.as_deref().unwrap_or_default().to_lowercase();
+    let hit: Vec<bool> = rows
+        .iter()
+        .map(|r| !r.0 && r.1.to_lowercase().contains(&q))
+        .collect();
+    let shown = |n: usize| {
+        let next = hit[n + 1..]
+            .iter()
+            .zip(&rows[n + 1..])
+            .take_while(|(_, r)| !r.0);
+        hit[n] || rows[n].0 && next.into_iter().any(|(h, _)| *h)
+    };
+    let shown: Vec<bool> = (0..rows.len()).map(shown).collect();
+    let find: El = match &app.pl_find {
+        None => {
+            let open = task(|a| {
+                a.pl_find = Some(String::new());
+                iced::widget::operation::focus("setfind")
+            });
+            crate::view::tip(
+                icon_btn(i::SEARCH, 16.0, open),
+                "Search settings",
+                iced::widget::tooltip::Position::Bottom,
+            )
+        }
+        Some(q) => {
+            let style = theme::input([ELEVATED; 2], [BG; 2], [0.0; 2], 4.0);
+            let t = text_input("Search settings", q)
+                .id("setfind")
+                .width(240)
+                .size(14);
+            let t = t.on_input(|v| act(move |a| a.pl_find = Some(v.clone())));
+            let glass = text_input::Icon {
+                font: theme::LUCIDE,
+                code_point: i::SEARCH,
+                size: Some(16.0.into()),
+                spacing: 8.0,
+                side: text_input::Side::Left,
+            };
+            let t = t.on_submit(Message::Noop).icon(glass).style(style);
+            t.font(theme::fw(Normal)).padding([8, 12]).into()
+        }
+    };
+    let title = row![bold("Settings", 32.0), Space::new().width(Fill), find].align_y(Center);
+    let rows = rows.into_iter().zip(shown).filter(|r| r.1).map(|r| r.0.2);
+    let none = hit.iter().all(|h| !h).then(|| {
+        let t = txt(format!("No settings match \"{q}\""), 16.0).color(SUB);
+        container(t).padding(padding::top(PAD)).into()
+    });
+    let col = column![title].extend(rows).extend(none).max_width(836);
     container(col).padding(32).center_x(Fill).into()
 }
 
