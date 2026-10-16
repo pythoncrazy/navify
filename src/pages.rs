@@ -828,6 +828,12 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     column![hero, rest].into()
 }
 
+pub fn avatar<'a>(name: &str, px: f32) -> iced::widget::Container<'a, Message> {
+    let first = name.chars().next().map_or('?', |c| c.to_ascii_uppercase());
+    let c = container(bold(first, 8.0 + px / 5.0).color(BG).center()).center(px);
+    c.style(fill(theme::hue(first as usize), px / 2.0))
+}
+
 fn meta<'a>(lead: impl Into<El<'a>>, rest: String) -> El<'a> {
     row![lead.into(), sub(rest, 14.0)].align_y(Center).into()
 }
@@ -912,7 +918,8 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         };
         let some = !songs.is_empty();
         let comment = (!p.comment.is_empty()).then(|| sub(&p.comment, 14.0));
-        let meta = column![comment, meta(bold(&p.owner, 14.0), rest)];
+        let owner = row![avatar(&p.owner, 24.0), bold(&p.owner, 14.0)].spacing(8);
+        let meta = column![comment, meta(owner.align_y(Center), rest)];
         let page = Page {
             art: cover(app, &p.cover, px, false),
             kind: ["Private Playlist", "Public Playlist"][usize::from(p.public)],
@@ -963,7 +970,8 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         true => liked_art(px),
         false => art(px, i(i::MUSIC, 0.0).color(ACCENT), SONGS_BG),
     };
-    let meta = meta(bold(user, 14.0), count.unwrap_or_default());
+    let owner = row![avatar(user, 24.0), bold(user, 14.0)].spacing(8);
+    let meta = meta(owner.align_y(Center), count.unwrap_or_default());
     let mut extra = vec![Space::new().width(Fill).into()];
     extra.extend(sort.map(Into::into));
     let page = Page {
@@ -2516,9 +2524,7 @@ pub fn login(app: &App) -> El<'_> {
         column![bold(label, 14.0), input].spacing(8).into()
     };
     let saved = app.cfg.servers.iter().map(|s| -> El<'_> {
-        let first = s.user.chars().next().unwrap_or('?').to_ascii_uppercase();
-        let avatar = container(bold(first, 16.0).color(BG).center()).center(40);
-        let avatar = avatar.style(fill(theme::hue(first as usize), 20.0));
+        let avatar = avatar(&s.user, 40.0);
         let drop = Message::DropServer(s.id.clone());
         let drop = focusable(icon_btn(i::X, 14.0, drop.clone()), Some(drop), 14.0, None);
         let body = media(avatar.into(), &s.name, &s.user, W - 120.0, TEXT).push(drop);

@@ -378,10 +378,7 @@ fn top_bar(app: &App) -> El<'_> {
         tip(b.style(theme::round(ELEVATED)).on_press(m), label, Bottom)
     };
     let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
-    let first = user.chars().next().map_or('?', |c| c.to_ascii_uppercase());
-    let ring = fill(theme::hue(first as usize), 500.0);
-    let avatar = container(bold(first, 14.0).color(BG).center()).center(32);
-    let avatar = button(avatar.style(ring)).padding(8);
+    let avatar = button(pages::avatar(user, 32.0)).padding(8);
     let avatar = avatar.style(theme::round(ELEVATED));
     let home = match app.route == "home" {
         true => theme::filled(theme::fill::HOME, 24.0).color(TEXT),
