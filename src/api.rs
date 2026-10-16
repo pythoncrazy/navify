@@ -101,6 +101,7 @@ pub struct Album {
     pub compilation: bool,
     pub release_types: Vec<String>,
     pub release_date: String,
+    pub genre: String,
     pub labels: Vec<String>,
     pub artists: Vec<Artist>,
     pub album_artists: Vec<Artist>,

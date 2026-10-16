@@ -1178,23 +1178,61 @@ fn artist(app: &App) -> Option<El<'_>> {
     Some(page(app, p, body.into()))
 }
 
+pub fn browse(app: &App) -> (f32, usize, f32, f32) {
+    let w = (app.main_w() - 24.0).min(1176.0);
+    let cols = (w / 280.0).max(2.0) as usize;
+    let tw = w / cols as f32 - 24.0;
+    (w, cols, tw, (tw * 0.5625).round())
+}
+
+pub fn genre_cover<'a>(app: &'a App, name: &str) -> Option<&'a String> {
+    let home = app.data::<Home>("home").into_iter().flatten();
+    let lib = app.data::<Lib>("lib").into_iter().map(|l| &l.albums);
+    home.chain(lib)
+        .flatten()
+        .find(|a| a.genre.eq_ignore_ascii_case(name))
+        .map(|a| &a.cover)
+}
+
 fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     if q.is_empty() {
         let gs = app.data::<Vec<Genre>>("genres")?;
-        let cols = ((app.main_w() - 24.0) / 300.0).max(2.0) as usize;
-        let tw = (app.main_w() - 24.0) / cols as f32 - 24.0;
-        let th = (tw * 0.56).round();
+        let (w, cols, tw, th) = browse(app);
         let tile = |n: usize| -> El<'a> {
             let g = &gs[n];
             let label = bold(&g.name, 24.0).wrapping(text::Wrapping::WordOrGlyph);
-            let b = button(label).padding(16).width(tw).height(th).clip(true);
+            let label = container(label).width(tw - 97.0);
+            let b = button(label).padding(16).width(tw).height(th);
             let b = b.style(theme::btn([theme::hue(n); 3], [TEXT; 3], 8.0));
             let b = b.on_press(go("genre", &g.name));
-            container(b).padding(12).into()
+            let s = (tw * 0.45).round();
+            let art = genre_cover(app, &g.name)
+                .and_then(|c| app.covers.get(c, app.bucket(s)))
+                .map(|h| {
+                    let img = image(h)
+                        .width(tw * 0.3)
+                        .height(tw * 0.3)
+                        .scale(1.5_f32)
+                        .border_radius(4);
+                    let img = img.rotation(iced::Radians(25f32.to_radians()));
+                    let p = Padding::new(0.0).left(tw * 0.7);
+                    container(img).padding(p.top(th * 0.64 - tw * 0.15))
+                });
+            let edge = art.is_some().then(|| {
+                let border = iced::Border::default()
+                    .color(theme::PANEL)
+                    .width(4)
+                    .rounded(12);
+                let f = container(Space::new()).width(tw + 8.0).height(th + 8.0);
+                container(f.style(move |_| container::Style::default().border(border))).padding(8)
+            });
+            let tile = container(stack![b].push(art).clip(true)).padding(12);
+            stack![tile].push(edge).into()
         };
         let title = container(bold("Browse all", 24.0));
-        let title = title.padding(Padding::new(PAD).bottom(4));
-        return Some(column![title, grid(app, gs.len(), cols, th + 24.0, 64.0, tile)].into());
+        let title = title.padding(Padding::new(PAD).top(67).bottom(8));
+        let col = column![title, grid(app, gs.len(), cols, th + 24.0, 104.0, tile)];
+        return Some(container(col.width(w + 24.0)).center_x(Fill).into());
     }
     let (artists_res, albums_res, songs_res) = app.data::<Trio>(&app.route)?;
     if artists_res.is_empty() && albums_res.is_empty() && songs_res.is_empty() {
