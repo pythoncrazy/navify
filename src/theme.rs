@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use iced::font::Weight;
 use iced::widget::button::{Status, Style as BtnStyle};
-use iced::widget::{button, container, pick_list, scrollable, slider, text, text_input, toggler};
+use iced::widget::{button, container, pick_list, scrollable, slider, text, text_input};
 use iced::{Background, Border, Color, Element, Font, Shadow, Theme, color};
 
 pub const BG: Color = color!(0x000000);
@@ -284,13 +284,27 @@ pub fn seek(t: &Theme, s: slider::Status) -> slider::Style {
     st
 }
 
-pub fn tog(t: &Theme, s: toggler::Status) -> toggler::Style {
-    use toggler::Status::{Active as A, Hovered as H};
-    let on = matches!(s, A { is_toggled: true } | H { is_toggled: true });
-    let mut st = toggler::default(t, s);
-    (st.background, st.foreground) = (if on { ACCENT } else { FIELD }.into(), TEXT.into());
-    st.padding_ratio = 0.12;
-    st
+pub fn switch<'a, M: Clone + 'a>(on: bool, m: M) -> Btn<'a, M> {
+    let knob = container(iced::widget::Space::new().width(20).height(20));
+    let knob = knob.style(|_| {
+        container::Style::default()
+            .background(TEXT)
+            .border(Border::default().rounded(10))
+    });
+    let x = [
+        iced::alignment::Horizontal::Left,
+        iced::alignment::Horizontal::Right,
+    ][usize::from(on)];
+    let track = container(knob).padding(2).width(42).align_x(x);
+    button(track).padding(0).on_press(m).style(move |_, s| {
+        let bg = [[color!(0x535353), SUB], [color!(0x1db954), ACCENT]][usize::from(on)]
+            [usize::from(s != Status::Active)];
+        BtnStyle {
+            background: Some(bg.into()),
+            border: Border::default().rounded(12),
+            ..BtnStyle::default()
+        }
+    })
 }
 
 pub fn pick(flat: bool) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style {
