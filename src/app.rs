@@ -57,6 +57,7 @@ pub enum MenuKind {
     Create,
     View,
     Columns,
+    Disc,
 }
 
 #[derive(Clone, Debug)]
@@ -342,6 +343,7 @@ pub struct App {
     pub search_tab: usize,
     pub disc_chip: u8,
     pub disc_old: bool,
+    pub disc_name: bool,
     pub seek_preview: Option<f32>,
     pub recent: Vec<Song>,
     pub recent_tab: bool,
@@ -1682,6 +1684,7 @@ impl App {
                     MenuKind::Create => (self.lib_w() - 108.0, 115.0),
                     MenuKind::User => (self.view_size().0 - 338.0, 64.0),
                     MenuKind::View => (self.lib_w() + self.main_w() - 148.0, cursor().1 + 24.0),
+                    MenuKind::Disc => (cursor().0 - 16.0, cursor().1 + 24.0),
                     _ => cursor(),
                 };
                 self.menu = Some(Menu {
