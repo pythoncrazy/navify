@@ -770,56 +770,108 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             let s = match k {
                 "size" => format!("{:.1} MB", x.as_f64()? / 1e6),
                 "duration" => fmt_dur(x.as_f64()? as f32),
-                "created" | "played" => x.as_str()?.get(..16)?.replace('T', " "),
+                "created" | "played" => {
+                    let d = x.as_str()?;
+                    let m = d.get(5..7)?.parse::<usize>().ok()?.checked_sub(1)?;
+                    let month = [
+                        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+                        "Nov", "Dec",
+                    ];
+                    let day = d.get(8..10)?.trim_start_matches('0');
+                    format!("{} {day}, {}", month.get(m)?, d.get(..4)?)
+                }
+                "playCount" => {
+                    let local = app.plays.get(id).copied().unwrap_or(0) as u64;
+                    fmt_n(local.max(x.as_u64()?) as usize)
+                }
+                "displayAlbumArtist" if v?.get("displayArtist") == Some(x) => return None,
                 _ => x.as_str().map_or_else(|| x.to_string(), String::from),
             };
             (!s.is_empty() && s != "0").then_some(s)
         };
-        let fields = [
-            ("Title", "title", ""),
-            ("Artist", "displayArtist", ""),
-            ("Album", "album", ""),
-            ("Album artist", "displayAlbumArtist", ""),
-            ("Composer", "displayComposer", ""),
-            ("Genre", "genre", ""),
-            ("Year", "year", ""),
-            ("Disc", "discNumber", ""),
-            ("Track", "track", ""),
-            ("Duration", "duration", ""),
-            ("Format", "suffix", ""),
-            ("Bit rate", "bitRate", " kbps"),
-            ("Sample rate", "samplingRate", " Hz"),
-            ("Bit depth", "bitDepth", " bits"),
-            ("Channels", "channelCount", ""),
-            ("Size", "size", ""),
-            ("BPM", "bpm", ""),
-            ("Track gain", "trackGain", " dB"),
-            ("Album gain", "albumGain", " dB"),
-            ("Plays", "playCount", ""),
-            ("Last played", "played", ""),
-            ("Added", "created", ""),
-            ("Comment", "comment", ""),
-            ("Path", "path", ""),
+        let groups = [
+            (
+                "Artist",
+                &[
+                    ("Artist", "displayArtist", ""),
+                    ("Album artist", "displayAlbumArtist", ""),
+                ][..],
+            ),
+            (
+                "Composition & Lyrics",
+                &[("Composer", "displayComposer", "")],
+            ),
+            (
+                "Your listening",
+                &[
+                    ("Plays", "playCount", ""),
+                    ("Last played", "played", ""),
+                    ("Added", "created", ""),
+                ],
+            ),
+            (
+                "Song",
+                &[
+                    ("Album", "album", ""),
+                    ("Genre", "genre", ""),
+                    ("Year", "year", ""),
+                    ("Disc", "discNumber", ""),
+                    ("Track", "track", ""),
+                    ("Duration", "duration", ""),
+                    ("BPM", "bpm", ""),
+                    ("Comment", "comment", ""),
+                ],
+            ),
+            (
+                "File",
+                &[
+                    ("Format", "suffix", ""),
+                    ("Bit rate", "bitRate", " kbps"),
+                    ("Sample rate", "samplingRate", " Hz"),
+                    ("Bit depth", "bitDepth", " bits"),
+                    ("Channels", "channelCount", ""),
+                    ("Size", "size", ""),
+                    ("Track gain", "trackGain", " dB"),
+                    ("Album gain", "albumGain", " dB"),
+                    ("Path", "path", ""),
+                ],
+            ),
         ];
-        let rows = fields.into_iter().filter_map(|(label, k, unit)| {
-            let t = text(val(k)? + unit).size(14).font(theme::fw(Normal));
-            let t = t.wrapping(text::Wrapping::WordOrGlyph).width(Fill);
-            Some(row![sub(label, 14.0).width(120), t].spacing(16).into())
+        let groups = groups.into_iter().filter_map(|(name, fields)| {
+            let rows: Vec<El> = fields
+                .iter()
+                .filter_map(|&(label, k, unit)| {
+                    let t = text(val(k)? + unit).size(16).font(theme::fw(Normal));
+                    let t = t.wrapping(text::Wrapping::WordOrGlyph);
+                    Some(column![t, sub(label, 14.0)].spacing(2).into())
+                })
+                .collect();
+            let rows = (!rows.is_empty()).then(|| iced::widget::Column::with_children(rows));
+            rows.map(|r| column![bold(name, 20.0), r.spacing(16)].spacing(16).into())
         });
         let note = match app.data::<String>(&key) {
             Some(e) => Some(sub(e.clone(), 14.0)),
             None => v.is_none().then(|| sub("Loading the song details.", 14.0)),
         };
-        let list = iced::widget::Column::with_children(rows)
+        let list = iced::widget::Column::with_children(groups.collect::<Vec<El>>())
             .push(note)
-            .spacing(12);
-        let list = scrollable(list.padding(padding::right(16)))
-            .height(iced::Shrink)
+            .spacing(32);
+        let list = scrollable(list.padding([24, 24]).width(Fill))
+            .height(Fill)
             .style(theme::scroll);
-        let head = row![bold("Song details", 24.0).width(Fill), close];
-        let body = column![head.align_y(Center), list].spacing(16);
-        let body = container(body.width(560).padding(24)).max_height(600.0);
-        return body.style(style).into();
+        let title = v
+            .and_then(|v| v["title"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        let head = row![bold("Song details", 24.0).width(Fill), close].align_y(Center);
+        let head = column![
+            head,
+            theme::ell(title, 392.0, 16.0, iced::font::Weight::Bold)
+        ];
+        let line = container(Space::new().width(Fill).height(1)).style(fill(theme::tint(0.1), 0.0));
+        let body = column![container(head).padding(24), line, list];
+        let body = container(body).width(440).height(542);
+        return body.style(fill(theme::PANEL, 8.0)).into();
     }
     if kind == 2 || kind == 4 {
         let name = pl.map_or("", |p| p.name.as_str()).to_string();
