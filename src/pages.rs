@@ -1306,12 +1306,16 @@ fn lyrics(app: &App) -> El<'_> {
         let size = app.cfg.settings.lyrics_size;
         let words = bold(if line.is_empty() { "\u{266a}" } else { line }, size);
         let words = words.align_x(align);
-        match t {
+        let el: El<'_> = match t {
             Some(t) if synced => {
                 let seek = Message::Seek(at(*t).max(0) as f32 / 1000.0);
                 link_btn(words, fg, seek).into()
             }
             _ => words.color(fg).into(),
+        };
+        match n == cur.unwrap_or(0) {
+            true => container(el).id("lyric").into(),
+            false => el,
         }
     });
     let col = Column::with_children(lines)
@@ -1322,19 +1326,8 @@ fn lyrics(app: &App) -> El<'_> {
     container(col).padding(pad).width(Fill).style(bg).into()
 }
 
-pub fn lyric_scroll(app: &App) -> Option<(usize, f32)> {
-    let (l, cur, _) = lyric_at(app, app.current_song()?)?;
-    let (w, px, cur) = (
-        (app.main_w() - 4.0 * PAD).min(900.0),
-        app.cfg.settings.lyrics_size,
-        cur.unwrap_or(0),
-    );
-    let rows = |s: &str| (s.chars().count() as f32 * px * 0.55 / w).ceil().max(1.0);
-    let ys = l.lines[..cur].iter().map(|x| rows(&x.1) * px * 1.3 + 16.0);
-    Some((
-        cur,
-        (48.0 + ys.sum::<f32>() - app.scroll().1 * 0.3).max(0.0),
-    ))
+pub fn lyric_line(app: &App) -> Option<usize> {
+    Some(lyric_at(app, app.current_song()?)?.1.unwrap_or(0))
 }
 
 fn lyric_at<'a>(app: &'a App, song: &Song) -> Option<(&'a Lyrics, Option<usize>, bool)> {
