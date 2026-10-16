@@ -615,20 +615,33 @@ pub fn route(app: &App) -> El<'_> {
     page.unwrap_or_else(|| Space::new().into())
 }
 
+pub fn home_tiles(app: &App) -> (usize, f32, f32, f32) {
+    let w = app.main_w() - 2.0 * PAD;
+    let n = if w >= 720.0 { 4 } else { 2 };
+    let fit = |gap: f32| (w - gap * (n - 1) as f32) / n as f32;
+    let th = match fit(12.0) {
+        t if t >= 400.0 => 80.0,
+        t if t >= 280.0 => 64.0,
+        _ => 48.0,
+    };
+    let gap = [8.0, 12.0][usize::from(th > 48.0)];
+    (n, fit(gap), th, gap)
+}
+
 fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let h = app.data::<Home>("home")?;
     let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
-    let w = app.main_w() - 2.0 * PAD;
-    let n = if w >= 720.0 { 4 } else { 2 };
-    let tw = (w - 8.0 * (n - 1) as f32) / n as f32;
+    let (n, tw, th, gap) = home_tiles(app);
+    let big = th > 48.0;
     let tile = |art: El<'a>, name: &'a str, route: String| {
-        let body = row![art, ell(name, tw - 80.0, 14.0, Bold)].spacing(12);
+        let name = ell(name, tw - th - 56.0, [14.0, 16.0][usize::from(big)], Bold);
+        let body = row![art, name].spacing([8, 16][usize::from(big)]);
         let style = theme::btn([0.1, 0.2, 0.3].map(theme::tint), [TEXT; 3], 4.0);
-        let b = button(body.align_y(Center)).padding(0).width(tw).height(56);
+        let b = button(body.align_y(Center)).padding(0).width(tw).height(th);
         let b = b.clip(true).style(style);
         let b = b.on_press(Message::Nav(route.clone()));
         let play = play_btn(app, 32.0, &route);
-        let play = container(play).align_right(Fill).center_y(56);
+        let play = container(play).align_right(Fill).center_y(th);
         let play = play.padding([0, 8]);
         play_over(app, b.into(), play.into(), &route)
     };
@@ -636,13 +649,13 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let pins = pins.map(|p| (&p.cover, &p.name, format!("playlist:{}", p.id)));
     let recent = h[0].iter();
     let recent = recent.map(|a| (&a.cover, &a.name, format!("album:{}", a.id)));
-    let small = |c| cover(app, c, 56.0, false);
+    let small = |c| cover(app, c, th, false);
     let rest = pins.chain(recent).map(|(c, n, r)| tile(small(c), n, r));
-    let liked = tile(liked_art(56.0), "Liked Songs", "liked".into());
+    let liked = tile(liked_art(th), "Liked Songs", "liked".into());
     let mut tiles = std::iter::once(liked).chain(rest).take(8);
     let rows = std::iter::from_fn(|| {
         let r: Vec<El> = tiles.by_ref().take(n).collect();
-        (!r.is_empty()).then(|| Row::with_children(r).spacing(8).into())
+        (!r.is_empty()).then(|| Row::with_children(r).spacing(gap).into())
     });
     let k = app.grid().0;
     let shelves = [
@@ -661,7 +674,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let c = h[0].first().map_or(GREY, |a| head_color(app, &a.cover));
     let pls = pls.iter().take(k).map(|p| playlist_card(app, p));
     let pls = shelf("Your playlists", None, pls);
-    let tiles = container(Column::from_vec(rows.collect()).spacing(8)).padding([0.0, PAD]);
+    let tiles = container(Column::from_vec(rows.collect()).spacing(gap)).padding([0.0, PAD]);
     let col = column![tiles].extend(shelves).push(pls).spacing(40);
     Some(fade(theme::shade(c, 0.5), 332.0, col.padding([PAD, 0.0])))
 }
