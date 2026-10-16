@@ -494,6 +494,23 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
         let on = !app.ctx.is_empty() && same(&app.ctx);
         let fg = if on { ACCENT } else { TEXT };
+        let tag = format!("lib:{route}");
+        let art = match route.as_str() {
+            "folders" | "radio" => art,
+            _ if app.hover.as_deref() != Some(tag.as_str()) => art,
+            _ => {
+                let live = on && app.playing;
+                let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(live)];
+                let m = match live {
+                    true => Message::Toggle,
+                    false => Message::PlayCtx(route.clone(), 0),
+                };
+                let r = [4.0, 24.0][usize::from(route.starts_with("artist:"))];
+                let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
+                let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
+                stack![art, top.style(theme::link(TEXT)).on_press(m)].into()
+            }
+        };
         let row = |art| media(art, title, sub, w - 112.0, fg).into();
         let body = if mini { art } else { row(art) };
         let b = button(body).padding(8).width(Fill);
@@ -505,8 +522,15 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let t = theme::tint;
         let b = b.style(theme::btn([t(a), t(h), t(0.3)], [TEXT; 3], 4.0));
         let menu = Message::LibMenu(route.clone());
+        let (enter, exit) = (tag.clone(), tag);
         mouse_area(b.on_press(Message::Nav(route)))
             .on_right_press(menu)
+            .on_enter(act(move |a| a.hover = Some(enter.clone())))
+            .on_exit(act(move |a| {
+                if a.hover.as_ref() == Some(&exit) {
+                    a.hover = Some("lib".into());
+                }
+            }))
             .into()
     };
     let head: El = if mini {
@@ -514,7 +538,11 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let b = tip(b, "Expand Your Library", Right);
         container(b).center_x(Fill).into()
     } else {
-        let side = (app.hover.as_deref() == Some("lib")).then(|| i(i::SIDE, 16.0));
+        let side = app
+            .hover
+            .as_ref()
+            .filter(|h| h.starts_with("lib"))
+            .map(|_| i(i::SIDE, 16.0));
         let title = row![side, bold("Your Library", 16.0)].spacing(12);
         let title = theme::link_btn(title.align_y(Center), TEXT, task(App::lib_collapse));
         let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::Create));
@@ -589,8 +617,11 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let head = container(head).padding(iced::Padding::new(8.0).bottom(4));
     let body = column![head, chips, column![tools, list].spacing(8)];
     let body = container(body.spacing(12).padding(8)).width(w);
-    let on = act(|a| a.hover = Some("lib".into()));
-    let off = act(|a| a.hover = a.hover.take().filter(|h| h != "lib"));
+    let on = act(|a| {
+        let h = a.hover.take().filter(|h| h.starts_with("lib"));
+        a.hover = h.or(Some("lib".into()));
+    });
+    let off = act(|a| a.hover = a.hover.take().filter(|h| !h.starts_with("lib")));
     mouse_area(body.height(Fill))
         .on_enter(on)
         .on_exit(off)
