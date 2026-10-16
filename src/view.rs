@@ -639,6 +639,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         theme::chip_btn(name, f == n, m)
     });
     let chips = Row::with_children(chips).spacing(8);
+    let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
     let pins = PINS.iter().filter(|p| p.0 >> f & 1 == 1 && hit(p.3));
     let pins = pins.map(|&(_, c, green, t, r)| {
         let (bg, fg) = [(ELEVATED, SUB), (SONGS_BG, ACCENT)][usize::from(green)];
@@ -648,7 +649,10 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         item(
             pic,
             t,
-            ["Library", "Playlist"][usize::from(liked)].into(),
+            match liked {
+                true => format!("Playlist{}{user}", pages::DOT).into(),
+                false => "Library".into(),
+            },
             route,
         )
     });
