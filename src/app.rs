@@ -2354,7 +2354,8 @@ impl App {
         let tiles = |n: usize| span(n, cw + 52.0, cols, GRID_Y);
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
-        let mut wide: [Vec<&String>; 2] = Default::default();
+        let mut wide: [Vec<&String>; 3] = Default::default();
+        let (_, gcols, tw, th) = crate::pages::browse(self);
         let (mut head, mut banner): (Vec<&String>, _) = Default::default();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
@@ -2429,6 +2430,15 @@ impl App {
                 3 => big.extend(ar[tiles(ar.len())].iter().map(|a| &a.cover)),
                 _ => big.extend(pls.map(|p| &p.cover).take(tiles(usize::MAX).end)),
             }
+        } else if let Some(gs) = self
+            .data::<Vec<crate::api::Genre>>("genres")
+            .filter(|_| key == "search")
+        {
+            let gs = &gs[span(gs.len(), th + 24.0, gcols, 104.0)];
+            let art = gs
+                .iter()
+                .filter_map(|g| crate::pages::genre_cover(self, &g.name));
+            wide[2].extend(art);
         } else if let Some(h) = self.data::<Home>(key) {
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
             small.extend(pls.iter().take(3).map(|p| &p.cover));
@@ -2466,7 +2476,7 @@ impl App {
         let lead = self.lead_artist().filter(|_| self.panel == 1 && !self.full);
         let lead = lead.map(|id| (format!("w:{}", self.artist_cover(id)), self.bucket(side)));
         let art = crate::pages::art_px(self);
-        let [top, rows] = wide;
+        let [top, rows, genre] = wide;
         let lists = [
             (big, cw - 24.0),
             (head, art),
@@ -2474,6 +2484,7 @@ impl App {
             (small, 56.0),
             (top, 72.0),
             (rows, 64.0),
+            (genre, (tw * 0.45).round()),
         ];
         let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
         lists
