@@ -124,8 +124,8 @@ fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let idx = 16.0 + 8.0 * n.max(1).ilog10().saturating_sub(1) as f32;
     let st = &app.cfg.settings;
     let extra = 106.0 * f32::from(st.ratings) + 80.0 * f32::from(st.plays)
-        - 56.0 * f32::from(st.hide_duration);
-    let w = app.main_w() - 2.0 * PAD - 184.0 - idx - extra;
+        - 58.0 * f32::from(st.hide_duration);
+    let w = app.main_w() - 2.0 * PAD - 166.0 - idx - extra;
     let plays = ["album:", "discography:"]
         .iter()
         .any(|p| app.route.starts_with(p));
@@ -294,7 +294,7 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     };
     let hide = app.cfg.settings.hide_duration;
     let clock = (!hide).then(|| i(i::CLOCK, 16.0).color(SUB));
-    let clock = container(clock).align_right(120.0 - 56.0 * f32::from(hide));
+    let clock = container(clock).align_right(102.0 - 58.0 * f32::from(hide));
     let r = row![sub("#", 16.0).width(c.3).center(), title];
     let album = ["album:", "discography:"]
         .iter()
@@ -308,7 +308,7 @@ fn table_head<'a>(app: &App, c: Cols) -> El<'a> {
     let r = r.push(app.cfg.settings.ratings.then_some(star));
     let plays = sub("Plays", 14.0).width(64).align_x(Right);
     let r = r.push((app.cfg.settings.plays && !album).then_some(plays));
-    let r = r.push(clock.padding(padding::right(52)));
+    let r = r.push(clock.padding(padding::right(32)));
     let r = r.spacing(16).padding([0, 16]).height(36).align_y(Center);
     let r = mouse_area(r).on_right_press(Message::Menu(Box::new(MenuKind::Columns)));
     let p = Padding::new(PAD).top(0).bottom(16);
@@ -368,15 +368,16 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         _ => container(album).width(c.1).into(),
     };
     let more = hot.then(|| {
-        icon_btn(
-            i::DOTS,
-            16.0,
-            Message::MenuBelow(Box::new(Message::RowMenu(key.into(), n)), -8.0, 24.0),
+        let dot = || container(Space::new().width(3).height(3)).style(fill(TEXT, 1.5));
+        let m = Message::MenuBelow(Box::new(Message::RowMenu(key.into(), n)), -8.0, 24.0);
+        btn(
+            container(row![dot(), dot(), dot()].spacing(3.5)).center_y(32),
+            m,
         )
     });
     let liked = key == "liked";
     let heart = (hot || starred && !liked).then(|| heart_btn(&s.id, starred, 16.0));
-    let dur = sub(fmt_dur(s.duration), 14.0).width(56).align_x(Right);
+    let dur = sub(fmt_dur(s.duration), 14.0).width(46).align_x(Right);
     let dur = (!app.cfg.settings.hide_duration).then_some(dur);
     let thumb = art.then(|| cover(app, &s.cover, 40.0, false));
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
@@ -391,7 +392,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
             b.style(theme::link(c[usize::from(hot)])).on_press(m).into()
         }))
     });
-    let tail = row![container(heart).width(32), dur, container(more).width(32)];
+    let tail = row![container(heart).width(16), dur, container(more).width(16)].spacing(12);
     let r = row![idx, name].push((c.1 > 0.0).then_some(second));
     let count = sub(plays(), 14.0).width(64).align_x(Right);
     let count = (app.cfg.settings.plays && !pop && !in_album).then_some(count);
