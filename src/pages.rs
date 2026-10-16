@@ -1922,8 +1922,16 @@ fn settings<'a>(app: &'a App) -> El<'a> {
 pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let w = app.right_w() - 32.0;
     let Some(s) = app.current_song() else {
-        let t = sub("No song plays now.", 14.0);
-        return container(t).padding(16).into();
+        let go = button(bold("Search", 14.0))
+            .padding([7, 16])
+            .style(theme::accent);
+        let col = column![
+            bold("Find something to play", 24.0),
+            go.on_press(Message::Nav("search".into()))
+        ];
+        return container(col.spacing(24).align_x(Center))
+            .center(Fill)
+            .into();
     };
     let starred = app.is_starred(&s.id, s.starred);
     let card = |c: Column<'a, Message>| {
