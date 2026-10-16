@@ -65,6 +65,7 @@ pub enum MenuKind {
 pub struct Menu {
     pub x: f32,
     pub y: f32,
+    pub dx: f32,
     pub dy: f32,
     pub kind: MenuKind,
     pub sub: u8,
@@ -1725,6 +1726,7 @@ impl App {
                 self.menu = Some(Menu {
                     x,
                     y,
+                    dx: 0.0,
                     dy: y - cursor().1,
                     kind: *kind,
                     sub: 0,
@@ -1735,8 +1737,10 @@ impl App {
             }
             Message::MenuBelow(m, dx, dy) => {
                 let t = self.update(*m);
+                let a = *ANCHOR.lock().expect("the anchor lock");
                 if let Some(m) = &mut self.menu {
-                    (m.x, m.y, m.dy) = (cursor().0 + dx, cursor().1 + dy, dy);
+                    (m.x, m.y) = (a.x + dx, a.y + a.height + dy);
+                    (m.dx, m.dy) = (a.width - 2.0 * dx, a.height / 2.0 + dy);
                 }
                 return t;
             }
@@ -3090,6 +3094,12 @@ pub fn cursor() -> (f32, f32) {
     )
 }
 pub static MODS: AtomicU32 = AtomicU32::new(0);
+pub static ANCHOR: Mutex<iced::Rectangle> = Mutex::new(iced::Rectangle {
+    x: 0.0,
+    y: 0.0,
+    width: 0.0,
+    height: 0.0,
+});
 
 type Rx = Mutex<Option<UnboundedReceiver<Message>>>;
 static CH: LazyLock<(UnboundedSender<Message>, Rx)> = LazyLock::new(|| {
