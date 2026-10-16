@@ -2549,31 +2549,14 @@ pub fn key_label(c: &str) -> String {
 
 pub type KeyAction = (&'static str, &'static str, &'static str, fn() -> Message);
 
+pub const KEY_GROUPS: [(&str, usize); 4] = [
+    ("Basic", 6),
+    ("Playback", 10),
+    ("Navigation", 4),
+    ("Layout", 3),
+];
+
 pub const KEYS: [KeyAction; 23] = [
-    ("toggle", "Play or pause", "Space", || Message::Toggle),
-    ("next", "Next track", "C+ArrowRight", || Message::Next(true)),
-    ("prev", "Previous track", "C+ArrowLeft", || Message::Prev),
-    ("seek_fwd", "Seek forward", "Shift+ArrowRight", || {
-        Message::Step(false, 1.0)
-    }),
-    ("seek_back", "Seek backward", "Shift+ArrowLeft", || {
-        Message::Step(false, -1.0)
-    }),
-    ("vol_up", "Volume up", "C+ArrowUp", || {
-        Message::Step(true, 1.0)
-    }),
-    ("vol_down", "Volume down", "C+ArrowDown", || {
-        Message::Step(true, -1.0)
-    }),
-    ("shuffle", "Shuffle", "C+S", || Message::Shuffle),
-    ("repeat", "Repeat", "C+R", || act(App::repeat)),
-    ("like", "Like the current song", "Alt+Shift+B", || {
-        task(|a| {
-            let s = a.current_song().filter(|s| s.url.is_empty());
-            let s = s.map(|s| (s.id.clone(), !a.is_starred(&s.id, s.starred)));
-            Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
-        })
-    }),
     ("search", "Search", "C+K", || {
         task(|a| {
             let go = !a.route.starts_with("search");
@@ -2582,21 +2565,6 @@ pub const KEYS: [KeyAction; 23] = [
         })
     }),
     ("select_all", "Select all", "C+A", || Message::SelectAll),
-    ("back", "Go back", "Alt+ArrowLeft", || Message::Back),
-    ("forward", "Go forward", "Alt+ArrowRight", || Message::Fwd),
-    ("home", "Home", "Alt+Shift+H", || {
-        Message::Nav("home".into())
-    }),
-    ("liked", "Liked Songs", "Alt+Shift+S", || {
-        Message::Nav("liked".into())
-    }),
-    ("now_playing", "Now playing view", "Alt+Shift+J", || {
-        Message::Panel(1)
-    }),
-    ("queue", "Queue", "Alt+Shift+Q", || Message::Panel(2)),
-    ("library", "Collapse Your Library", "Alt+Shift+L", || {
-        task(App::lib_collapse)
-    }),
     ("settings", "Settings", "C+,", || {
         Message::Nav("settings".into())
     }),
@@ -2607,6 +2575,45 @@ pub const KEYS: [KeyAction; 23] = [
         Message::Window(false)
     }),
     ("quit", "Quit", "C+Q", || Message::Close),
+    ("toggle", "Play or pause", "Space", || Message::Toggle),
+    ("like", "Like the current song", "Alt+Shift+B", || {
+        task(|a| {
+            let s = a.current_song().filter(|s| s.url.is_empty());
+            let s = s.map(|s| (s.id.clone(), !a.is_starred(&s.id, s.starred)));
+            Task::batch(s.map(|(id, on)| a.update(Message::Star(vec![id], on))))
+        })
+    }),
+    ("shuffle", "Shuffle", "C+S", || Message::Shuffle),
+    ("repeat", "Repeat", "C+R", || act(App::repeat)),
+    ("prev", "Previous track", "C+ArrowLeft", || Message::Prev),
+    ("next", "Next track", "C+ArrowRight", || Message::Next(true)),
+    ("seek_back", "Seek backward", "Shift+ArrowLeft", || {
+        Message::Step(false, -1.0)
+    }),
+    ("seek_fwd", "Seek forward", "Shift+ArrowRight", || {
+        Message::Step(false, 1.0)
+    }),
+    ("vol_up", "Volume up", "C+ArrowUp", || {
+        Message::Step(true, 1.0)
+    }),
+    ("vol_down", "Volume down", "C+ArrowDown", || {
+        Message::Step(true, -1.0)
+    }),
+    ("home", "Home", "Alt+Shift+H", || {
+        Message::Nav("home".into())
+    }),
+    ("back", "Go back", "Alt+ArrowLeft", || Message::Back),
+    ("forward", "Go forward", "Alt+ArrowRight", || Message::Fwd),
+    ("liked", "Liked Songs", "Alt+Shift+S", || {
+        Message::Nav("liked".into())
+    }),
+    ("library", "Collapse Your Library", "Alt+Shift+L", || {
+        task(App::lib_collapse)
+    }),
+    ("now_playing", "Now playing view", "Alt+Shift+J", || {
+        Message::Panel(1)
+    }),
+    ("queue", "Queue", "Alt+Shift+Q", || Message::Panel(2)),
 ];
 
 fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Decoded, String> {
