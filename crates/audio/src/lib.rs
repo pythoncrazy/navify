@@ -836,7 +836,7 @@ fn open(
         }
         cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
     };
-    let (prod, mut cons) = RingBuffer::<f32>::new(rate as usize);
+    let (prod, mut cons) = RingBuffer::<f32>::new(rate as usize * 2);
     let (sh, etx, me, half) = (sh.clone(), tx.clone(), thread::current(), rate as usize / 2);
     let (sh2, me2) = (sh.clone(), me.clone());
     let (mut read, mut vol, ramp) = (0u64, 0f32, 1000.0 / rate as f32);
@@ -993,8 +993,12 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
         {
             asked = c.rate as u32;
             match open(&dev, asked, &sh, &tx) {
-                Ok((s, p, rate)) => {
-                    (written, running, idle, out, mix.rate) = (0, false, None, Some((s, p)), rate);
+                Ok((s, mut p, rate)) => {
+                    p.push_entire_slice(&vec![0.0; rate as usize])
+                        .expect("ring buffer has room");
+                    let lead = u64::from(rate);
+                    (written, running, idle, out, mix.rate) =
+                        (lead, false, None, Some((s, p)), rate);
                     sh.read.store(0, Relaxed);
                     sh.flush.store(0, Relaxed);
                     if !fresh {
