@@ -2764,7 +2764,12 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
         })
         .filter(|w| ok(w.0))
         .collect();
-    let top = sw.iter().map(|w| w.1).fold(0.0, f32::max);
+    let bright = |c| hsl(c).2 >= 0.8 && hsl(c).1 < 0.25;
+    let top = sw
+        .iter()
+        .filter(|w| !bright(w.0))
+        .map(|w| w.1)
+        .fold(0.0, f32::max);
     let pick = |l: [f32; 3], s: [f32; 3]| {
         let fit = sw
             .iter()
@@ -2773,7 +2778,7 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
                 let (_, cs, cl) = hsl(c);
                 let fit = (s[0]..=s[2]).contains(&cs) && (l[0]..=l[2]).contains(&cl);
                 let score = (1.0 - (cs - s[1]).abs()) * 0.24 + (1.0 - (cl - l[1]).abs()) * 0.52;
-                fit.then_some((score + n / top * 0.24, c))
+                fit.then_some((score + (n / top).min(1.0) * 0.24, c))
             });
         fit.max_by(|a, b| a.0.total_cmp(&b.0)).map(|x| x.1)
     };
