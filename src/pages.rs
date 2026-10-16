@@ -2047,6 +2047,37 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
     r.on_right_press(menu).into()
 }
 
+pub fn device_panel(app: &App) -> El<'_> {
+    let cur = &app.cfg.settings.device;
+    let (on, others): (Vec<_>, Vec<_>) = devices(app).into_iter().partition(|d| &d.0 == cur);
+    let name = on.into_iter().next().map_or_else(|| cur.clone(), |d| d.1);
+    let card = row![
+        i(i::DEVICE, 24.0).color(ACCENT),
+        txt(name, 16.0).color(ACCENT)
+    ];
+    let card = container(card.spacing(12).align_y(Center))
+        .padding(20)
+        .width(Fill);
+    let card = container(card.style(fill(ELEVATED, 8.0))).padding([0, 8]);
+    let title = ["Select another device", "No other devices found"][usize::from(others.is_empty())];
+    let title = container(bold(title, 16.0)).padding(Padding::new(20.0).top(32).bottom(8));
+    let rows = others.into_iter().map(|(id, name)| {
+        let r = row![i(i::DEVICE, 24.0), txt(name, 16.0)]
+            .spacing(12)
+            .align_y(Center);
+        let b = button(r)
+            .padding([12, 20])
+            .width(Fill)
+            .style(theme::track(0.0));
+        b.on_press(set(|s, v| s.device = v, id)).into()
+    });
+    let list = column![card, title]
+        .extend(rows)
+        .padding(padding::bottom(16));
+    let head = panel_head(bold("Connect", 16.0), 3);
+    column![head, scrollable(list).style(theme::scroll)].into()
+}
+
 pub fn queue_panel(app: &App) -> El<'_> {
     let w = app.right_w() - 16.0;
     let next = (app.index + 1..app.queue.len()).take(100);
@@ -2242,16 +2273,6 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 focusable(b.on_press(m.clone()), Some(m), 18.0, Some("layer"))
             });
             return boxed(Row::with_children(stars).into(), 192.0, 48.0, 6);
-        }
-        MenuKind::Device => {
-            let t = bold("Select an output device", 14.0);
-            head = Some(container(t).padding([0, 12]).center_y(40).into());
-            let all = devices(app).into_iter();
-            all.map(|(id, name)| {
-                let c = [i::DEVICE, i::CHECK][usize::from(id == app.cfg.settings.device)];
-                it(c, &name, set(|s, v| s.device = v, id))
-            })
-            .collect()
         }
         MenuKind::User => {
             let url = ell(user.map_or("", |s| &s.url), w - 32.0, 12.0, Normal);

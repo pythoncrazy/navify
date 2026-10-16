@@ -54,7 +54,6 @@ pub enum MenuKind {
     Artist(Artist),
     Playlist(Playlist),
     User,
-    Device,
     Create,
     View,
 }
@@ -1681,14 +1680,13 @@ impl App {
                     MenuKind::View => (self.lib_w() + self.main_w() - 148.0, cursor().1 + 24.0),
                     _ => cursor(),
                 };
-                let scan = matches!(*kind, MenuKind::Device).then(scan_devices);
                 self.menu = Some(Menu {
                     x,
                     y,
                     kind: *kind,
                     sub: 0,
                 });
-                return Task::batch(scan);
+                return Task::none();
             }
             Message::MenuClose if self.full && self.menu.is_none() && self.modal.is_none() => {
                 return self.set_full(false);
@@ -1792,7 +1790,8 @@ impl App {
             }
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
-                return Task::batch([self.covers_now(), self.about()]);
+                let scan = (self.panel == 3).then(scan_devices);
+                return Task::batch([self.covers_now(), self.about()].into_iter().chain(scan));
             }
             Message::Drag(d) => {
                 self.drag = d;
@@ -2462,7 +2461,7 @@ impl App {
         }
         let now = self.current_song().map(|s| &s.cover);
         small.extend(now);
-        let ahead = [0, 1, 100][self.panel as usize];
+        let ahead = [0, 1, 100, 0][self.panel as usize];
         let next = (self.index + 1..self.queue.len()).take(ahead);
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
         let (rows, span) = crate::view::lib_rows(self);

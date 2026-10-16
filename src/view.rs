@@ -699,9 +699,9 @@ fn player_bar(app: &App) -> El<'_> {
         (!app.full).then(|| panels.spacing(4)),
         device.then(|| side(
             ic(i::DEVICE),
-            false,
+            app.panel == 3,
             "Connect to a device",
-            Message::Menu(Box::new(MenuKind::Device))
+            Message::Panel(3)
         )),
         side(vol_icon, false, mute, act(|a| a.muted = !a.muted)),
         volume,
@@ -1036,7 +1036,8 @@ pub fn view(app: &App) -> El<'_> {
         g.on_press(Message::Drag(Some(n)))
     };
     let right: El = if app.panel > 0 {
-        let p = [pages::queue_panel, pages::now_playing][usize::from(app.panel == 1)](app);
+        let p = [pages::now_playing, pages::queue_panel, pages::device_panel]
+            [app.panel as usize - 1](app);
         row![grip(1), container(p).width(app.right_w()).height(Fill)].into()
     } else {
         let show = tip(
