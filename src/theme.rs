@@ -84,6 +84,7 @@ pub mod fill {
     pub const HOME: char = '\u{e2c2}';
     pub const CARET: char = '\u{e136}';
     pub const PIN: char = '\u{e3e2}';
+    pub const BROWSE: char = '\u{e00c}';
 }
 
 pub mod icon {

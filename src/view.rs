@@ -408,7 +408,11 @@ fn top_bar(app: &App) -> El<'_> {
     let x = (!app.search_q.is_empty())
         .then(|| tip(icon_btn(i::X, 20.0, clear.clone()), "Clear", Bottom));
     let bar = container(Space::new().width(1).height(25)).style(fill(color!(0x7c7c7c), 0.0));
-    let all = button(i(i::BROWSE, 24.0)).padding(0);
+    let all = match on {
+        true => theme::filled(theme::fill::BROWSE, 24.0),
+        false => i(i::BROWSE, 24.0),
+    };
+    let all = button(all).padding(0);
     let all = all.style(theme::link([SUB, TEXT][usize::from(on)]));
     let all = all.on_press(if on { clear } else { browse.clone() });
     let all = tip(all, "Browse", Bottom);
