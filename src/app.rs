@@ -2677,33 +2677,55 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
     if big {
         img = img.thumbnail(size, size);
     }
-    let (iw, ih) = (img.width(), img.height());
-    let (cw, ch) = ((iw * 88 / 100).max(1), (ih * 88 / 300).max(1));
-    let top = img.crop_imm(iw * 6 / 100, ih * 6 / 100, cw, ch);
-    let small = top.resize_exact(24, 8, FilterType::Triangle).to_rgb8();
-    let (mut hue, mut all) = ([[0f32; 4]; 12], [0f32; 3]);
+    let small = img.resize_exact(24, 24, FilterType::Triangle).to_rgb8();
+    let mut bins = [[0f32; 5]; 13];
     for p in small.pixels() {
         let [r, g, b] = p.0.map(|c| c as f32 / 255.0);
         let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
-        let d = mx - mn;
+        let (d, l) = (mx - mn, (mx + mn) / 2.0);
+        if !(0.06..=0.92).contains(&l) {
+            continue;
+        }
+        let s = d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6);
         let h = match () {
             _ if d == 0.0 => 0.0,
             _ if mx == r => ((g - b) / d).rem_euclid(6.0),
             _ if mx == g => (b - r) / d + 2.0,
             _ => (r - g) / d + 4.0,
         };
-        let w = if mx > 0.0 { d / mx } else { 0.0 } * mx * (1.0 - (mx - 0.6).abs());
-        let k = &mut hue[(h * 2.0) as usize % 12];
-        *k = [k[0] + w, k[1] + r * w, k[2] + g * w, k[3] + b * w];
-        all = [all[0] + r, all[1] + g, all[2] + b];
+        let gray = s < 0.25 || l < 0.15;
+        let w = if gray {
+            1.0
+        } else {
+            s * (1.0 - (l - 0.4).abs() * 2.0).max(0.0)
+        };
+        let k = &mut bins[if gray { 12 } else { (h * 2.0) as usize % 12 }];
+        *k = [
+            k[0] + w,
+            k[1] + r * w,
+            k[2] + g * w,
+            k[3] + b * w,
+            k[4] + 1.0,
+        ];
     }
-    let top = hue.into_iter().max_by(|a, b| a[0].total_cmp(&b[0]));
-    let [w, r, g, b] = top.expect("12 hue bins");
-    let l = ((all[0] * 0.3 + all[1] * 0.59 + all[2] * 0.11) / 192.0).clamp(0.15, 0.35);
-    let k = 0.72 / (r / w).max(g / w).max(b / w).max(0.05) / w;
-    let color = match w < 192.0 * 0.03 {
-        true => Color::from_rgb(l, l, l),
-        false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
+    let best = bins[..12].iter().max_by(|a, b| a[0].total_cmp(&b[0]));
+    let best = *best.expect("12 hue bins");
+    let gray = best[0] <= 0.0 || best[4] < 576.0 * 0.1;
+    let [w, r, g, b, _] = if gray { bins[12] } else { best };
+    let color = match gray {
+        true => {
+            let l = if w > 0.0 {
+                (r * 0.3 + g * 0.59 + b * 0.11) / w
+            } else {
+                0.3
+            };
+            let l = l.clamp(0.15, 0.35);
+            Color::from_rgb(l, l, l)
+        }
+        false => {
+            let k = 0.72 / (r / w).max(g / w).max(b / w).max(0.05) / w;
+            Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0))
+        }
     };
     if aspect == 0.0 && !big && !round {
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
