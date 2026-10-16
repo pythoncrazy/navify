@@ -1267,7 +1267,9 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         .into_iter()
         .enumerate();
     let chips = chips.map(|(n, l)| theme::chip_btn(l, tab == n, act(move |a| a.search_tab = n)));
-    let chips = container(Row::with_children(chips).spacing(8)).padding([16.0, PAD]);
+    let x0 = ((app.main_w() - 1152.0) / 2.0).max(PAD);
+    let chips = Row::with_children(chips).spacing(8);
+    let chips = container(chips).padding(Padding::new(16.0).left(x0).right(PAD));
     let (k, cw) = app.grid();
     let tiles = |n, f: &dyn Fn(usize) -> El<'a>| grid(app, n, k, cw + 52.0, 64.0, f);
     let by = |a: &Album| match a.year {
@@ -1436,7 +1438,9 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
             let col = column![top, Column::with_children(rows)]
                 .spacing(16)
                 .width(rw);
-            container(col).padding(Padding::new(PAD).top(0)).into()
+            container(col)
+                .padding(Padding::new(PAD).top(0).left(x0))
+                .into()
         }
     };
     let none = container(sub("There are no results to show.", 16.0)).padding([0.0, PAD]);
