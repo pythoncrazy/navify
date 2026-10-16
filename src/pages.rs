@@ -2779,7 +2779,13 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         }
         MenuKind::Artist(a) => {
             let radio = Message::Radio(a.id.clone());
-            let follow = star(&a.id, a.starred, "Unfollow", "Follow");
+            let on = app.is_starred(&a.id, a.starred);
+            let star = Message::Star(vec![a.id.clone()], !on);
+            let follow = it(
+                [i::USERPLUS, i::X][usize::from(on)],
+                ["Follow", "Unfollow"][usize::from(on)],
+                star,
+            );
             let radio = it(i::RADIO, "Go to artist radio", radio);
             vec![follow, radio, pin("artist", &a.id)]
         }
@@ -2828,18 +2834,26 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         let t = t.icon(glass).style(style).font(theme::fw(Normal)).size(14);
         head = Some(container(t.padding([6, 8])).center_y(40).into());
     }
+    let flag = |b: bool| 28.0 * f32::from(u8::from(b));
+    let w = list
+        .iter()
+        .flatten()
+        .map(|(c, l, _, sub)| theme::width(l, 14.0, Normal) + 37.0 + flag(*sub) + flag(*c != ' '))
+        .fold(w, f32::max)
+        .min(360.0);
     let seps = list.iter().filter(|x| x.is_none()).count();
     let n = list.len() - seps + usize::from(head.is_some());
     let h = (n as f32 * 40.0 + seps as f32 + 8.0).min([f32::MAX, 400.0][usize::from(level > 0)]);
     let rows = list.into_iter().map(|x| match x {
         Some((c, l, msg, sub)) => {
-            let room =
-                w - 36.0 - 28.0 * f32::from(u8::from(sub)) - 28.0 * f32::from(u8::from(c != ' '));
+            let room = w - 36.0 - flag(sub) - flag(c != ' ');
             let label = ell(l, room, 14.0, Normal);
             let arrow = sub.then(|| theme::filled(theme::fill::PLAY, 12.0));
             let icon: Option<El> = match c {
                 ' ' => None,
                 '\0' => Some(crate::view::liked_art(16.0)),
+                i::SAVED => Some(theme::filled(theme::fill::SAVED, 16.0).color(ACCENT).into()),
+                i::X => Some(i(i::X, 16.0).color(ACCENT).into()),
                 c => Some(i(c, 16.0).into()),
             };
             let r = match matches!(m.kind, MenuKind::User) {
