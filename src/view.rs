@@ -805,7 +805,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     if kind == 2 || kind == 4 {
         let name = pl.map_or("", |p| p.name.as_str()).to_string();
         let b = theme::fw(iced::font::Weight::Bold);
-        let red = [theme::RED, color!(0xd81326), color!(0xa60e1d)];
+        let red = [color!(0xe91429), color!(0xd81326), color!(0xa60e1d)];
         let green = [ACCENT, color!(0x3be477), color!(0x1abc54)];
         let n = app.queue.len();
         let (title, label, ok, bg, fg, spans) = match kind {
@@ -836,10 +836,10 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let msg = text::Rich::<(), Message>::with_spans(spans).size(14);
         let msg = msg.font(theme::fw(Normal)).color(BG);
         let close = Some(Message::MenuClose);
-        let cancel = act("Cancel", [theme::CLEAR; 3], BG, 16, close);
+        let cancel = act("Cancel", [theme::CLEAR; 3], BG, 0, close);
         let ok = act(label, bg, fg, 32, Some(ok));
         let buttons = row![Space::new().width(Fill), cancel, ok].spacing(16);
-        let buttons = buttons.align_y(Center).padding(padding::top(16));
+        let buttons = buttons.align_y(Center).padding(padding::top(24));
         let title = bold(title, 24.0).color(BG);
         let body = column![title, msg, buttons].spacing(8);
         let body = body.width(420).padding(32);
@@ -899,7 +899,8 @@ pub fn view(app: &App) -> El<'_> {
     };
     let modal = app.modal.as_ref().map(|(id, kind)| {
         let card = container(modal(app, id, *kind)).center(Fill);
-        stack![scrim(BG.scale_alpha(0.7)), card]
+        let dim = if matches!(kind, 2 | 4) { 0.5 } else { 0.7 };
+        stack![scrim(BG.scale_alpha(dim)), card]
     });
     let menu = app.menu.as_ref().map(|m| {
         let (el, w, h) = pages::menu(app, m);
