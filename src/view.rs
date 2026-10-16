@@ -745,7 +745,10 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         r.align_y(Center).into()
     };
     let chips = [(1u8, "Playlists"), (2, "Albums"), (3, "Artists")].map(|(n, name)| {
-        let m = act(move |a| a.lib_filter = if a.lib_filter == n { 0 } else { n });
+        let m = task(move |a| {
+            a.lib_filter = if a.lib_filter == n { 0 } else { n };
+            a.covers_now()
+        });
         theme::chip_btn(name, f == n, m)
     });
     let chips = Row::with_children(chips).spacing(8);
@@ -807,7 +810,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
     let find = task(|a| {
         a.lib_find = a.lib_find.is_none().then(String::new);
-        iced::widget::operation::focus("libfind")
+        iced::Task::batch([a.covers_now(), iced::widget::operation::focus("libfind")])
     });
     let x = theme::sq(i(i::SEARCH, 20.0).center(), 32.0).style(theme::link(SUB));
     let x = x.on_press(find);
@@ -818,7 +821,12 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             let t = text_input("Search in Your Library", v)
                 .id("libfind")
                 .size(14);
-            let t = t.on_input(|v| act(move |a| a.lib_find = Some(v.clone())));
+            let t = t.on_input(|v| {
+                task(move |a| {
+                    a.lib_find = Some(v.clone());
+                    a.covers_now()
+                })
+            });
             let t = t
                 .on_submit(Message::Noop)
                 .style(style)

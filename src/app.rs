@@ -1202,7 +1202,10 @@ impl App {
             let (own, k) = (s.clone(), id.clone());
             let s = s.clone();
             let load = async move {
+                static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+                let _net = NET.acquire().await.expect("the cover semaphore is open");
                 let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
+                drop(_net);
                 let wide = k.strip_prefix('b').and_then(|r| r.split_once(':'));
                 let wide = wide.and_then(|(n, _)| n.parse::<f32>().ok());
                 let px = if wide.is_some() { 1280 } else { size };
@@ -1424,7 +1427,8 @@ impl App {
             .map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
         let (r, (f, s, d), _) = &self.pl_view;
         if (r, f, *s, *d) != (&self.route, &self.pl_find, self.pl_sort, data) {
-            let moved = (f, *s) != (&self.pl_find, self.pl_sort) || r.starts_with("playlist:");
+            let diff = (f, *s) != (&self.pl_find, self.pl_sort);
+            let moved = diff || r.starts_with("playlist:");
             let stamp = (self.pl_find.clone(), self.pl_sort, data);
             if moved && self.sel.as_ref().is_some_and(|s| s.0 == self.route) && *r == self.route {
                 (self.sel, self.picked) = (None, BTreeSet::new());
@@ -1433,6 +1437,9 @@ impl App {
                 .pl_view_of()
                 .filter(|_| self.route.starts_with("playlist:"));
             self.pl_view = (self.route.clone(), stamp, rows);
+            if diff && self.route.starts_with("playlist:") {
+                t = Task::batch([t, self.covers_now()]);
+            }
         }
         let follow = self.lyric.1.is_some() && self.route == "lyrics";
         let follow = follow && self.cfg.settings.lyrics_follow;
@@ -2504,7 +2511,7 @@ impl App {
                 .iter()
                 .filter(|p| p.name.to_lowercase().contains(&q.to_lowercase()));
             match self.search_tab {
-                0 => {
+                0 if !ar.is_empty() || !al.is_empty() || !sg.is_empty() => {
                     let (top, mix) = crate::pages::search_hits((ar, al, sg), q);
                     wide[0].extend(top.map(cid));
                     wide[1].extend(mix.into_iter().map(cid));

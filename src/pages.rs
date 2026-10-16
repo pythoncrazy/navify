@@ -1574,7 +1574,13 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         return Some(container(col.width(w + 24.0)).center_x(Fill).into());
     }
     let (artists_res, albums_res, songs_res) = app.data::<Trio>(&app.route)?;
-    if artists_res.is_empty() && albums_res.is_empty() && songs_res.is_empty() {
+    let ql = q.to_lowercase();
+    let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
+    let pls: Vec<&Playlist> = pls
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&ql))
+        .collect();
+    if artists_res.is_empty() && albums_res.is_empty() && songs_res.is_empty() && pls.is_empty() {
         let title = bold(format!("No results found for \u{201c}{q}\u{201d}"), 24.0);
         let hint = "Make sure that the spelling is correct. Use fewer words or different words.";
         let hint = sub(hint, 16.0);
@@ -1585,7 +1591,13 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let chips = ["All", "Songs", "Albums", "Artists", "Playlists"]
         .into_iter()
         .enumerate();
-    let chips = chips.map(|(n, l)| theme::chip_btn(l, tab == n, act(move |a| a.search_tab = n)));
+    let chips = chips.map(|(n, l)| {
+        let m = task(move |a| {
+            a.search_tab = n;
+            a.covers_now()
+        });
+        theme::chip_btn(l, tab == n, m)
+    });
     let x0 = ((app.main_w() - 1152.0) / 2.0).max(PAD);
     let chips = Row::with_children(chips).spacing(8);
     let chips = container(chips).padding(Padding::new(16.0).left(x0).right(PAD));
@@ -1598,12 +1610,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         0 => a.artist.clone(),
         y => format!("{y}{DOT}{}", a.artist),
     };
-    let ql = q.to_lowercase();
-    let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
-    let pls: Vec<&Playlist> = pls
-        .iter()
-        .filter(|p| p.name.to_lowercase().contains(&ql))
-        .collect();
+    let only_pls = artists_res.is_empty() && albums_res.is_empty() && songs_res.is_empty();
     let body: El = match tab {
         1 => {
             let c = cols(app, true, false, songs_res.len());
@@ -1617,6 +1624,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         }),
         3 => tiles(artists_res.len(), &|n| artist_card(app, &artists_res[n])),
         4 => tiles(pls.len(), &|n| playlist_card(app, pls[n])),
+        _ if only_pls => tiles(pls.len(), &|n| playlist_card(app, pls[n])),
         _ => {
             let (top, mix) = search_hits((artists_res, albums_res, songs_res), q);
             let rw = (app.main_w() - 2.0 * PAD).min(1152.0);
