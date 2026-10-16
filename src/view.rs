@@ -514,14 +514,15 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let b = tip(b, "Expand Your Library", Right);
         container(b).center_x(Fill).into()
     } else {
-        let title = bold("Your Library", 16.0);
-        let title = theme::link_btn(title, TEXT, task(App::lib_collapse));
+        let side = (app.hover.as_deref() == Some("lib")).then(|| i(i::SIDE, 16.0));
+        let title = row![side, bold("Your Library", 16.0)].spacing(12);
+        let title = theme::link_btn(title.align_y(Center), TEXT, task(App::lib_collapse));
         let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::Create));
         let plus = row![
             i([i::PLUS, i::X][usize::from(open)], 16.0),
             bold("Create", 14.0)
         ];
-        let plus = container(plus.spacing(8).align_y(Center)).center_y(32);
+        let plus = container(plus.spacing(8).align_y(Center)).center_y(36);
         let plus = button(plus).padding([0, 16]);
         let plus = plus
             .style(theme::btn([ELEVATED, CHIP, CHIP], [TEXT; 3], 500.0))
@@ -585,9 +586,15 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let tools = (!mini).then(|| container(tools).padding([0, 4]));
     let list = scrollable(list).style(theme::scroll).height(Fill);
     let list = list.on_scroll(|v| Message::LibScrolled(v.absolute_offset().y, v.bounds().height));
-    let body = column![container(head).padding([4, 8]), chips, tools, list];
+    let head = container(head).padding(iced::Padding::new(8.0).bottom(4));
+    let body = column![head, chips, column![tools, list].spacing(8)];
     let body = container(body.spacing(12).padding(8)).width(w);
-    body.height(Fill).into()
+    let on = act(|a| a.hover = Some("lib".into()));
+    let off = act(|a| a.hover = a.hover.take().filter(|h| h != "lib"));
+    mouse_area(body.height(Fill))
+        .on_enter(on)
+        .on_exit(off)
+        .into()
 }
 
 fn player_bar(app: &App) -> El<'_> {
