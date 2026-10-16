@@ -152,6 +152,7 @@ pub enum Message {
     Back,
     Fwd,
     Scrolled(f32, f32, f32),
+    LyricAt(f32),
     LibScrolled(f32, f32),
     Search(String),
     SearchGo(u64),
@@ -1370,11 +1371,10 @@ impl App {
         }
         let follow = self.lyric.1.is_some() && self.route == "lyrics";
         let follow = follow && self.cfg.settings.lyrics_follow;
-        let line = follow.then(|| crate::pages::lyric_scroll(self)).flatten();
-        let line = line.filter(|l| l.0 != self.lyric.0);
-        if let Some((n, y)) = line {
-            self.lyric = (n, Some(y));
-            t = Task::batch([t, self.scroll_to(y)]);
+        let line = follow.then(|| crate::pages::lyric_line(self)).flatten();
+        if let Some(n) = line.filter(|n| *n != self.lyric.0) {
+            self.lyric.0 = n;
+            t = Task::batch([t, lyric_find()]);
         }
         let awake = self.playing && self.cfg.settings.awake;
         if awake != self.awake.0 {
@@ -1502,6 +1502,11 @@ impl App {
                 let more = Task::batch(more.map(|n| self.request(&key, n)));
                 return Task::batch([more, self.disc_load()]);
             }
+            Message::LyricAt(y) if self.route == "lyrics" && self.lyric.1.is_some() => {
+                self.lyric.1 = Some(y);
+                return self.scroll_to(y);
+            }
+            Message::LyricAt(_) => {}
             Message::Search(q) => {
                 (self.search_q, self.search_seq) = (q, self.search_seq + 1);
                 return later(0.25, Message::SearchGo(self.search_seq));
@@ -2706,6 +2711,44 @@ fn layer_focus(
         }
     }
     iced::advanced::widget::operate(Focus(layer, Some(Box::new(pick)), 0, None))
+}
+
+fn lyric_find() -> Task<Message> {
+    use iced::advanced::widget::operation::{Outcome, Scrollable};
+    use iced::advanced::widget::{Id, Operation};
+    use iced::{Rectangle, Vector};
+    struct Find(Option<(f32, f32)>, Option<f32>);
+    impl Operation<Message> for Find {
+        fn traverse(&mut self, f: &mut dyn FnMut(&mut dyn Operation<Message>)) {
+            f(self);
+        }
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            b: Rectangle,
+            c: Rectangle,
+            _: Vector,
+            _: &mut dyn Scrollable,
+        ) {
+            if id == Some(&Id::from(crate::view::SCROLL)) {
+                self.0 = Some((c.y, b.height));
+            }
+        }
+        fn container(&mut self, id: Option<&Id>, b: Rectangle) {
+            if id == Some(&Id::from("lyric")) {
+                self.1 = Some(b.y);
+            }
+        }
+        fn finish(&self) -> Outcome<Message> {
+            match (self.0, self.1) {
+                (Some((top, h)), Some(y)) => {
+                    Outcome::Some(Message::LyricAt((y - top - h * 0.3).max(0.0)))
+                }
+                _ => Outcome::None,
+            }
+        }
+    }
+    iced::advanced::widget::operate(Find(None, None))
 }
 
 fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
