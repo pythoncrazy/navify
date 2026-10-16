@@ -2404,6 +2404,10 @@ impl App {
             big.extend(similar.iter().take(cols).map(|x| &x.cover));
             let appears = appears.map_or(&[][..], |v| &v[..]);
             big.extend(appears.iter().take(cols).map(|x| &x.cover));
+        } else if let Some((ar, sg)) = self.data::<(Vec<Artist>, Vec<Song>)>(key) {
+            small.extend(sg.iter().map(|s| &s.cover));
+            big.extend(ar.iter().take(cols).map(|a| &a.cover));
+            big.extend(crate::pages::public(self).take(cols).map(|p| &p.cover));
         } else if let Some((p, _)) = self.data::<Page<Album>>(key) {
             big.extend(p[tiles(p.len())].iter().map(|a| &a.cover));
         } else if let Some((p, _)) = self.data::<Page<Artist>>(key) {
@@ -2853,6 +2857,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             "lyrics" => Arc::new(s.lyrics(arg).await?),
             "song" => Arc::new(s.song(arg).await?),
             "search" => Arc::new(s.search(arg, 20).await?),
+            "profile" => Arc::new(s.top().await?),
             _ => anyhow::bail!("unknown key {k}"),
         })
     };
@@ -2956,6 +2961,8 @@ fn song_list(v: &AnyData) -> Option<(&[Song], &str)> {
         v.downcast_ref::<(String, Vec<Song>)>()
             .map(|(n, s)| (&s[..], n.as_str())),
         v.downcast_ref::<Vec<Song>>().map(|s| (&s[..], "Popular")),
+        v.downcast_ref::<(Vec<Artist>, Vec<Song>)>()
+            .map(|(_, s)| (&s[..], "Top tracks")),
     ]
     .into_iter()
     .flatten()

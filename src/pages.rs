@@ -664,6 +664,7 @@ pub fn route(app: &App) -> El<'_> {
         "folders" | "folder" | "radio" => Some(folders(app)),
         "lyrics" => Some(lyrics(app)),
         "settings" => Some(settings(app)),
+        "profile" => profile(app),
         _ => Some(missing().into()),
     };
     page.unwrap_or_else(|| Space::new().into())
@@ -810,9 +811,10 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
                 Message::Menu(Box::new(MenuKind::View)),
             )
         });
-    let empty = app
-        .data::<(Playlist, Vec<Song>)>(&app.route)
-        .is_some_and(|x| x.1.is_empty())
+    let empty = app.route == "profile"
+        || app
+            .data::<(Playlist, Vec<Song>)>(&app.route)
+            .is_some_and(|x| x.1.is_empty())
         || app
             .data::<(Vec<Song>, usize)>(&app.route)
             .is_some_and(|x| x.1 == 0);
@@ -830,10 +832,15 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     column![hero, rest].into()
 }
 
-pub fn avatar<'a>(name: &str, px: f32) -> iced::widget::Container<'a, Message> {
+fn initial(name: &str) -> (char, Color) {
     let first = name.chars().next().map_or('?', |c| c.to_ascii_uppercase());
-    let c = container(bold(first, 8.0 + px / 5.0).color(BG).center()).center(px);
-    c.style(fill(theme::hue(first as usize), px / 2.0))
+    (first, theme::hue(first as usize))
+}
+
+pub fn avatar<'a>(name: &str, px: f32) -> iced::widget::Container<'a, Message> {
+    let (first, color) = initial(name);
+    let c = container(bold(first, px * 0.42).color(BG).center()).center(px);
+    c.style(fill(color, px / 2.0))
 }
 
 fn meta<'a>(lead: impl Into<El<'a>>, rest: String) -> El<'a> {
@@ -1149,6 +1156,12 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let bg = theme::shade(genre_color(app, g), 0.5);
         return (off > hero_h(app) - 64.0).then(|| bar(t.into(), bg).into());
     }
+    if app.route == "profile" {
+        let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
+        let t = ell(user, app.main_w() - 2.0 * PAD, 24.0, Bold);
+        let bg = theme::dark(initial(user).1, 0.2);
+        return (off > hero_h(app) - 64.0).then(|| bar(t.into(), bg).into());
+    }
     let artist = app.data::<(Artist, Vec<Album>)>(&app.route);
     let (title, color, cols, banner) = match artist {
         Some((a, _)) => {
@@ -1174,6 +1187,53 @@ fn plain(html: &str) -> String {
     let parts = html.split('<').enumerate();
     let parts = parts.map(|(n, p)| [p, p.split_once('>').map_or("", |x| x.1)][usize::from(n > 0)]);
     parts.collect::<String>().trim().to_string()
+}
+
+pub fn public(app: &App) -> impl Iterator<Item = &Playlist> {
+    let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
+    pls.iter().filter(|p| p.public && app.owns(p))
+}
+
+fn profile(app: &App) -> Option<El<'_>> {
+    let (artists, songs) = app.data::<(Vec<Artist>, Vec<Song>)>("profile")?;
+    let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
+    let k = app.grid().0;
+    let head = |t, all| {
+        let hint = container(sub("Only visible to you", 14.0)).padding([0.0, PAD]);
+        column![heading(t, all), hint].spacing(4)
+    };
+    let cards = artists.iter().take(k).map(|a| artist_card(app, a));
+    let cards = container(Row::with_children(cards)).padding([0, 12]);
+    let top = (!artists.is_empty()).then(|| column![head("Top artists", None), cards].spacing(8));
+    let c = cols(app, true, false, songs.len());
+    let rows = songs.iter().enumerate();
+    let rows = rows.map(|(n, s)| container(track(app, s, n, "profile", c)).padding([0.0, PAD]));
+    let all = Some("songs:frequent".to_string());
+    let tracks =
+        (!songs.is_empty()).then(|| column![head("Top tracks", all)].extend(rows.map(Into::into)));
+    let pls = public(app).collect::<Vec<_>>();
+    let shelf = shelf(
+        "Public Playlists",
+        None,
+        pls.iter().take(k).map(|p| playlist_card(app, p)),
+    );
+    let body = column![top, tracks.map(|t| t.spacing(8)), shelf].spacing(40);
+    let p = Page {
+        art: avatar(user, art_px(app)).into(),
+        kind: "Profile",
+        title: user,
+        meta: sub(plural(pls.len() as u32, "Public Playlist"), 14.0)
+            .color(TEXT)
+            .into(),
+        color: initial(user).1,
+        extra: Vec::new(),
+        banner: None,
+    };
+    Some(page(
+        app,
+        p,
+        body.padding(padding::bottom(PAD * 2.0)).into(),
+    ))
 }
 
 fn artist(app: &App) -> Option<El<'_>> {
@@ -2396,9 +2456,10 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
                 let label = format!("Switch to {}", s.name);
                 it(' ', &label, Message::UseServer(s.id.clone()))
             });
+            let profile = it(' ', "Profile", Message::Nav("profile".into()));
             let settings = it(' ', "Settings", Message::Nav("settings".into()));
             let out = it(' ', "Log out", Message::LogOut);
-            others.chain([settings, out]).collect()
+            others.chain([profile, settings, out]).collect()
         }
         MenuKind::Song(s) | MenuKind::SongIn(s, _) if m.sub == 1 => {
             let name = match &s[..] {
