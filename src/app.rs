@@ -2052,8 +2052,11 @@ impl App {
                     return self.toast("The playlist is not available.");
                 };
                 let cover = p.cover.clone();
-                (self.new_pl, self.new_pl_desc) =
-                    (p.name.clone(), text_editor::Content::with_text(&p.comment));
+                (self.new_pl, self.new_pl_desc, self.new_pl_public) = (
+                    p.name.clone(),
+                    text_editor::Content::with_text(&p.comment),
+                    p.public,
+                );
                 self.modal = Some((id, kind));
                 let all = op::select_all(iced::widget::Id::new("layer"));
                 let focus = layer_focus(true, |_, n| n.min(2) - 1).chain(all);
