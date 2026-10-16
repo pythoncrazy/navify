@@ -616,7 +616,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let pls = shelf("Your playlists", None, pls);
     let tiles = container(Column::from_vec(rows.collect()).spacing(8)).padding([0.0, PAD]);
     let col = column![tiles].extend(shelves).push(pls).spacing(40);
-    Some(fade(theme::shade(c, 0.7), 332.0, col.padding([PAD, 0.0])))
+    Some(fade(theme::shade(c, 0.5), 332.0, col.padding([PAD, 0.0])))
 }
 
 struct Page<'a> {

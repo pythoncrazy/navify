@@ -2564,7 +2564,10 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
     if big {
         img = img.thumbnail(size, size);
     }
-    let small = img.resize_exact(24, 24, FilterType::Triangle).to_rgb8();
+    let (iw, ih) = (img.width(), img.height());
+    let (cw, ch) = ((iw * 88 / 100).max(1), (ih * 88 / 300).max(1));
+    let top = img.crop_imm(iw * 6 / 100, ih * 6 / 100, cw, ch);
+    let small = top.resize_exact(24, 8, FilterType::Triangle).to_rgb8();
     let (mut hue, mut all) = ([[0f32; 4]; 12], [0f32; 3]);
     for p in small.pixels() {
         let [r, g, b] = p.0.map(|c| c as f32 / 255.0);
@@ -2583,9 +2586,9 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
     }
     let top = hue.into_iter().max_by(|a, b| a[0].total_cmp(&b[0]));
     let [w, r, g, b] = top.expect("12 hue bins");
-    let l = ((all[0] * 0.3 + all[1] * 0.59 + all[2] * 0.11) / 576.0).clamp(0.15, 0.35);
-    let k = 0.5 / (r / w).max(g / w).max(b / w).max(0.05) / w;
-    let color = match w < 576.0 * 0.03 {
+    let l = ((all[0] * 0.3 + all[1] * 0.59 + all[2] * 0.11) / 192.0).clamp(0.15, 0.35);
+    let k = 0.72 / (r / w).max(g / w).max(b / w).max(0.05) / w;
+    let color = match w < 192.0 * 0.03 {
         true => Color::from_rgb(l, l, l),
         false => Color::from_rgb((r * k).min(1.0), (g * k).min(1.0), (b * k).min(1.0)),
     };
