@@ -2504,8 +2504,30 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 .iter()
                 .zip(0u8..)
                 .map(|(l, n)| item(l, None, n == sort, i::CHECK, set(|s, n| s.lib_sort = n, n)));
+            let views = [(i::COMPACT, true), (i::LIST, false)].map(|(c, v)| {
+                let on = app.cfg.settings.lib_compact == v;
+                let fg = if on { ACCENT } else { SUB };
+                let b = button(i(c, 16.0).color(fg).center()).width(Fill).height(32);
+                let b = b.style(theme::btn(
+                    [
+                        theme::tint(f32::from(u8::from(on)) * 0.1),
+                        theme::tint(0.1),
+                        theme::tint(0.1),
+                    ],
+                    [fg; 3],
+                    4.0,
+                ));
+                b.on_press(set(|s, b| s.lib_compact = b, v)).into()
+            });
+            let views = container(Row::with_children(views).spacing(4)).padding([4, 4]);
             let col = column![section("Sort by")].extend(rows);
-            return boxed(col.into(), 208.0, 41.0 + 40.0 * 3.0 + 8.0, 4);
+            let col = col.push(rule()).push(section("View as")).push(views);
+            return boxed(
+                col.into(),
+                208.0,
+                41.0 * 2.0 + 40.0 * 3.0 + 1.0 + 40.0 + 8.0,
+                4,
+            );
         }
         MenuKind::Disc => {
             let Some((id, f, _, albums)) = disc_args(app) else {

@@ -467,9 +467,9 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         .iter()
         .filter(|p| p.0 >> f & 1 == 1 && hit(p.3))
         .count();
-    let (off, view) = app.lib_scroll;
-    let span = (view.max(600.0) / 64.0) as usize + 8;
-    let lo = ((off / 64.0) as usize)
+    let ((off, view), h) = (app.lib_scroll, [64.0, 32.0][usize::from(app.lib_compact())]);
+    let span = (view.max(600.0) / h) as usize + 8;
+    let lo = ((off / h) as usize)
         .saturating_sub(k + 4)
         .min(rows.len().saturating_sub(span));
     let hi = (lo + span).min(rows.len());
@@ -489,7 +489,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.lib_mini());
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| name.to_lowercase().contains(&q);
-    let sort = app.cfg.settings.lib_sort;
+    let (sort, compact) = (app.cfg.settings.lib_sort, app.lib_compact());
     let item = |art: El<'a>, title: &'a str, sub: Cow<'a, str>, route: String| -> El<'a> {
         let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
         let on = !app.ctx.is_empty() && same(&app.ctx);
@@ -512,8 +512,18 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             }
         };
         let live = (on && app.playing).then(|| i(i::VOL2, 16.0).color(ACCENT));
-        let row = |art| media(art, title, sub, w - 112.0, fg).push(live).into();
-        let body = if mini { art } else { row(art) };
+        let body = match (mini, compact) {
+            (true, _) => art,
+            (_, true) => {
+                let kind = sub.split(pages::DOT).next().unwrap_or_default().to_string();
+                let name = theme::ell(title, w - 160.0, 14.0, Normal).color(fg);
+                let kind = txt(format!("{}{kind}", pages::DOT), 14.0)
+                    .color(SUB)
+                    .width(Fill);
+                row![name, kind].push(live).align_y(Center).into()
+            }
+            _ => media(art, title, sub, w - 112.0, fg).push(live).into(),
+        };
         let b = button(body).padding(8).width(Fill);
         let [a, h] = match (same(&app.route), app.menu_on(&route)) {
             (true, _) => [0.1, 0.22],
@@ -580,7 +590,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         )
     });
     let (rows, span) = lib_rows(app);
-    let gap = |n: usize| Space::new().height(n as f32 * 64.0);
+    let gap = |n: usize| Space::new().height(n as f32 * [64.0, 32.0][usize::from(compact)]);
     let (top, bottom) = (gap(span.start), gap(rows.len() - span.end));
     let rows = rows.into_iter().take(span.end).skip(span.start);
     let rows = rows.map(|(c, n, s, r, _)| {
@@ -604,7 +614,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let t = t.style(style).font(theme::fw(Normal)).size(14);
         t.padding([6, 8]).width(Fill)
     });
-    let order = row![txt(pages::LIB_SORTS[sort as usize], 14.0), i(i::LIST, 16.0)].spacing(8);
+    let view = [i::LIST, i::COMPACT][usize::from(app.cfg.settings.lib_compact)];
+    let order = row![txt(pages::LIB_SORTS[sort as usize], 14.0), i(view, 16.0)].spacing(8);
     let menu = Message::Menu(Box::new(MenuKind::LibSort));
     let order = theme::link_btn(order.align_y(Center), SUB, menu).padding([4, 8]);
     let order = tip(order, "Change the sort order", Bottom);
