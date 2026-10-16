@@ -463,6 +463,8 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         2 => rows.sort_by_cached_key(|r| (r.4.to_lowercase(), r.1.to_lowercase())),
         _ => {}
     }
+    let pins = &app.cfg.settings.pins;
+    rows.sort_by_key(|r| pins.iter().position(|p| *p == r.3).unwrap_or(usize::MAX));
     let k = PINS
         .iter()
         .filter(|p| p.0 >> f & 1 == 1 && hit(p.3))
@@ -525,6 +527,12 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             }
         };
         let live = (on && app.playing).then(|| i(i::VOL2, 16.0).color(ACCENT));
+        let pinned = route == "liked" || app.cfg.settings.pins.contains(&route);
+        let line = |w: f32, sub: Cow<'a, str>| {
+            let pin = pinned.then(|| theme::filled(theme::fill::PIN, 12.0).color(ACCENT));
+            let sub = theme::ell(sub, w - 16.0 * f32::from(u8::from(pinned)), 14.0, Normal);
+            row![pin, sub.color(SUB)].spacing(4).align_y(Center)
+        };
         let body = match (mini, view) {
             (true, _) | (_, 2) => art,
             (_, 0) => {
@@ -537,12 +545,19 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             }
             (_, 3) => {
                 let name = theme::ell(title, px, 16.0, Normal).color(fg);
-                let sub = theme::ell(sub, px, 14.0, Normal).color(SUB);
-                column![art, column![name, sub].spacing(2)]
+                column![art, column![name, line(px, sub)].spacing(2)]
                     .spacing(8)
                     .into()
             }
-            _ => media(art, title, sub, w - 112.0, fg).push(live).into(),
+            _ => {
+                let name = theme::ell(title, w - 112.0, 16.0, Normal).color(fg);
+                let lines = column![name, line(w - 112.0, sub)].spacing(2).width(Fill);
+                row![art, lines]
+                    .spacing(12)
+                    .align_y(Center)
+                    .push(live)
+                    .into()
+            }
         };
         let b = button(body)
             .padding([8, 8, 4, 12][view as usize])
