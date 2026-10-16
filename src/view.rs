@@ -496,7 +496,10 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let body = if mini { art } else { row(art) };
         let b = button(body).padding(8).width(Fill);
         let b = b.style(theme::track(same(&app.route)));
-        b.on_press(Message::Nav(route)).into()
+        let menu = Message::LibMenu(route.clone());
+        mouse_area(b.on_press(Message::Nav(route)))
+            .on_right_press(menu)
+            .into()
     };
     let head: El = if mini {
         let b = icon_btn(i::LIBRARY, 20.0, task(App::lib_collapse));

@@ -68,3 +68,4 @@ info 0xe0f9
 globe 0xe0e8
 lock 0xe10b
 check-circle-2 0xe226
+circle-minus 0xe07e
