@@ -121,6 +121,7 @@ pub mod icon {
     pub const CLOCK: char = '\u{e087}';
     pub const LISTPLUS: char = '\u{e23f}';
     pub const USER: char = '\u{e19f}';
+    pub const USERPLUS: char = '\u{e1a2}';
     pub const STAR: char = '\u{e176}';
     pub const FOLDER: char = '\u{e0d7}';
     pub const PENCIL: char = '\u{e1f9}';

@@ -51,3 +51,4 @@ panel-left 0xe12a
 grid-3x3 0xe0e9
 square-arrow-out-up-right 0xe5a4
 pin 0xe259
+user-plus 0xe1a2
