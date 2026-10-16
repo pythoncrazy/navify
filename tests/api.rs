@@ -184,10 +184,11 @@ async fn local_reads_and_writes_with_both_apis() -> Result<()> {
     let pl = s.playlist_create("navify test", &ids[..2]).await?;
     assert_eq!(pl.song_count, 2);
     let name = Some("navify test 2");
-    s.playlist_update(&pl.id, name, None, &ids[2..3], &[0])
+    s.playlist_update(&pl.id, name, None, Some(true), &ids[2..3], &[0])
         .await?;
     let (pl2, tracks) = s.playlist(&pl.id).await?;
     assert_eq!(Some(pl2.name.as_str()), name);
+    assert!(pl2.public);
     assert!(tracks.iter().map(|t| &t.id).eq([&ids[1], &ids[2]]));
     s.playlist_delete(&pl.id).await?;
     assert!(!s.playlists().await?.iter().any(|p| p.id == pl.id));

@@ -781,10 +781,11 @@ impl Session {
         id: &str,
         name: Option<&str>,
         comment: Option<&str>,
+        public: Option<bool>,
         add: &[String],
         remove: &[usize],
     ) -> Result<()> {
-        let q = json!({"playlistId": id, "name": name, "comment": comment,
+        let q = json!({"playlistId": id, "name": name, "comment": comment, "public": public,
             "songIdToAdd": add, "songIndexToRemove": remove});
         self.act("updatePlaylist", q).await
     }

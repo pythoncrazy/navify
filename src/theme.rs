@@ -123,6 +123,8 @@ pub mod icon {
     pub const DOWN: char = '\u{e06d}';
     pub const UP: char = '\u{e070}';
     pub const INFO: char = '\u{e0f9}';
+    pub const GLOBE: char = '\u{e0e8}';
+    pub const LOCK: char = '\u{e10b}';
 }
 
 fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
@@ -206,15 +208,14 @@ pub fn link_btn<'a, M: Clone + 'a>(c: impl Into<Element<'a, M>>, fg: Color, m: M
     button(c).padding(0).style(link(fg)).on_press(m)
 }
 
-pub fn pill_btn<'a, M: Clone + 'a>(label: &'a str, m: M) -> Btn<'a, M> {
+pub fn pill_btn<'a, M: Clone + 'a>(label: impl Into<Element<'a, M>>, m: M) -> Btn<'a, M> {
     let style = |t: &Theme, s| {
         let edge = if s == Status::Active { FIELD } else { TEXT };
         let mut b = link(TEXT)(t, s);
         b.border = Border::default().color(edge).width(1).rounded(500);
         b
     };
-    let b = button(bold(label, 14.0)).style(style);
-    b.padding([7, 15]).on_press(m)
+    button(label).style(style).padding([7, 15]).on_press(m)
 }
 
 pub fn chip_btn<'a, M: Clone + 'a>(label: &'a str, on: bool, m: M) -> Element<'a, M> {

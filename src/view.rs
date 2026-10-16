@@ -847,7 +847,8 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     }
     let named = !app.new_pl.trim().is_empty();
     let (name, desc) = (app.new_pl.clone(), app.new_pl_desc.text());
-    let ok = named.then(|| Message::Edit(id.into(), name, desc));
+    let public = app.new_pl_public;
+    let ok = named.then(|| Message::Edit(id.into(), name, desc, public));
     let input = |hint: &'static str, v: &str, n: u8| {
         let edge = [color!(0x535353); 2];
         let style = theme::input([theme::MENU_HOVER; 2], edge, [0.0, 1.0], 4.0);
@@ -879,7 +880,16 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     });
     let art = cover(app, pl.map_or("", |p| p.cover.as_str()), 180.0, false);
     let white = [TEXT, color!(0xf0f0f0), color!(0xf0f0f0)];
-    let save = container(act("Save", white, BG, 32, ok)).align_right(Fill);
+    let (c, label) = [(i::GLOBE, "Make public"), (i::LOCK, "Make private")][usize::from(public)];
+    let flip = crate::app::act(|a| a.new_pl_public ^= true);
+    let flip = theme::pill_btn(row![i(c, 16.0), bold(label, 14.0)].spacing(8), flip);
+    let flip = flip.padding(iced::Padding::new(6.0).left(11).right(15));
+    let save = row![
+        flip,
+        Space::new().width(Fill),
+        act("Save", white, BG, 32, ok)
+    ];
+    let save = save.align_y(Center);
     let head = row![bold("Edit details", 24.0).width(Fill), close].align_y(Center);
     let fields = row![art, column![name, desc].spacing(16)].spacing(16);
     let body = column![column![head, fields].spacing(24), save].spacing(8);
