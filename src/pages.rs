@@ -1323,7 +1323,7 @@ fn artist(app: &App) -> Option<El<'_>> {
         let label = bold(if all { "Show less" } else { "See more" }, 14.0);
         let b = button(label).padding(16).style(theme::link(SUB));
         let b = b.on_press(act(|a| a.popular_all = !a.popular_all));
-        container(b).padding([0.0, PAD])
+        container(b).padding(Padding::from([0.0, PAD]).bottom(19))
     });
     let rows = top.iter().take(n).enumerate();
     let rows = rows.map(|(k, s)| track(app, s, k, key, c3));
@@ -1352,7 +1352,8 @@ fn artist(app: &App) -> Option<El<'_>> {
     let all = format!("discography:{id}:{}", GROUPS[app.disc_chip as usize].0);
     let chips = container(Row::with_children(chips).spacing(8)).padding([0.0, PAD]);
     let discog = column![heading("Discography", Some(all)), chips];
-    let discog = discog.push(container(Row::with_children(shelf_cards)).padding([0, 12]));
+    let discog = discog
+        .push(container(Row::with_children(shelf_cards)).padding(Padding::from([0, 12]).top(4)));
     let similar = info.map_or(&[][..], |i| &i.similar[..]).iter().take(k);
     let similar = shelf(
         "Similar artists",
@@ -1385,10 +1386,10 @@ fn artist(app: &App) -> Option<El<'_>> {
             .width(Fill)
     });
     let popular = (!top.is_empty()).then(|| {
-        let left = popular.spacing(17).width(app.main_w() - cut);
-        row![left].push(pick)
+        let left = popular.spacing(18).width(app.main_w() - cut);
+        row![left].push(pick).padding(padding::top(5))
     });
-    let discog = (!albums.is_empty()).then(|| discog.spacing(12));
+    let discog = (!albums.is_empty()).then(|| discog.spacing(14));
     let body = column![popular, discog, similar, shelf("Appears On", None, appears)];
     let body = body.push(about).spacing(40);
     let body = body.padding(padding::bottom(PAD * 2.0));
