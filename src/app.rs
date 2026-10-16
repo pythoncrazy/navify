@@ -2354,7 +2354,7 @@ impl App {
         let tiles = |n: usize| span(n, cw + 52.0, cols, crate::pages::grid_y(self));
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
-        let mut wide: [Vec<&String>; 3] = Default::default();
+        let mut wide: [Vec<&String>; 4] = Default::default();
         let (_, gcols, tw, th) = crate::pages::browse(self);
         let (mut head, mut banner): (Vec<&String>, _) = Default::default();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
@@ -2441,16 +2441,12 @@ impl App {
             wide[2].extend(art);
         } else if let Some(h) = self.data::<Home>(key) {
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
-            small.extend(pls.iter().take(3).map(|p| &p.cover));
-            small.extend(h[0].iter().take(7).map(|a| &a.cover));
+            wide[3].extend(pls.iter().take(3).map(|p| &p.cover));
+            wide[3].extend(h[0].iter().take(7).map(|a| &a.cover));
             let hs = cw + 132.0;
-            let per = if self.main_w() - 2.0 * PAD >= 720.0 {
-                4
-            } else {
-                2
-            };
+            let (per, _, th, gap) = crate::pages::home_tiles(self);
             let tiles = (1 + pls.len().min(3) + h[0].len()).min(8);
-            let y0 = PAD + tiles.div_ceil(per) as f32 * 64.0 + 32.0;
+            let y0 = PAD + tiles.div_ceil(per) as f32 * (th + gap) - gap + 40.0;
             let shelves = h
                 .iter()
                 .map(|l| l.iter().take(cols).map(|a| &a.cover).collect());
@@ -2476,7 +2472,7 @@ impl App {
         let lead = self.lead_artist().filter(|_| self.panel == 1 && !self.full);
         let lead = lead.map(|id| (format!("w:{}", self.artist_cover(id)), self.bucket(side)));
         let art = crate::pages::art_px(self);
-        let [top, rows, genre] = wide;
+        let [top, rows, genre, tiles] = wide;
         let lists = [
             (big, cw - 24.0),
             (head, art),
@@ -2485,6 +2481,7 @@ impl App {
             (top, 72.0),
             (rows, 64.0),
             (genre, (tw * 0.45).round()),
+            (tiles, crate::pages::home_tiles(self).2),
         ];
         let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
         lists
