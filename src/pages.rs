@@ -1806,7 +1806,12 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     };
     let boxed = |el: El<'a>, w: f32, h: f32, pad: u16| {
         let c = container(el).padding(pad).width(w).height(h);
-        (c.style(fill(theme::MENU, 4.0)).into(), w, h)
+        let r = if matches!(m.kind, MenuKind::Create) {
+            8.0
+        } else {
+            4.0
+        };
+        (c.style(fill(theme::MENU, r)).into(), w, h)
     };
     let it = |c: char, l: &str, m: Message| Some((c, l.to_string(), m, false));
     let open = |n: u8, c: char, l: &str| {
@@ -1837,6 +1842,22 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu) -> (El<'a>, f32, f32) {
     let ids = |s: &[Song]| s.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
     let mut head: Option<El> = None;
     let list: Vec<Item> = match &m.kind {
+        MenuKind::Create => {
+            let art = container(i(i::MUSIC, 24.0)).center(48);
+            let art = art.style(fill(theme::tint(0.1), 24.0));
+            let label = column![
+                bold("Playlist", 16.0),
+                sub("Create a playlist with songs", 14.0)
+            ];
+            let r = row![art, label.spacing(2)].spacing(12).align_y(Center);
+            let msg = Message::PlNew(String::new(), Vec::new());
+            let hover = [theme::CLEAR, theme::tint(0.1), theme::tint(0.1)];
+            let b = button(r).padding(8).width(Fill);
+            let b = b
+                .style(theme::btn(hover, [TEXT; 3], 6.0))
+                .on_press(msg.clone());
+            return boxed(focusable(b, Some(msg), 6.0, Some("layer")), 367.0, 72.0, 4);
+        }
         MenuKind::Song(v) | MenuKind::SongIn(v, _) if m.sub == 2 && v.len() == 1 => {
             let id = &v[0].id;
             let cur = app.ratings.get(id).copied().unwrap_or(v[0].user_rating);

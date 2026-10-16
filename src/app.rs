@@ -55,6 +55,7 @@ pub enum MenuKind {
     Playlist(Playlist),
     User,
     Device,
+    Create,
 }
 
 #[derive(Clone, Debug)]
@@ -1652,7 +1653,10 @@ impl App {
                 return self.save_later();
             }
             Message::Menu(kind) => {
-                let (x, y) = cursor();
+                let (x, y) = match *kind {
+                    MenuKind::Create => (self.lib_w() - 108.0, 115.0),
+                    _ => cursor(),
+                };
                 let scan = matches!(*kind, MenuKind::Device).then(scan_devices);
                 self.menu = Some(Menu {
                     x,

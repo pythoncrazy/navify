@@ -505,16 +505,17 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     } else {
         let title = bold("Your Library", 16.0);
         let title = theme::link_btn(title, TEXT, task(App::lib_collapse));
-        let plus = row![i(i::PLUS, 16.0), bold("Create", 14.0)].spacing(8);
-        let plus = button(container(plus.align_y(Center)).center_y(32)).padding([0, 16]);
+        let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::Create));
+        let plus = row![
+            i([i::PLUS, i::X][usize::from(open)], 16.0),
+            bold("Create", 14.0)
+        ];
+        let plus = container(plus.spacing(8).align_y(Center)).center_y(32);
+        let plus = button(plus).padding([0, 16]);
         let plus = plus
-            .style(theme::btn(
-                [CHIP, color!(0x333333), color!(0x333333)],
-                [TEXT; 3],
-                500.0,
-            ))
-            .on_press(Message::PlNew(String::new(), Vec::new()));
-        let plus = tip(plus, "Create playlist", Bottom);
+            .style(theme::btn([ELEVATED, CHIP, CHIP], [TEXT; 3], 500.0))
+            .on_press(Message::Menu(Box::new(MenuKind::Create)));
+        let plus = tip(plus, "Create a playlist", Bottom);
         let title = tip(title, "Collapse Your Library", Bottom);
         let r = row![title, Space::new().width(Fill), plus];
         r.align_y(Center).into()
