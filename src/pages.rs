@@ -216,7 +216,11 @@ fn dots<'a>(k: MenuKind) -> El<'a> {
 }
 
 fn heading<'a>(t: impl text::IntoFragment<'a>, all: Option<String>) -> El<'a> {
-    let all = all.map(|r| link_btn(bold("Show all", 14.0), SUB, Message::Nav(r)));
+    let all = all.map(|r| {
+        let disc = r.starts_with("discography:") && r.matches(':').count() == 1;
+        let label = ["Show all", "See discography"][usize::from(disc)];
+        link_btn(bold(label, 14.0), SUB, Message::Nav(r))
+    });
     let r = row![bold(t, 24.0).width(Fill)].push(all).align_y(Center);
     container(r).padding([0.0, PAD]).into()
 }
@@ -1162,15 +1166,19 @@ fn detail(app: &App) -> Option<El<'_>> {
         let day = day.or((a.year > 0).then(|| a.year.to_string()));
         let label =
             (!a.labels.is_empty()).then(|| format!("\u{2117} {} {}", a.year, a.labels.join(", ")));
-        let notes = column![day.map(|d| sub(d, 14.0)), label.map(|l| sub(l, 11.0))].spacing(4);
+        let notes = column![day.map(|d| sub(d, 14.0)), label.map(|l| sub(l, 12.0))].spacing(2);
+        let year = |x: &Album| (x.year > 0).then(|| x.year.to_string()).unwrap_or_default();
         let more = more_by(app, a)
             .into_iter()
-            .map(|x| album_card(app, x, year_kind(x)));
+            .map(|x| album_card(app, x, year(x)));
         let all = Some(format!("discography:{}", a.artist_id));
         let more = shelf(format!("More by {}", a.artist), all, more);
-        column![container(notes).padding([0.0, PAD]), more]
-            .spacing(48)
-            .padding(padding::bottom(PAD))
+        column![
+            container(notes).padding(Padding::from([0.0, PAD]).top(9)),
+            more
+        ]
+        .spacing(66)
+        .padding(padding::bottom(PAD))
     });
     Some(page(app, p, body.push(foot).into()))
 }
