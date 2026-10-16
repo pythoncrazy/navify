@@ -2552,7 +2552,9 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         }
         MenuKind::Columns => {
             let st = &app.cfg.settings;
-            let album = ["album:", "discography:"].iter().any(|p| app.route.starts_with(p));
+            let album = ["album:", "discography:"]
+                .iter()
+                .any(|p| app.route.starts_with(p));
             let dated = app.route.starts_with("playlist:") || app.route == "liked";
             let check = |l: &'a str, on: bool, msg: Message| {
                 let c = container(on.then(|| i(i::CHECK, 12.0).color(BG))).center(16);
