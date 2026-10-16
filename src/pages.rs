@@ -952,7 +952,12 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     let server = app.session.as_ref().map(|s| &s.server);
     let (user, native) = server.map_or(("", false), |s| (s.user.as_str(), s.native));
     let n = (*total).max(items.len());
-    let count = (liked || native).then(|| format!("{DOT}{} songs", fmt_n(n)));
+    let len = (liked && items.len() >= n && n > 0)
+        .then(|| format!(", {}", fmt_long(items.iter().map(|s| s.duration).sum())));
+    let count = (liked || native).then(|| {
+        let songs = plural(n as u32, "song");
+        format!("{DOT}{songs}{}", len.unwrap_or_default())
+    });
     const SORTS: [(&str, &str); 8] = [
         ("name", "Title"),
         ("artist", "Artist"),
