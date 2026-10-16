@@ -62,6 +62,7 @@ pub struct Artist {
     pub cover: String,
     pub album_count: u32,
     pub song_count: u32,
+    pub play_count: u32,
     pub starred: bool,
     #[serde(alias = "mbzArtistId")]
     pub music_brainz_id: String,
@@ -714,6 +715,18 @@ impl Session {
         let list: Vec<Song> = self.get("search3", q, "/searchResult3/song").await?;
         let total = off + list.len() + usize::from(list.len() == n);
         Ok((list, total))
+    }
+
+    pub async fn top(&self) -> Result<(Vec<Artist>, Vec<Song>)> {
+        if !self.server.native {
+            return Ok(Default::default());
+        }
+        let q = json!({"_sort": "play_count", "_order": "DESC", "_start": 0, "_end": 10});
+        let (a, s) = tokio::try_join!(
+            self.nd::<Vec<Artist>>("artist", q),
+            self.songs("frequent", 0, 4)
+        )?;
+        Ok((a.0.into_iter().filter(|a| a.play_count > 0).collect(), s.0))
     }
 
     pub async fn search(&self, query: &str, n: usize) -> Result<Trio> {
