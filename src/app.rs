@@ -189,7 +189,7 @@ pub enum Message {
     ClearCache,
     Close,
     Noop,
-    Edit(String, String, String),
+    Edit(String, String, String, bool),
     Modal(String, u8),
     PlayCtx(String, u8),
     RowMenu(String, usize),
@@ -328,6 +328,7 @@ pub struct App {
     pub new_pl_desc: text_editor::Content,
     pub shot: Option<String>,
     pub new_pl: String,
+    pub new_pl_public: bool,
     pub sel: Option<(String, usize)>,
     pub picked: BTreeSet<usize>,
     anchor: usize,
@@ -476,7 +477,7 @@ impl App {
             .and_then(|v| v.downcast_ref())
     }
 
-    fn playlist(&self, id: &str) -> Option<&Playlist> {
+    pub fn playlist(&self, id: &str) -> Option<&Playlist> {
         let lib = self.data::<Lib>("lib");
         let p = lib.and_then(|l| l.playlists.iter().find(|p| p.id == id));
         p.or_else(|| {
@@ -677,7 +678,8 @@ impl App {
             .map_or(String::new(), |p| p.cover.clone());
         let fresh = self.pl_fresh(pid.clone(), old, 3);
         let undo = reload(&pid);
-        let f = |s: Session| async move { s.playlist_update(&pid, None, None, &add, &rm).await };
+        let f =
+            |s: Session| async move { s.playlist_update(&pid, None, None, None, &add, &rm).await };
         Task::batch([
             self.send(f, "Could not change the playlist.", undo)
                 .chain(fresh),
@@ -2037,17 +2039,19 @@ impl App {
                 let focus = layer_focus(true, |_, n| n.min(2) - 1).chain(all);
                 return Task::batch([self.want_covers([(cover, self.bucket(180.0))]), focus]);
             }
-            Message::Edit(id, name, comment) => {
+            Message::Edit(id, name, comment, public) => {
                 self.modal = None;
                 let (name, comment) = (name.trim().to_string(), comment.trim().to_string());
                 assert!(!name.is_empty(), "the dialog blocks an empty name");
-                let set = |p: &mut Playlist| (p.name, p.comment) = (name.clone(), comment.clone());
+                let set = |p: &mut Playlist| {
+                    (p.name, p.comment, p.public) = (name.clone(), comment.clone(), public)
+                };
                 self.edit_pl(&id, set);
                 self.edit::<(Playlist, Vec<Song>)>(&format!("playlist:{id}"), |(p, _)| set(p));
                 let undo = reload(&id);
                 let edit = |s: Session| async move {
                     let (n, c) = (Some(name.as_str()), Some(comment.as_str()));
-                    s.playlist_update(&id, n, c, &[], &[]).await
+                    s.playlist_update(&id, n, c, Some(public), &[], &[]).await
                 };
                 return self.send(edit, "Could not change the playlist.", undo);
             }

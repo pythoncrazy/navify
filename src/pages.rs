@@ -537,7 +537,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
 
 fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
     if let Some(e) = app.data::<String>(key) {
-        let retry = theme::pill_btn("Try again", task(App::retry));
+        let retry = theme::pill_btn(bold("Try again", 14.0), task(App::retry));
         let col = column![bold("Could not load this page.", 24.0), sub(e, 14.0), retry];
         let col = container(col.spacing(16).align_x(Center));
         return Some(col.center_x(Fill).padding(80).into());
@@ -668,9 +668,20 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let back = container(Space::new()).width(Fill).height(bh).style(bg);
         stack![back].push(img).push(dim).push(text).into()
     } else {
+        let id = app.route.strip_prefix("playlist:");
+        let edit = id.filter(|id| app.playlist(id).is_some_and(|p| app.owns(p)));
+        let edit = edit.map(|id| Message::Modal(id.into(), 1));
+        let click = |e: El<'a>| -> El<'a> {
+            let hand = iced::mouse::Interaction::Pointer;
+            match edit.clone() {
+                Some(m) => mouse_area(e).on_press(m).interaction(hand).into(),
+                None => e,
+            }
+        };
         let kind = (!p.kind.is_empty()).then(|| txt(p.kind, 14.0).font(theme::fw(Medium)));
-        let info = column![kind, title(app.main_w() - 3.0 * PAD - px), p.meta].spacing(8);
-        let hero = row![p.art, info].spacing(PAD).align_y(iced::Bottom);
+        let name = click(title(app.main_w() - 3.0 * PAD - px).into());
+        let info = column![kind, name, p.meta].spacing(8);
+        let hero = row![click(p.art), info].spacing(PAD).align_y(iced::Bottom);
         let hero = container(hero)
             .padding(Padding::new(PAD).top(64.0))
             .width(Fill);
@@ -800,7 +811,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         let meta = column![comment, meta(bold(&p.owner, 14.0), rest)];
         let page = Page {
             art: cover(app, &p.cover, px, false),
-            kind: ["Playlist", "Public Playlist"][usize::from(p.public)],
+            kind: ["Private Playlist", "Public Playlist"][usize::from(p.public)],
             title: &p.name,
             meta: meta.spacing(8).into(),
             color: head_color(app, &p.cover),
@@ -908,7 +919,10 @@ fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
     let w = (app.main_w() - 2.0 * PAD - 200.0) / 2.0;
     let rows = hits.into_iter().flat_map(|t| t.2.iter().take(10)).map(|s| {
         let art = cover(app, &s.cover, 40.0, false);
-        let add = theme::pill_btn("Add", Message::PlAdd(p.id.clone(), vec![s.id.clone()]));
+        let add = theme::pill_btn(
+            bold("Add", 14.0),
+            Message::PlAdd(p.id.clone(), vec![s.id.clone()]),
+        );
         let album = container(theme::ell(&s.album, w - 16.0, 14.0, Normal).color(SUB)).width(w);
         let r = row![
             media(art, &s.title, &s.artist, w - 52.0, TEXT),
@@ -1106,7 +1120,7 @@ fn artist(app: &App) -> Option<El<'_>> {
     let body = body.padding(padding::bottom(PAD * 2.0));
     let banner = banner(app, a);
     let follow = if on { "Following" } else { "Follow" };
-    let follow = theme::pill_btn(follow, Message::Star(vec![a.id.clone()], !on));
+    let follow = theme::pill_btn(bold(follow, 14.0), Message::Star(vec![a.id.clone()], !on));
     let p = Page {
         art: cover(app, &a.cover, art_px(app), true),
         kind: "",
@@ -1488,7 +1502,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         let active = app.cfg.active.as_ref() == Some(&s.id);
         let who = sub(format!("{}{DOT}{}", s.user, s.url), 14.0);
         let info = column![txt(&s.name, 14.0), who].spacing(2).width(Fill);
-        let out = active.then(|| theme::pill_btn("Log out", Message::LogOut));
+        let out = active.then(|| theme::pill_btn(bold("Log out", 14.0), Message::LogOut));
         row![info, out].align_y(Center).height(56).into()
     };
     let mb = |b: u64| b as f32 / 1_048_576.0;
@@ -1496,7 +1510,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let memory = mb(app.covers.bytes as u64);
     let cache = format!("{disk:.1} MB on disk, {memory:.1} MB in memory");
     let cache = sub(cache, 14.0);
-    let clear = theme::pill_btn("Clear", Message::ClearCache);
+    let clear = theme::pill_btn(bold("Clear", 14.0), Message::ClearCache);
     let cache = row![cache, clear].spacing(16).align_y(Center).into();
     let version = sub(env!("CARGO_PKG_VERSION"), 14.0).into();
     let col = column![
@@ -1559,7 +1573,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 .into(),
         )
     }));
-    let reset = theme::pill_btn("Reset", set(|s, ()| s.keys.clear(), ()));
+    let reset = theme::pill_btn(bold("Reset", 14.0), set(|s, ()| s.keys.clear(), ()));
     let col = col.push(line("Use the default shortcuts", reset.into()));
     let col = col.push(head("Servers"));
     let col = col.extend(app.cfg.servers.iter().map(server));
@@ -1595,8 +1609,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
             })
         })
     });
-    let copy = theme::pill_btn("Copy", copy);
-    let paste = theme::pill_btn("Paste", paste);
+    let copy = theme::pill_btn(bold("Copy", 14.0), copy);
+    let paste = theme::pill_btn(bold("Paste", 14.0), paste);
     let io = row![copy, paste].spacing(8).into();
     let col = col.push(line(
         "Copy the settings to the clipboard, or paste them",
