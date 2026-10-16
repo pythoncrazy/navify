@@ -576,8 +576,26 @@ impl App {
         [56.0, 32.0][usize::from(self.cfg.settings.compact)]
     }
 
-    pub fn lib_compact(&self) -> bool {
-        self.cfg.settings.lib_compact && !self.lib_mini()
+    pub fn lib_layout(&self) -> (u8, usize, f32, f32) {
+        let view = [self.cfg.settings.lib_view, 1][usize::from(self.lib_mini())];
+        let inner = self.lib_w() - 16.0;
+        let cols = |min: f32| ((inner / min) as usize).max(2);
+        match view {
+            0 => (0, 1, inner, 32.0),
+            2 => (
+                2,
+                cols(90.0),
+                inner / cols(90.0) as f32,
+                inner / cols(90.0) as f32,
+            ),
+            3 => (
+                3,
+                cols(128.0),
+                inner / cols(128.0) as f32,
+                inner / cols(128.0) as f32 + 50.0,
+            ),
+            _ => (1, 1, inner, 64.0),
+        }
     }
 
     pub fn lib_mini(&self) -> bool {
@@ -2492,12 +2510,9 @@ impl App {
         let next = (self.index + 1..self.queue.len()).take(ahead);
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
         let (rows, span) = crate::view::lib_rows(self);
-        small.extend(
-            rows[span]
-                .iter()
-                .filter(|_| !self.lib_compact())
-                .map(|r| r.0),
-        );
+        let (view, _, lw, _) = self.lib_layout();
+        let lib = Vec::from_iter(rows[span].iter().filter(|_| view > 0).map(|r| r.0));
+        let lib_px = [48.0, 48.0, lw - 8.0, lw - 24.0][view as usize];
         let now = Vec::from_iter(now.filter(|_| self.panel == 1 || self.full));
         let side = [self.right_w() - 32.0, 300.0][usize::from(self.full)];
         let lead = self.lead_artist().filter(|_| self.panel == 1 && !self.full);
@@ -2509,6 +2524,7 @@ impl App {
             (head, art),
             (now, side),
             (small, 56.0),
+            (lib, lib_px),
             (top, 72.0),
             (rows, 64.0),
             (genre, (tw * 0.45).round()),

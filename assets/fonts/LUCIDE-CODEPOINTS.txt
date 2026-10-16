@@ -48,3 +48,4 @@ arrow-down 0xe042
 arrow-up 0xe04a
 archive 0xe041
 panel-left 0xe12a
+grid-3x3 0xe0e9

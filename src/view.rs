@@ -467,13 +467,14 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         .iter()
         .filter(|p| p.0 >> f & 1 == 1 && hit(p.3))
         .count();
-    let ((off, view), h) = (app.lib_scroll, [64.0, 32.0][usize::from(app.lib_compact())]);
-    let span = (view.max(600.0) / h) as usize + 8;
-    let lo = ((off / h) as usize)
-        .saturating_sub(k + 4)
-        .min(rows.len().saturating_sub(span));
-    let hi = (lo + span).min(rows.len());
-    (rows, lo..hi)
+    let ((off, view), (_, cols, _, h)) = (app.lib_scroll, app.lib_layout());
+    let lo = ((off / h) as usize).saturating_sub(4) * cols;
+    let hi = lo + ((view.max(600.0) / h) as usize + 8) * cols;
+    let n = rows.len();
+    (
+        rows,
+        lo.saturating_sub(k).min(n)..hi.saturating_sub(k).min(n),
+    )
 }
 
 const PINS: [(u8, char, bool, &str, &str); 6] = [
@@ -489,7 +490,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let (w, f, mini) = (app.lib_w(), app.lib_filter, app.lib_mini());
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| name.to_lowercase().contains(&q);
-    let (sort, compact) = (app.cfg.settings.lib_sort, app.lib_compact());
+    let (sort, (view, cols, lw, rh)) = (app.cfg.settings.lib_sort, app.lib_layout());
+    let px = [48.0, 48.0, lw - 8.0, lw - 24.0][view as usize];
     let item = |art: El<'a>, title: &'a str, sub: Cow<'a, str>, route: String| -> El<'a> {
         let same = |r: &str| r == route || r.starts_with(&format!("{route}:"));
         let on = !app.ctx.is_empty() && same(&app.ctx);
@@ -505,16 +507,27 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                     true => Message::Toggle,
                     false => Message::PlayCtx(route.clone(), 0),
                 };
-                let r = [4.0, 24.0][usize::from(route.starts_with("artist:"))];
-                let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
-                let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
-                stack![art, top.style(theme::link(TEXT)).on_press(m)].into()
+                let top: El = match view > 1 {
+                    true => {
+                        let b = theme::sq(theme::filled(g, 16.0).color(BG).center(), 40.0);
+                        let b = b.style(theme::accent).on_press(m);
+                        let b = container(b).align_right(px).align_bottom(px);
+                        b.padding(8).into()
+                    }
+                    false => {
+                        let r = [4.0, 24.0][usize::from(route.starts_with("artist:"))];
+                        let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
+                        let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
+                        top.style(theme::link(TEXT)).on_press(m).into()
+                    }
+                };
+                stack![art, top].into()
             }
         };
         let live = (on && app.playing).then(|| i(i::VOL2, 16.0).color(ACCENT));
-        let body = match (mini, compact) {
-            (true, _) => art,
-            (_, true) => {
+        let body = match (mini, view) {
+            (true, _) | (_, 2) => art,
+            (_, 0) => {
                 let kind = sub.split(pages::DOT).next().unwrap_or_default().to_string();
                 let name = theme::ell(title, w - 160.0, 14.0, Normal).color(fg);
                 let kind = txt(format!("{}{kind}", pages::DOT), 14.0)
@@ -522,9 +535,18 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                     .width(Fill);
                 row![name, kind].push(live).align_y(Center).into()
             }
+            (_, 3) => {
+                let name = theme::ell(title, px, 16.0, Normal).color(fg);
+                let sub = theme::ell(sub, px, 14.0, Normal).color(SUB);
+                column![art, column![name, sub].spacing(2)]
+                    .spacing(8)
+                    .into()
+            }
             _ => media(art, title, sub, w - 112.0, fg).push(live).into(),
         };
-        let b = button(body).padding(8).width(Fill);
+        let b = button(body)
+            .padding([8, 8, 4, 12][view as usize])
+            .width(Fill);
         let [a, h] = match (same(&app.route), app.menu_on(&route)) {
             (true, _) => [0.1, 0.22],
             (_, true) => [0.1, 0.1],
@@ -580,8 +602,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let pins = pins.map(|&(_, c, green, t, r)| {
         let (bg, fg) = [(ELEVATED, SUB), (SONGS_BG, ACCENT)][usize::from(green)];
         let (liked, route) = (r == "liked", r.into());
-        let pic = liked.then(|| liked_art(48.0));
-        let pic = pic.unwrap_or_else(|| art(48.0, i(c, 0.0).color(fg), bg));
+        let pic = liked.then(|| liked_art(px));
+        let pic = pic.unwrap_or_else(|| art(px, i(c, 0.0).color(fg), bg));
         item(
             pic,
             t,
@@ -590,15 +612,34 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         )
     });
     let (rows, span) = lib_rows(app);
-    let gap = |n: usize| Space::new().height(n as f32 * [64.0, 32.0][usize::from(compact)]);
-    let (top, bottom) = (gap(span.start), gap(rows.len() - span.end));
+    let pins: Vec<El> = pins.collect();
+    let (k, n) = (pins.len(), rows.len());
+    let (lo, hi) = (
+        [span.start + k, 0][usize::from(span.start == 0)],
+        span.end + k,
+    );
+    let gap = |r: usize| Space::new().height(r as f32 * rh);
+    let (top, bottom) = (
+        gap(lo / cols),
+        gap((n + k).div_ceil(cols) - hi.div_ceil(cols)),
+    );
     let rows = rows.into_iter().take(span.end).skip(span.start);
-    let rows = rows.map(|(c, n, s, r, _)| {
+    let rows = rows.map(|(c, name, s, r, _)| {
         let round = r.starts_with("artist:");
-        item(cover(app, c, 48.0, round), n, s.into(), r)
+        item(cover(app, c, px, round), name, s.into(), r)
     });
-    let list = column(pins).push(top);
-    let list = list.extend(rows).push(bottom);
+    let mut tiles = pins.into_iter().filter(|_| lo == 0).chain(rows).peekable();
+    let mut list = column![top];
+    while tiles.peek().is_some() {
+        let r = tiles
+            .by_ref()
+            .take(cols)
+            .map(|t| container(t).width(Fill).into());
+        let r: Vec<El> = r.collect();
+        let pad = (r.len()..cols).map(|_| Space::new().width(Fill).into());
+        list = list.push(Row::with_children(r).extend(pad));
+    }
+    let list = list.push(bottom);
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
     let find = task(|a| {
         a.lib_find = a.lib_find.is_none().then(String::new);
@@ -614,8 +655,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let t = t.style(style).font(theme::fw(Normal)).size(14);
         t.padding([6, 8]).width(Fill)
     });
-    let view = [i::LIST, i::COMPACT][usize::from(app.cfg.settings.lib_compact)];
-    let order = row![txt(pages::LIB_SORTS[sort as usize], 14.0), i(view, 16.0)].spacing(8);
+    let icon = pages::LIB_VIEWS[view as usize];
+    let order = row![txt(pages::LIB_SORTS[sort as usize], 14.0), i(icon, 16.0)].spacing(8);
     let menu = Message::Menu(Box::new(MenuKind::LibSort));
     let order = theme::link_btn(order.align_y(Center), SUB, menu).padding([4, 8]);
     let order = tip(order, "Change the sort order", Bottom);

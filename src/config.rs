@@ -60,7 +60,7 @@ pub struct Settings {
     pub smooth: bool,
     pub hide_album: bool,
     pub hide_added: bool,
-    pub lib_compact: bool,
+    pub lib_view: u8,
 }
 
 impl Settings {
@@ -69,6 +69,7 @@ impl Settings {
         let ok = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5].contains(&self.zoom)
             && ["off", "track", "album"].contains(&self.replaygain.as_str())
             && self.lib_sort < 3
+            && self.lib_view < 4
             && self.play_mode < 4
             && self.lyrics_align < 3
             && within(self.volume, 0.0, 1.0)
@@ -123,7 +124,7 @@ impl Default for Settings {
             smooth: true,
             hide_album: false,
             hide_added: false,
-            lib_compact: false,
+            lib_view: 1,
             play_mode: 0,
             ratings: false,
             plays: false,
