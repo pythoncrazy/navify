@@ -349,11 +349,13 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         _ => container(album).width(c.1).into(),
     };
     let more = hot.then(|| icon_btn(i::DOTS, 16.0, Message::RowMenu(key.into(), n)));
-    let heart = (hot || starred).then(|| heart_btn(&s.id, starred, 16.0));
+    let liked = key == "liked";
+    let heart = (hot || starred && !liked).then(|| heart_btn(&s.id, starred, 16.0));
     let dur = sub(fmt_dur(s.duration), 14.0).width(56).align_x(Right);
     let thumb = art.then(|| cover(app, &s.cover, 40.0, false));
     let name = row![thumb, title].spacing(12).align_y(Center).width(c.0);
-    let added = (c.2 > 0.0).then(|| sub(date(&s.created), 14.0).width(c.2));
+    let added = date([&s.created, &s.starred_at][usize::from(liked)]);
+    let added = (c.2 > 0.0).then(|| sub(added, 14.0).width(c.2));
     let cur_rate = app.ratings.get(&s.id).copied().unwrap_or(s.user_rating);
     let stars = app.cfg.settings.ratings.then(|| {
         Row::with_children((1..=5u8).map(|k| {
