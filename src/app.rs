@@ -2344,14 +2344,14 @@ impl App {
     fn visible_covers(&self) -> Vec<(String, u32)> {
         let (off, view) = self.scroll();
         let (cols, cw) = self.grid();
-        use crate::pages::{BAR, DIR_Y, GRID_Y, HEAD, PAD};
+        use crate::pages::{BAR, DIR_Y, HEAD, PAD};
         let span = |n: usize, h: f32, per: usize, y0: f32| {
             let lo = ((off - y0) / h).max(0.0) as usize;
             (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
         };
         let y0 = crate::pages::hero_h(self) + BAR + HEAD;
         let rows = |v: &[Song]| span(v.len(), self.row_h(), 1, y0);
-        let tiles = |n: usize| span(n, cw + 52.0, cols, GRID_Y);
+        let tiles = |n: usize| span(n, cw + 52.0, cols, crate::pages::grid_y(self));
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
         let mut wide: [Vec<&String>; 3] = Default::default();
