@@ -296,33 +296,19 @@ pub fn seek(t: &Theme, s: slider::Status) -> slider::Style {
 }
 
 pub fn switch<'a, M: Clone + 'a>(on: bool, m: M) -> Btn<'a, M> {
-    let knob = container(iced::widget::Space::new().width(20).height(20));
-    let knob = knob.style(|_| {
-        container::Style::default()
-            .background(TEXT)
-            .border(Border::default().rounded(10))
-    });
-    let x = [
-        iced::alignment::Horizontal::Left,
-        iced::alignment::Horizontal::Right,
-    ][usize::from(on)];
+    let knob = container(iced::widget::Space::new().width(20).height(20)).style(fill(TEXT, 10.0));
+    let x = [iced::Alignment::Start, iced::Alignment::End][usize::from(on)];
     let track = container(knob).padding(2).width(42).align_x(x);
-    button(track).padding(0).on_press(m).style(move |_, s| {
-        let bg = [[color!(0x535353), SUB], [color!(0x1db954), ACCENT]][usize::from(on)]
-            [usize::from(s != Status::Active)];
-        BtnStyle {
-            background: Some(bg.into()),
-            border: Border::default().rounded(12),
-            ..BtnStyle::default()
-        }
-    })
+    let [a, h] = [[color!(0x535353), SUB], [color!(0x1db954), ACCENT]][usize::from(on)];
+    let b = button(track).padding(0).on_press(m);
+    b.style(btn([a, h, h], [TEXT; 3], 12.0))
 }
 
 pub fn pick(flat: bool) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style {
     move |t, s| {
         let hot = s != pick_list::Status::Active;
         let fg = if hot { TEXT } else { SUB };
-        let bg = [[ELEVATED, CHIP], [CLEAR; 2]][flat as usize][hot as usize];
+        let bg = [[ELEVATED, CHIP], [CLEAR, tint(0.0)]][flat as usize][hot as usize];
         let mut st = pick_list::default(t, s);
         (st.text_color, st.placeholder_color) = (fg, SUB);
         (st.handle_color, st.background) = (fg, bg.into());

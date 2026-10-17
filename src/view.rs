@@ -789,16 +789,12 @@ fn top_bar(app: &App) -> El<'_> {
         let b = b.style(theme::link(if on { SUB } else { theme::DIM }));
         tip(b.on_press_maybe(on.then_some(m)), label, Bottom)
     };
-    let round = |c: Txt<'static>, label: &'static str, m: Message| {
-        let b = button(container(c.center()).center(48)).padding(0);
-        tip(b.style(theme::round(ELEVATED)).on_press(m), label, Bottom)
-    };
     let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
     let avatar = button(pages::avatar(user, 32.0)).padding(8);
     let avatar = avatar.style(theme::round(ELEVATED));
     let home = match app.route == "home" {
         true => theme::filled(theme::fill::HOME, 24.0).color(TEXT),
-        false => i(i::HOME, 24.0).color(SUB),
+        false => i(i::HOME, 24.0),
     };
     let glass = text_input::Icon {
         font: theme::LUCIDE,
@@ -824,7 +820,7 @@ fn top_bar(app: &App) -> El<'_> {
     let clear = Message::Search(String::new());
     let x = (!app.search_q.is_empty())
         .then(|| tip(icon_btn(i::X, 20.0, clear.clone()), "Clear", Bottom));
-    let bar = container(Space::new().width(1).height(25)).style(fill(color!(0x7c7c7c), 0.0));
+    let bar = container(Space::new().width(1).height(25)).style(fill(theme::DIM, 0.0));
     let all = match on {
         true => theme::filled(theme::fill::BROWSE, 24.0),
         false => i(i::BROWSE, 24.0),
@@ -862,7 +858,10 @@ fn top_bar(app: &App) -> El<'_> {
     let back = nav(i::LEFT, app.hi > 0, "Go back", Message::Back);
     let right = container(right.spacing(8).align_y(Center)).align_right(Fill);
     let left = row![back, nav(i::RIGHT, fwd, "Go forward", Message::Fwd)];
-    let home = round(home, "Home", Message::Nav("home".into()));
+    let home = button(container(home.center()).center(48))
+        .padding(0)
+        .style(theme::round(ELEVATED));
+    let home = tip(home.on_press(Message::Nav("home".into())), "Home", Bottom);
     let bar = row![left.spacing(8).width(Fill), home, search, right];
     let bar = bar.spacing(8).align_y(Center);
     bar.padding([0, 8]).height(64).into()
@@ -982,10 +981,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             (_, 0) => {
                 let kind = sub.split(pages::DOT).next().unwrap_or_default().to_string();
                 let name = theme::ell(title, w - 160.0, 14.0, Normal).color(fg);
-                let kind = txt(format!("{}{kind}", pages::DOT), 14.0)
-                    .color(SUB)
-                    .width(Fill);
-                row![name, kind].push(live).align_y(Center).into()
+                let kind = theme::sub(format!("{}{kind}", pages::DOT), 14.0).width(Fill);
+                row![name, kind, live].align_y(Center).into()
             }
             (_, 3) => {
                 let name = theme::ell(title, px, 16.0, Normal).color(fg);
@@ -996,11 +993,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             _ => {
                 let name = theme::ell(title, w - 112.0, 16.0, Normal).color(fg);
                 let lines = column![name, line(w - 112.0, sub)].spacing(2).width(Fill);
-                row![art, lines]
-                    .spacing(12)
-                    .align_y(Center)
-                    .push(live)
-                    .into()
+                row![art, lines, live].spacing(12).align_y(Center).into()
             }
         };
         let b = button(body)
@@ -1060,15 +1053,11 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let (liked, route) = (r == "liked", r.into());
         let pic = liked.then(|| liked_art(px));
         let pic = pic.unwrap_or_else(|| art(px, i(c, 0.0).color(fg), bg));
-        item(
-            pic,
-            t,
-            match liked {
-                true => format!("Playlist{}{user}", pages::DOT).into(),
-                false => "Library".into(),
-            },
-            route,
-        )
+        let kind = match liked {
+            true => format!("Playlist{}{user}", pages::DOT).into(),
+            false => "Library".into(),
+        };
+        item(pic, t, kind, route)
     });
     let (rows, span) = lib_rows(app);
     let pins: Vec<El> = pins.collect();
@@ -1086,15 +1075,11 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let rows = rows.map(|(c, name, k, id, by)| {
         let s: Cow<str> = match k {
             "artist" => "Artist".into(),
-            "album" => format!("Album \u{2022} {by}").into(),
-            _ => format!("Playlist \u{2022} {by}").into(),
+            "album" => format!("Album{}{by}", pages::DOT).into(),
+            _ => format!("Playlist{}{by}", pages::DOT).into(),
         };
-        item(
-            cover(app, c, px, k == "artist"),
-            name,
-            s,
-            format!("{k}:{id}"),
-        )
+        let pic = cover(app, c, px, k == "artist");
+        item(pic, name, s, format!("{k}:{id}"))
     });
     let mut tiles = pins.into_iter().filter(|_| lo == 0).chain(rows).peekable();
     let mut list = column![top];
@@ -1182,13 +1167,13 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
 
 fn player_bar(app: &App) -> El<'_> {
     let song = app.current_song();
-    let side = |t: El<'static>, on: bool, label: &'static str, m: Message| {
+    fn side(t: impl Into<El<'static>>, on: bool, label: &'static str, m: Message) -> El<'static> {
         let dot = container(Space::new().width(4).height(4)).style(fill(ACCENT, 2.0));
         let dot = on.then(|| container(dot).center_x(Fill).align_bottom(Fill));
         let b = theme::sq(stack![container(t).center(Fill)].push(dot), 32.0);
         let b = b.style(theme::link(if on { ACCENT } else { SUB }));
         tip(b.on_press(m), label, Top)
-    };
+    }
     let room = (app.view_size().0 - 16.0) * 0.3 - 8.0;
     let tw = (room - 112.0).min(200.0);
     let left = song.filter(|_| !app.full).map(|s| {
@@ -1200,7 +1185,7 @@ fn player_bar(app: &App) -> El<'_> {
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));
         let lines = column![title, artists_line(&s.artists, 12.0, tw)].spacing(2);
-        let heart = (!radio).then(|| side(theme::saved(on, 16.0).into(), false, label, like));
+        let heart = (!radio).then(|| side(theme::saved(on, 16.0), false, label, like));
         row![art, lines, heart].spacing(12).align_y(Center)
     });
     let dur = song.map_or(0.0, |s| s.duration).max(1.0);
@@ -1259,21 +1244,11 @@ fn player_bar(app: &App) -> El<'_> {
     let repeat = ["Enable repeat", "Enable repeat one", "Disable repeat"][rep];
     let repeat_icon = dic([i::REPEAT, i::REPEAT, i::REPEAT1][rep]);
     let controls = row![
-        side(dic(i::SHUFFLE).into(), on, shuffle, Message::Shuffle),
-        side(
-            dfi(theme::fill::PREV).into(),
-            false,
-            "Previous",
-            Message::Prev
-        ),
+        side(dic(i::SHUFFLE), on, shuffle, Message::Shuffle),
+        side(dfi(theme::fill::PREV), false, "Previous", Message::Prev),
         play,
-        side(
-            dfi(theme::fill::NEXT).into(),
-            false,
-            "Next",
-            Message::Next(true)
-        ),
-        side(repeat_icon.into(), rep > 0, repeat, act(App::repeat)),
+        side(dfi(theme::fill::NEXT), false, "Next", Message::Next(true)),
+        side(repeat_icon, rep > 0, repeat, act(App::repeat)),
     ];
     let center = column![controls.spacing(8).align_y(Center), progress];
     let center = center.spacing(8).align_x(Center).max_width(722);
@@ -1299,38 +1274,36 @@ fn player_bar(app: &App) -> El<'_> {
     let mute = if app.muted { "Unmute" } else { "Mute" };
     let np = Message::Panel(1);
     let hot = app.hover.as_deref() == Some("queue");
+    let q = [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(app.panel == 2)];
+    let queue = side(
+        queue_icon(14.5, q),
+        app.panel == 2,
+        "Queue",
+        Message::Panel(2),
+    );
     let panels = row![
-        song.map(|_| side(ic(i::PR).into(), app.panel == 1, "Now playing view", np)),
-        song.map(|_| side(ic(i::LYRICS).into(), lyrics, "Lyrics", words)),
-        hov(
-            mouse_area(side(
-                queue_icon(
-                    14.5,
-                    [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(app.panel == 2)]
-                ),
-                app.panel == 2,
-                "Queue",
-                Message::Panel(2)
-            )),
-            "queue".into(),
-            None
-        ),
+        song.map(|_| side(ic(i::PR), app.panel == 1, "Now playing view", np)),
+        song.map(|_| side(ic(i::LYRICS), lyrics, "Lyrics", words)),
+        hov(mouse_area(queue), "queue".into(), None),
     ];
-    let right = row![
-        (!app.full).then_some(panels),
-        device.then(|| side(
-            ic(i::DEVICE).into(),
+    let device = device.then(|| {
+        side(
+            ic(i::DEVICE),
             app.panel == 3,
             "Connect to a device",
-            Message::Panel(3)
-        )),
-        side(vol_icon.into(), false, mute, act(|a| a.muted = !a.muted)),
+            Message::Panel(3),
+        )
+    });
+    let right = row![
+        (!app.full).then_some(panels),
+        device,
+        side(vol_icon, false, mute, act(|a| a.muted = !a.muted)),
         volume,
         Space::new().width(8),
         match (app.full, song) {
             (false, None) => container(dic(i::FULL)).center(32).into(),
             (full, _) => side(
-                ic([i::FULL, i::WINDOW][usize::from(full)]).into(),
+                ic([i::FULL, i::WINDOW][usize::from(full)]),
                 false,
                 ["Full screen", "Exit full screen"][usize::from(full)],
                 task(move |a| a.set_full(!full)),
