@@ -288,7 +288,7 @@ pub struct App {
     pub history: Vec<String>,
     pub hi: usize,
     pub cache: HashMap<String, (Instant, AnyData)>,
-    seeds: HashMap<String, AnyData>,
+    pub seeds: HashMap<String, AnyData>,
     pub pending: HashSet<String>,
     pub scrolls: HashMap<String, (f32, f32)>,
     pub lyric: bool,
@@ -789,6 +789,9 @@ impl App {
                 v.downcast_ref::<Trio>().map(|r| &r.0[..]),
                 v.downcast_ref::<(Artist, Vec<Album>)>()
                     .map(|x| std::slice::from_ref(&x.0)),
+                v.downcast_ref::<(Vec<Artist>, Vec<Song>)>()
+                    .map(|x| &x.0[..]),
+                v.downcast_ref::<Vec<Artist>>().map(|x| &x[..]),
                 v.downcast_ref::<Info>().map(|x| &x.similar[..]),
                 v.downcast_ref::<Lib>().map(|l| &l.artists[..]),
             ];
@@ -863,13 +866,14 @@ impl App {
     }
 
     fn save_later(&mut self) -> Task<Message> {
+        let covers = self.covers_now();
         if !self.cfg.settings.queue_sync {
-            return Task::none();
+            return covers;
         }
         self.save_seq += 1;
         let n = self.save_seq;
         let save = task(move |a| Task::batch((n == a.save_seq).then(|| a.save_queue())));
-        later(5.0, save)
+        Task::batch([covers, later(5.0, save)])
     }
 
     fn save_queue(&self) -> Task<Message> {
@@ -1201,10 +1205,7 @@ impl App {
             let (own, k) = (s.clone(), id.clone());
             let s = s.clone();
             let load = async move {
-                static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-                let _net = NET.acquire().await.expect("the cover semaphore is open");
                 let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
-                drop(_net);
                 let wide = k.strip_prefix('b').and_then(|r| r.split_once(':'));
                 let wide = wide.and_then(|(n, _)| n.parse::<f32>().ok());
                 let px = if wide.is_some() { 1280 } else { size };
@@ -1310,16 +1311,25 @@ impl App {
             (self.search_q, self.search_seq) = (q.into(), self.search_seq + 1);
         }
         let key = self.key_of(&route);
+        self.seeds.extend(self.seed(&key).map(|v| (key.clone(), v)));
         let id = route.strip_prefix("artist:");
+        let b = id
+            .filter(|_| self.cfg.settings.banners)
+            .and_then(|_| self.data::<(Artist, Vec<Album>)>(&key))
+            .map(|(a, _)| a.banner_key());
         let parts = id.map(|id| ["top", "info", "appears"].map(|k| format!("{k}:{id}")));
         let parts = parts.as_ref().map_or(&[][..], |p| &p[..]);
         let about = self.lead_artist().map(|id| format!("info:{id}"));
-        let keep =
-            |k: &String| *k == key || k == "lib" || parts.contains(k) || about.as_ref() == Some(k);
+        let keep = |k: &String| {
+            *k == key
+                || k == "lib"
+                || parts.contains(k)
+                || about.as_ref() == Some(k)
+                || b.as_ref() == Some(k)
+        };
         self.cache
             .retain(|k, (t, _)| t.elapsed() < STALE || keep(k));
-        self.seeds.extend(self.seed(&key).map(|v| (key.clone(), v)));
-        let keys = parts.iter().map(String::as_str);
+        let keys = parts.iter().chain(&b).map(String::as_str);
         let keys = [key.as_str(), "lib"].into_iter().chain(keys);
         let mut tasks: Vec<_> = keys.map(|k| self.request(k, 0)).collect();
         tasks.push(self.disc_load());
@@ -1568,7 +1578,11 @@ impl App {
             }
             Message::Search(q) => {
                 (self.search_q, self.search_seq) = (q, self.search_seq + 1);
-                return later(0.25, Message::SearchGo(self.search_seq));
+                let (t, n) = (self.search_q.trim(), self.search_seq);
+                if t.is_empty() || self.cache.contains_key(&format!("search:{t}")) {
+                    return self.update(Message::SearchGo(n));
+                }
+                return later(0.25, Message::SearchGo(n));
             }
             Message::SearchGo(n) if n == self.search_seq => {
                 let q = self.search_q.trim();
@@ -1661,10 +1675,11 @@ impl App {
                     .collect();
                 self.star(&ids, on);
                 let star = |s: Session| async move { s.star(&ids, on).await };
-                return self.send(star, "Could not update Your Library.", move |a| {
+                let star = self.send(star, "Could not update Your Library.", move |a| {
                     a.star(&back, !on);
                     Task::none()
                 });
+                return Task::batch([self.covers_now(), star]);
             }
             Message::Rate(id, n) => {
                 let old = self.ratings.insert(id.clone(), n);
