@@ -796,19 +796,16 @@ fn top_bar(app: &App) -> El<'_> {
         true => theme::filled(theme::fill::HOME, 24.0).color(TEXT),
         false => i(i::HOME, 24.0),
     };
-    let glass = text_input::Icon {
-        font: theme::LUCIDE,
-        code_point: i::SEARCH,
-        size: Some(22.0.into()),
-        spacing: 12.0,
-        side: text_input::Side::Left,
-    };
     let style = theme::input([ELEVATED, CHIP], [BG, TEXT], [0.0, 2.0], 500.0);
     let hint = "What do you want to play?";
     let search = text_input(hint, &app.search_q);
     let search = search.id("search").on_input(Message::Search);
     let search = search.on_submit(Message::SearchGo(app.search_seq));
-    let search = search.style(style).icon(glass).width(474).size(16);
+    let search = search
+        .style(style)
+        .icon(theme::glass(22.0, 12.0))
+        .width(474)
+        .size(16);
     let search = search.font(theme::fw(Normal));
     let search = search.padding(iced::Padding::new(13.0).left(16.0).right(100.0));
     let search = search.line_height(text::LineHeight::Absolute(22.0.into()));
