@@ -811,26 +811,35 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
     let (n, tw, th, gap) = home_tiles(app);
     let big = th > 48.0;
-    let tile = |art: El<'a>, name: &'a str, route: String, cid: &str| -> El<'a> {
+    let tile = |art: El<'a>, name: &'a str, cid: &str, k: Option<MenuKind>| -> El<'a> {
+        let route = match &k {
+            Some(MenuKind::Playlist(p)) => format!("playlist:{}", p.id),
+            Some(MenuKind::Album(a)) => format!("album:{}", a.id),
+            _ => "liked".into(),
+        };
         let name = ell(name, tw - th - 56.0, [14.0, 16.0][usize::from(big)], Bold);
         let body = row![art, name].spacing([8, 16][usize::from(big)]);
-        let style = theme::btn([0.1, 0.2, 0.3].map(theme::tint), [TEXT; 3], 4.0);
+        let idle = [0.1, 0.2][usize::from(app.menu_on(&route))];
+        let style = theme::btn([idle, 0.2, 0.3].map(theme::tint), [TEXT; 3], 4.0);
         let b = button(body.align_y(Center)).padding(0).width(tw).height(th);
         let b = b.clip(true).style(style);
         let b = b.on_press(Message::Nav(route.clone()));
         let play = play_btn(app, [32.0, 48.0][usize::from(big)], &route);
         let play = container(play).align_right(Fill).center_y(th);
         let play = play.padding([0, 8]);
-        let m = mouse_area(play_over(app, b.into(), play.into(), &route));
+        let menu = k.map_or(Message::Noop, |k| Message::Menu(Box::new(k)));
+        let m = mouse_area(play_over(app, b.into(), play.into(), &route)).on_right_press(menu);
         hov(m, format!("tile:{cid}"), None).into()
     };
     let pins = pls.iter().take(3);
-    let pins = pins.map(|p| (&p.cover, &p.name, format!("playlist:{}", p.id)));
+    let pins = pins.map(|p| (&p.cover, &p.name, MenuKind::Playlist(p.clone())));
     let recent = h[0].iter();
-    let recent = recent.map(|a| (&a.cover, &a.name, format!("album:{}", a.id)));
+    let recent = recent.map(|a| (&a.cover, &a.name, MenuKind::Album(Box::new(a.clone()))));
     let small = |c| cover(app, c, th, false);
-    let rest = pins.chain(recent).map(|(c, n, r)| tile(small(c), n, r, c));
-    let liked = tile(liked_art(th), "Liked Songs", "liked".into(), "");
+    let rest = pins
+        .chain(recent)
+        .map(|(c, n, k)| tile(small(c), n, c, Some(k)));
+    let liked = tile(liked_art(th), "Liked Songs", "", None);
     let mut tiles = std::iter::once(liked).chain(rest).take(8);
     let rows = std::iter::from_fn(|| {
         let r: Vec<El> = tiles.by_ref().take(n).collect();
