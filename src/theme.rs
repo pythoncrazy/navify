@@ -251,6 +251,15 @@ pub fn fill(c: impl Into<Background>, r: f32) -> impl Fn(&Theme) -> container::S
     move |_| s.border(Border::default().rounded(r))
 }
 
+pub fn wash(a: f32) -> impl Fn(&Theme) -> container::Style {
+    let bg = (a > 0.0).then(|| tint(a).into());
+    let s = container::Style {
+        background: bg,
+        ..Default::default()
+    };
+    move |_| s.border(Border::default().rounded(4))
+}
+
 pub fn hue(n: usize) -> Color {
     const P: [u32; 12] = [
         0xdc148c, 0x006450, 0x8400e7, 0x1e3264, 0xe8115b, 0x27856a, 0x477d95, 0xe13300, 0xba5d07,
