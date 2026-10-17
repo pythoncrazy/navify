@@ -1476,7 +1476,7 @@ impl App {
         let grid = Task::batch(grid.then(|| self.disc_load()));
         let zoom = Task::batch(zoom.then(|| self.update(Message::Resize(w, h))));
         let heard = Task::batch(heard.then(|| self.listen(self.playing)));
-        Task::batch([grid, zoom, heard, self.persist()])
+        Task::batch([grid, zoom, heard, self.covers_now(), self.persist()])
     }
 
     fn reset(&mut self) -> Task<Message> {
@@ -1799,6 +1799,7 @@ impl App {
                 });
             }
             Message::Queue(songs, next) => {
+                self.menu = None;
                 if songs.is_empty() {
                     return Task::none();
                 }
@@ -1864,11 +1865,16 @@ impl App {
                 }
                 return t;
             }
-            Message::MenuClose if self.full && self.menu.is_none() && self.modal.is_none() => {
+            Message::MenuClose
+                if self.full
+                    && self.menu.is_none()
+                    && self.modal.is_none()
+                    && self.recording.is_none() =>
+            {
                 return self.set_full(false);
             }
             Message::MenuClose => {
-                if self.menu.is_none() && self.modal.is_none() {
+                if self.menu.is_none() && self.modal.is_none() && self.recording.is_none() {
                     (self.sel, self.picked) = (None, BTreeSet::new());
                     if self.pl_find.take().is_some() | self.lib_find.take().is_some() {
                         return self.covers_now();
@@ -1878,6 +1884,21 @@ impl App {
             }
             Message::Key(c) if self.recording.is_some() => {
                 let id = self.recording.take().expect("a recording");
+                let fixed = matches!(
+                    c.as_str(),
+                    "Tab"
+                        | "Shift+Tab"
+                        | "ArrowUp"
+                        | "ArrowDown"
+                        | "ArrowLeft"
+                        | "ArrowRight"
+                        | "Enter"
+                        | "Delete"
+                        | "Backspace"
+                );
+                if fixed {
+                    return Task::none();
+                }
                 let used: Vec<&str> = KEYS
                     .iter()
                     .map(|k| k.0)
@@ -1903,7 +1924,9 @@ impl App {
                                 .map(|(k, n)| self.update(Message::PlayAt(k, n))),
                         );
                     }
-                    (_, "Delete" | "Backspace") => Message::DeleteSel,
+                    (_, "Delete" | "Backspace") if self.menu.is_none() && self.modal.is_none() => {
+                        Message::DeleteSel
+                    }
                     _ => return Task::none(),
                 };
                 return self.update(m);
@@ -1970,8 +1993,9 @@ impl App {
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
                 let scan = (self.panel == 3).then(scan_devices);
+                let find = (self.panel == 4).then(|| op::focus("pladd"));
                 let t = [self.covers_now(), self.about(), self.history()];
-                return Task::batch(t.into_iter().chain(scan));
+                return Task::batch(t.into_iter().chain(scan).chain(find));
             }
             Message::Drag(d) => {
                 self.drag = d;
@@ -2166,6 +2190,7 @@ impl App {
                 }
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
+            Message::Arrow(_) if self.modal.is_some() => {}
             Message::Arrow(up) => {
                 use crate::pages::DIR_Y;
                 let Some((key, n)) = self.sel.clone() else {
@@ -2246,7 +2271,7 @@ impl App {
                 return Task::batch([self.want_covers([(cover, self.bucket(180.0))]), focus]);
             }
             Message::Edit(id, name, comment, public) => {
-                self.modal = None;
+                (self.menu, self.modal) = (None, None);
                 let (name, comment) = (name.trim().to_string(), comment.trim().to_string());
                 assert!(!name.is_empty(), "the dialog blocks an empty name");
                 let set = |p: &mut Playlist| {
@@ -2867,15 +2892,19 @@ pub const KEYS: [KeyAction; 27] = [
     }),
     ("lib_find", "Search in Your Library", "C+Alt+F", || {
         task(|a| {
+            a.cfg.settings.lib_collapsed = false;
             a.lib_find.get_or_insert_default();
-            op::focus("libfind")
+            Task::batch([a.covers_now(), op::focus("libfind")])
         })
     }),
     ("settings", "Settings", "C+,", || {
         Message::Nav("settings".into())
     }),
     ("shortcuts", "Keyboard shortcuts", "C+/", || {
-        act(|a| a.modal = Some((String::new(), 3)))
+        act(|a| match a.modal {
+            Some((_, 3)) => a.modal = None,
+            _ => a.modal = Some((String::new(), 3)),
+        })
     }),
     ("close", "Close the window", "C+W", || {
         Message::Window(false)

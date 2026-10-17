@@ -117,7 +117,10 @@ fn find_input<'a>(q: &str, id: &'static str) -> iced::widget::TextInput<'a, Mess
         spacing: 8.0,
         side: text_input::Side::Left,
     };
-    field.icon(glass).font(theme::fw(Normal))
+    field
+        .on_submit(Message::Noop)
+        .icon(glass)
+        .font(theme::fw(Normal))
 }
 
 fn plural(n: u32, word: &str) -> String {
@@ -1030,7 +1033,12 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                     .id("plfind")
                     .width(220)
                     .size(14);
-                let t = t.on_input(|v| act(move |a| a.pl_find = Some(v.clone())));
+                let t = t.on_input(|v| {
+                    task(move |a| {
+                        a.pl_find = Some(v.clone());
+                        a.covers_now()
+                    })
+                });
                 let t = t.on_submit(Message::Noop);
                 let glass = text_input::Icon {
                     font: theme::LUCIDE,
@@ -1041,7 +1049,14 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                 };
                 let t = t.icon(glass).style(style).font(theme::fw(Normal));
                 let t = t.padding(Padding::new(8.0).left(12).right(28));
-                let x = icon_btn(i::X, 14.0, act(|a| a.pl_find = None));
+                let x = icon_btn(
+                    i::X,
+                    14.0,
+                    task(|a| {
+                        a.pl_find = None;
+                        a.covers_now()
+                    }),
+                );
                 stack![t, container(x).align_right(Fill).center_y(Fill)]
                     .width(220)
                     .into()
@@ -2149,6 +2164,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let skip = text_input("live, remix, intro", &st.queue_skip);
     let skip = skip
         .on_input(|v| set(|s, v| s.queue_skip = v, v))
+        .on_submit(Message::Noop)
         .width(271);
     let skip = skip.style(theme::input([ELEVATED; 2], [GREY; 2], [0.0, 1.0], 4.0));
     let skip = skip
@@ -2753,7 +2769,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let sort = |l: &'a str, name: bool| {
                 let on = app.disc_name == name;
                 let m = task(move |a| {
-                    (a.disc_old, a.disc_name) = (on && !a.disc_old, name);
+                    (a.menu, a.disc_old, a.disc_name) = (None, on && !a.disc_old, name);
                     a.disc_load()
                 });
                 item(l, None, on, arrow, m)
@@ -2788,7 +2804,11 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                         _ => n | (16 * u8::from(n == 4)),
                     };
                     let tail = if n == 0 { i::CHECK } else { arrow };
-                    item(l, None, n == key, tail, act(move |a| a.pl_sort = next))
+                    let m = task(move |a| {
+                        (a.menu, a.pl_sort) = (None, next);
+                        a.covers_now()
+                    });
+                    item(l, None, n == key, tail, m)
                 });
                 column![section("Sort by")].extend(rows)
             });
@@ -2902,6 +2922,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         MenuKind::User => {
             let url = user.map_or(String::new(), |s| s.url.clone());
             let account = task(move |a| {
+                a.menu = None;
                 let (cmd, pre): (&str, &[&str]) = match std::env::consts::OS {
                     "windows" => ("cmd", &["/c", "start", ""]),
                     "macos" => ("open", &[]),

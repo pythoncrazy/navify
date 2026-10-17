@@ -295,6 +295,13 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     assert!(app.binding("shuffle") == "C+R" && app.binding("repeat").is_empty());
     let _ = app.update(Message::Key("C+R".into()));
     assert!(app.shuffle.is_none() && app.repeat == 0);
+    app.pl_find = Some("q".into());
+    app.recording = Some("shuffle");
+    let _ = app.update(Message::MenuClose);
+    assert!(app.recording.is_none() && app.pl_find.as_deref() == Some("q"));
+    app.recording = Some("shuffle");
+    let _ = app.update(Message::Key("Tab".into()));
+    assert!(app.recording.is_none() && app.binding("shuffle") == "C+R");
 }
 
 #[test]

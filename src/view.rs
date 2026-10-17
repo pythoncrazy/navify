@@ -632,6 +632,9 @@ mod wrap {
             v: &Rect,
             r: &R,
         ) -> Interaction {
+            if self.3 == 2 && t.state.downcast_ref::<Ring>().4 {
+                return Interaction::None;
+            }
             let w = self.0.as_widget();
             w.mouse_interaction(&t.children[0], l, c, v, r)
         }
@@ -1080,12 +1083,14 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     }
     let list = vgap(list.push(bottom), lo / cols);
     let chips = (!mini).then(|| container(chips).padding([0, 8]));
-    let find = task(|a| {
-        a.lib_find = a.lib_find.is_none().then(String::new);
-        iced::Task::batch([a.covers_now(), iced::widget::operation::focus("libfind")])
+    let open = app.lib_find.is_none();
+    let find = task(move |a| {
+        a.lib_find = open.then(String::new);
+        let focus = open.then(|| iced::widget::operation::focus("libfind"));
+        iced::Task::batch([a.covers_now()].into_iter().chain(focus))
     });
     let x = theme::sq(i(i::SEARCH, 20.0).center(), 32.0).style(theme::link(SUB));
-    let x = x.on_press(find);
+    let x = x.on_press(find.clone());
     let field: El = match &app.lib_find {
         None => tip(x, "Search in Your Library", Bottom),
         Some(v) => {
@@ -1104,8 +1109,13 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                 .style(style)
                 .font(theme::fw(Normal));
             let t = t.line_height(text::LineHeight::Absolute(18.0.into()));
-            let t = t.padding(iced::Padding::new(7.0).left(32)).width(Fill);
-            container(stack![t, x]).max_width(188).into()
+            let t = t
+                .padding(iced::Padding::new(7.0).left(32).right(28))
+                .width(Fill);
+            let close = container(icon_btn(i::X, 14.0, find))
+                .align_right(Fill)
+                .center_y(Fill);
+            container(stack![t, x, close]).max_width(188).into()
         }
     };
     let icon = pages::LIB_VIEWS[view as usize];
