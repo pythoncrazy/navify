@@ -181,11 +181,8 @@ pub fn ell<'a>(s: impl Into<std::borrow::Cow<'a, str>>, px: f32, size: f32, w: W
     let g = glyphs(&s, size, w);
     if g.last().is_some_and(|g| g.0 > px) {
         let room = px - width("\u{2026}", size, w);
-        let end = g
-            .iter()
-            .take_while(|g| g.0 <= room)
-            .last()
-            .map_or(0, |g| g.1);
+        let end = g.iter().take_while(|g| g.0 <= room).last();
+        let end = end.map_or(0, |g| g.1);
         s = format!("{}\u{2026}", s[..end].trim_end()).into();
     }
     txt(s, size).font(fw(w)).wrapping(text::Wrapping::None)

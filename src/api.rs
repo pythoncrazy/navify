@@ -693,10 +693,8 @@ impl Session {
         let same = |a: &&Value| a["strArtist"].as_str().map(str::to_lowercase) == low;
         let mut hit = v["artists"].as_array().into_iter().flatten();
         let hit = hit.find(|a| q.starts_with("mb:") || same(a));
-        Ok(hit
-            .and_then(|a| a["strArtistFanart"].as_str())
-            .unwrap_or("")
-            .into())
+        let art = hit.and_then(|a| a["strArtistFanart"].as_str());
+        Ok(art.unwrap_or("").into())
     }
 
     pub async fn playlists(&self) -> Result<Vec<Playlist>> {

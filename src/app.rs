@@ -249,11 +249,8 @@ impl Covers {
         self.color.insert(id.to_string(), c);
         let (old_hash, e) = self.map.entry(id.to_string()).or_default();
         if !hash.is_empty() && old_hash != hash {
-            self.bytes -= e
-                .iter_mut()
-                .filter_map(Option::take)
-                .map(|s| s.2)
-                .sum::<usize>();
+            let freed = e.iter_mut().filter_map(Option::take);
+            self.bytes -= freed.map(|s| s.2).sum::<usize>();
             *old_hash = hash.to_string();
         }
         let old = e[slot(size)].replace((self.tick, h, n));
@@ -381,10 +378,8 @@ impl App {
     pub fn new() -> Self {
         let cfg = Config::load();
         let shot = std::env::var("NAVIFY_SHOT").ok().filter(|s| !s.is_empty());
-        let active = cfg
-            .servers
-            .iter()
-            .find(|s| cfg.active.as_ref() == Some(&s.id));
+        let want = cfg.active.as_ref();
+        let active = cfg.servers.iter().find(|s| want == Some(&s.id));
         let session = active.map(|s| Session::new(s.clone()));
         let route = if session.is_some() { "home" } else { "login" };
         let route = shot_key(shot.as_deref()).unwrap_or(route.into());
@@ -438,11 +433,8 @@ impl App {
 
     fn apply_shot_setup(&mut self) -> Task<Message> {
         let lists = self.cache.values().filter_map(|(_, v)| song_list(v));
-        let songs = lists
-            .map(|l| l.0)
-            .find(|s| !s.is_empty())
-            .unwrap_or(&[])
-            .to_vec();
+        let songs = lists.map(|l| l.0).find(|s| !s.is_empty());
+        let songs = songs.unwrap_or(&[]).to_vec();
         let setups = self.shot.take().unwrap_or_default();
         let mut task = Task::none();
         for s in setups.split_once('|').map_or("", |x| x.1).split(',') {
@@ -973,21 +965,14 @@ impl App {
 
     pub fn binding(&self, id: &str) -> &str {
         let default = KEYS.iter().find(|k| k.0 == id).expect("a known action").2;
-        self.cfg
-            .settings
-            .keys
-            .get(id)
-            .map_or(default, |s| s.as_str())
+        let keys = &self.cfg.settings.keys;
+        keys.get(id).map_or(default, |s| s.as_str())
     }
 
     fn kept(&self) -> impl Fn(&Song) -> bool + use<> {
         let words = self.cfg.settings.queue_skip.to_lowercase();
-        let words: Vec<String> = words
-            .split(',')
-            .map(str::trim)
-            .filter(|w| !w.is_empty())
-            .map(String::from)
-            .collect();
+        let words = words.split(',').map(str::trim).filter(|w| !w.is_empty());
+        let words: Vec<String> = words.map(String::from).collect();
         move |s| {
             words.is_empty() || {
                 let hay = [&s.title, &s.artist, &s.album, &s.genre].map(|f| f.to_lowercase());
@@ -1032,22 +1017,17 @@ impl App {
     }
 
     pub fn artist_cover<'a>(&'a self, id: &'a str) -> &'a str {
-        self.find_artist(id)
-            .map(|a| a.cover.as_str())
-            .filter(|c| !c.is_empty())
-            .unwrap_or(id)
+        let cover = self.find_artist(id).map(|a| a.cover.as_str());
+        cover.filter(|c| !c.is_empty()).unwrap_or(id)
     }
 
     fn about(&mut self) -> Task<Message> {
         let go = self.panel == 1 && !self.full;
-        let id = self
-            .lead_artist()
-            .filter(|_| go)
-            .map(|id| format!("info:{id}"));
-        let lyr = self
-            .current_song()
-            .filter(|s| (go || self.route == "lyrics") && s.url.is_empty())
-            .map(|s| format!("lyrics:{}", s.id));
+        let id = self.lead_artist().filter(|_| go);
+        let id = id.map(|id| format!("info:{id}"));
+        let lyr = go || self.route == "lyrics";
+        let lyr = self.current_song().filter(|s| lyr && s.url.is_empty());
+        let lyr = lyr.map(|s| format!("lyrics:{}", s.id));
         Task::batch([id, lyr].into_iter().flatten().map(|k| self.request(&k, 0)))
     }
 
@@ -1382,10 +1362,8 @@ impl App {
         self.covers.wait = false;
         self.panel = [self.panel, 0][usize::from(self.panel == 4)];
         (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
-        self.hover = self
-            .hover
-            .take()
-            .filter(|h| h.starts_with("lib") || h == "queue");
+        let keep = |h: &String| h.starts_with("lib") || h == "queue";
+        self.hover = self.hover.take().filter(keep);
         (self.popular_all, self.disc_chip) = (false, 0);
         if !route.starts_with("search") {
             self.search_tab = 0;
@@ -1524,10 +1502,8 @@ impl App {
         use souvlaki::MediaPlayback as P;
         let seek = matches!(m, Message::Seek(_));
         let mut t = self.handle(m);
-        let data = self
-            .cache
-            .get(&self.route)
-            .map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
+        let data = self.cache.get(&self.route);
+        let data = data.map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
         let (r, (f, s, d), _) = &self.pl_view;
         if (r, f, *s, *d) != (&self.route, &self.pl_find, self.pl_sort, data) {
             let diff = (f, *s) != (&self.pl_find, self.pl_sort);
@@ -1695,10 +1671,8 @@ impl App {
             Message::Back | Message::Fwd => {}
             Message::Scrolled(off, view, content) => {
                 let (key, step) = (self.route.clone(), self.row_h() as usize);
-                let old = self
-                    .scrolls
-                    .insert(key.clone(), (off, view))
-                    .unwrap_or_default();
+                let old = self.scrolls.insert(key.clone(), (off, view));
+                let old = old.unwrap_or_default();
                 let v = self.cache.get(&key).map(|c| &c.1);
                 let more = v.and_then(|v| pager!(v, p => (p.0.len() < p.1).then_some(p.0.len())));
                 let more = more.filter(|_| content > 0.0 && off + view * 3.0 >= content);
@@ -1801,11 +1775,8 @@ impl App {
                         .or_else(|| self.find_album(id).map(|a| a.starred))
                         .or_else(|| self.find_artist(id).map(|a| a.starred))
                 };
-                let back: Vec<String> = ids
-                    .iter()
-                    .filter(|id| was(id) != Some(on))
-                    .cloned()
-                    .collect();
+                let back = ids.iter().filter(|id| was(id) != Some(on)).cloned();
+                let back: Vec<String> = back.collect();
                 self.star(&ids, on);
                 let star = |s: Session| async move { s.star(&ids, on).await };
                 let star = self.send(star, "Could not update Your Library.", move |a| {
@@ -1921,11 +1892,8 @@ impl App {
                 if c.starts_with("Arrow") || named.contains(&c.as_str()) {
                     return Task::none();
                 }
-                let used: Vec<&str> = KEYS
-                    .iter()
-                    .map(|k| k.0)
-                    .filter(|k| self.binding(k) == c)
-                    .collect();
+                let used = KEYS.iter().map(|k| k.0).filter(|k| self.binding(k) == c);
+                let used: Vec<&str> = used.collect();
                 let keys = &mut self.cfg.settings.keys;
                 keys.extend(used.into_iter().map(|k| (k.to_string(), String::new())));
                 keys.insert(id.to_string(), c);
@@ -2686,10 +2654,9 @@ impl App {
                     .expect("a search hit")
             };
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
-            let pls: Vec<_> = pls
-                .iter()
-                .filter(|p| p.name.to_lowercase().contains(&q.to_lowercase()))
-                .collect();
+            let ql = q.to_lowercase();
+            let pls = pls.iter().filter(|p| p.name.to_lowercase().contains(&ql));
+            let pls: Vec<_> = pls.collect();
             match self.search_tab {
                 0 if !ar.is_empty() || !al.is_empty() || !sg.is_empty() => {
                     let (top, mix) = crate::pages::search_hits((ar, al, sg), q);
