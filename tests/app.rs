@@ -254,7 +254,7 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     let _ = app.update(Message::Arrow(true));
     assert_eq!(app.sel.as_ref().map(|s| s.1), Some(1));
     let _ = app.update(Message::PlayAt(fkey, 0));
-    assert!(app.toast.is_none() && cur(&app) == "a");
+    assert!(app.modal.is_none() && app.toast.is_none() && cur(&app) == "a");
     let _ = app.update(Message::Seek(99.0));
     assert_eq!(app.position, 0.0);
 }
@@ -324,6 +324,20 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     app.pl_more = Some("x".into());
     let _ = app.update(Message::MenuClose);
     assert!(app.pl_more.is_none());
+    let _ = app.update(Message::Panel(4));
+    app.pl_more = Some("y".into());
+    let _ = app.update(Message::Panel(4));
+    assert!(app.panel == 0 && app.pl_more.is_none());
+    app.sel = Some(("settings".into(), 1));
+    let _ = app.update(Message::Star(vec!["a".into()], true));
+    assert_eq!(app.sel, Some(("settings".into(), 1)));
+    app.full = true;
+    let _ = app.update(Message::Nav("liked".into()));
+    assert!(!app.full && app.route == "liked");
+    app.sel = Some(("liked".into(), 0));
+    let _ = app.update(Message::Star(vec!["a".into()], false));
+    assert!(app.sel.is_none());
+    assert!(matches!(navify::view::go("album", ""), Message::Noop));
     app.full = true;
     app.panel = 2;
     app.lib_find = Some("a".into());

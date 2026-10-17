@@ -821,12 +821,14 @@ impl App {
                     *total = (*total + on as usize).saturating_sub(had as usize);
                     items.splice(0..0, on.then_some(s));
                 });
-            } else if let Some(a) = self.find_album(id) {
+            } else if let Some(mut a) = self.find_album(id) {
+                a.starred = on;
                 self.edit::<Lib>("lib", |l| {
                     l.albums.retain(|x| x.id != a.id);
                     l.albums.extend(on.then_some(a));
                 });
-            } else if let Some(a) = self.find_artist(id).cloned() {
+            } else if let Some(mut a) = self.find_artist(id).cloned() {
+                a.starred = on;
                 self.edit::<Lib>("lib", |l| {
                     l.artists.retain(|x| x.id != a.id);
                     l.artists.extend(on.then_some(a));
@@ -1009,7 +1011,7 @@ impl App {
         self.queue.retain(|s| keep(s));
         self.shuffle = shuffled.then(|| shuffle(0..self.queue.len(), i));
         if self.queue.is_empty() {
-            self.index = 0;
+            (self.index, self.ctx, self.source) = Default::default();
             let t = had.then(|| self.toast("The queue filter removed all the songs."));
             return Task::batch([done, self.halt()].into_iter().chain(t));
         }
@@ -1420,6 +1422,9 @@ impl App {
         let keys = parts.iter().chain(&b).map(String::as_str);
         let keys = [key.as_str(), "lib"].into_iter().chain(keys);
         let mut tasks: Vec<_> = keys.map(|k| self.request(k, 0)).collect();
+        if self.full {
+            tasks.push(self.set_full(false));
+        }
         tasks.push(self.disc_load());
         match route == "lyrics" {
             true => self.lyric = true,
@@ -1538,8 +1543,9 @@ impl App {
             let rows = self
                 .pl_view_of()
                 .filter(|_| self.route.starts_with("playlist:"));
+            let cov = (diff || *r == self.route) && self.route.starts_with("playlist:");
             self.pl_view = (self.route.clone(), stamp, rows);
-            if diff && self.route.starts_with("playlist:") {
+            if cov {
                 t = Task::batch([t, self.covers_now()]);
             }
         }
@@ -1596,7 +1602,13 @@ impl App {
         let st = &self.cfg.settings;
         let replaces = match &m {
             Message::Play(..) => true,
-            Message::PlayAt(k, _) | Message::PlayCtx(k, 0) => st.play_mode < 2 && *k != self.ctx,
+            Message::PlayAt(k, n) => {
+                let ok = self
+                    .songs_of(k)
+                    .is_none_or(|(l, _)| l.get(*n).is_some_and(|s| !s.is_dir));
+                ok && st.play_mode < 2 && *k != self.ctx
+            }
+            Message::PlayCtx(k, 0) => st.play_mode < 2 && *k != self.ctx,
             Message::PlayCtx(k, 1) => *k != self.ctx,
             _ => false,
         };
@@ -1783,7 +1795,10 @@ impl App {
                 return self.update(Message::Seek(to.max(0.0)));
             }
             Message::Star(ids, on) => {
-                (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
+                self.menu = None;
+                if self.route == "liked" && !on {
+                    (self.sel, self.picked) = (None, BTreeSet::new());
+                }
                 let was = |id: &String| {
                     let s = self.starred.get(id).copied();
                     s.or_else(|| self.find_song(id).map(|s| s.starred))
@@ -2022,6 +2037,9 @@ impl App {
             }
             Message::Panel(n) => {
                 self.panel = if self.panel == n { 0 } else { n };
+                if self.panel != 4 {
+                    self.pl_more = None;
+                }
                 let scan = (self.panel == 3).then(scan_devices);
                 let find = (self.panel == 4).then(|| op::focus("pladd"));
                 let t = [self.covers_now(), self.about(), self.history()];
@@ -2123,13 +2141,12 @@ impl App {
                 let mode = Some(mode)
                     .filter(|&m| m > 0)
                     .unwrap_or(self.cfg.settings.play_mode);
-                if mode < 2 {
-                    self.ctx.clone_from(&route);
-                }
                 let key = route.clone();
-                let play = move |a: &mut App, v, src| match mode >= 2 || a.ctx == key {
-                    true => a.play_songs(v, src, mode),
-                    false => Task::none(),
+                let play = move |a: &mut App, v, src| {
+                    if mode < 2 {
+                        a.ctx.clone_from(&key);
+                    }
+                    a.play_songs(v, src, mode)
                 };
                 return self.ctx_songs(route, "Nothing to play.", "Could not play.", play);
             }
@@ -2308,11 +2325,15 @@ impl App {
                 (self.menu, self.modal) = (None, None);
                 let (name, comment) = (name.trim().to_string(), comment.trim().to_string());
                 assert!(!name.is_empty(), "the dialog blocks an empty name");
+                let key = format!("playlist:{id}");
+                if self.ctx == key {
+                    self.source.clone_from(&name);
+                }
                 let set = |p: &mut Playlist| {
                     (p.name, p.comment, p.public) = (name.clone(), comment.clone(), public)
                 };
                 self.edit_pl(&id, set);
-                self.edit::<(Playlist, Vec<Song>)>(&format!("playlist:{id}"), |(p, _)| set(p));
+                self.edit::<(Playlist, Vec<Song>)>(&key, |(p, _)| set(p));
                 let undo = reload(&id);
                 let edit = |s: Session| async move {
                     let (n, c) = (Some(name.as_str()), Some(comment.as_str()));
@@ -2550,8 +2571,11 @@ impl App {
             .songs_of(&route)
             .filter(|(v, _)| !v.is_empty() && !part)
         {
-            let v = v.iter().filter(|s| !s.is_dir).cloned().collect();
-            return then(self, v, src);
+            let v: Vec<Song> = v.iter().filter(|s| !s.is_dir).cloned().collect();
+            return match v.is_empty() {
+                true => self.toast(empty),
+                false => then(self, v, src),
+            };
         }
         let load = |s: Session| async move {
             let (kind, id) = route.split_once(':').unwrap_or((&route, ""));
@@ -2618,9 +2642,12 @@ impl App {
                     .unwrap_or(&a.artist_id),
             );
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
+            let empty = s.is_empty() && p.song_count == 0;
             let s = self.songs_of(key).map_or(&s[..], |x| x.0);
             let q = self.pl_more.as_deref().unwrap_or("").trim();
-            let hits = self.data::<Trio>(&format!("search:{q}"));
+            let hits = self
+                .data::<Trio>(&format!("search:{q}"))
+                .filter(|_| empty && !q.is_empty());
             small.extend(
                 hits.iter()
                     .flat_map(|t| t.2.iter().take(10))
@@ -2713,8 +2740,8 @@ impl App {
             wide[2].extend(art);
         } else if let Some(h) = self.data::<Home>(key) {
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
-            wide[3].extend(pls.iter().take(3).map(|p| &p.cover));
-            wide[3].extend(h[0].iter().take(7).map(|a| &a.cover));
+            let pins = pls.iter().take(3).map(|p| &p.cover);
+            wide[3].extend(pins.chain(h[0].iter().map(|a| &a.cover)).take(7));
             let hs = cw + 132.0;
             let (per, _, th, gap) = crate::pages::home_tiles(self);
             let tiles = (1 + pls.len().min(3) + h[0].len()).min(8);
