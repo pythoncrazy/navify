@@ -727,8 +727,27 @@ fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
         let col = container(col.spacing(16).align_x(Center));
         return Some(col.center_x(Fill).padding(80).into());
     }
-    if app.cache.contains_key(key) || (app.route == key && app.seeds.contains_key(key)) {
+    let hold = app.covers.wait || (key == "home" && app.pending.contains("lib#0"));
+    if (app.cache.contains_key(key) && !hold) || (app.route == key && app.seeds.contains_key(key)) {
         return None;
+    }
+    if key == "home" {
+        let ((n, tw, th, gap), (k, cw)) = (home_tiles(app), app.grid());
+        let r = || Row::with_children((0..n).map(|_| blk(tw, th, 4.0))).spacing(gap);
+        let pad = Padding::from([0.0, PAD]).bottom(16);
+        let tiles = container(column![r(), r()].spacing(gap)).padding(pad);
+        let card = || {
+            let lines = column![blk(cw * 0.7, 14.0, 4.0), blk(cw * 0.5, 12.0, 4.0)].spacing(8);
+            let col = column![blk(cw - 24.0, cw - 24.0, 6.0), lines].spacing(12);
+            container(col).padding(12).width(cw).into()
+        };
+        let sh = || {
+            let head = container(blk(180.0, 22.0, 4.0)).padding([0.0, PAD]);
+            let row = container(Row::with_children((0..k).map(|_| card())));
+            column![head, row.padding([0, 12])].spacing(12).into()
+        };
+        let col = column![tiles].extend((0..2).map(|_| sh())).spacing(40);
+        return Some(col.padding([PAD, 16.0]).width(Fill).into());
     }
     let px = art_px(app);
     let b = |w, h| blk(w, h, 4.0);
