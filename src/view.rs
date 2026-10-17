@@ -129,6 +129,19 @@ pub fn hov<'a>(
         }))
 }
 
+pub fn album_of(s: &crate::api::Song) -> Message {
+    match s.url.is_empty() {
+        true => go("album", &s.album_id),
+        false => Message::Nav("radio".into()),
+    }
+}
+
+pub fn shade<'a>(g: char, r: f32, m: Message) -> El<'a> {
+    let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
+    let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
+    top.style(theme::link(TEXT)).on_press(m).into()
+}
+
 pub fn vgap<'a>(c: impl Into<El<'a>>, lo: usize) -> El<'a> {
     Element::new(wrap::Wrap(
         c.into(),
@@ -952,12 +965,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                         let b = container(b).align_right(px).align_bottom(px);
                         b.padding(8).into()
                     }
-                    false => {
-                        let r = [4.0, 24.0][usize::from(route.starts_with("artist:"))];
-                        let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
-                        let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
-                        top.style(theme::link(TEXT)).on_press(m).into()
-                    }
+                    false => shade(g, [4.0, 24.0][usize::from(route.starts_with("artist:"))], m),
                 }
             }
         };
@@ -1187,12 +1195,7 @@ fn player_bar(app: &App) -> El<'_> {
         let on = app.is_starred(&s.id, s.starred);
         let title = theme::ell(&s.title, tw, 14.0, Normal);
         let radio = !s.url.is_empty();
-        let home = if radio {
-            Message::Nav("radio".into())
-        } else {
-            go("album", &s.album_id)
-        };
-        let title = btn(title, home);
+        let title = btn(title, album_of(s));
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));

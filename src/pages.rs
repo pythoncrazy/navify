@@ -14,8 +14,8 @@ use crate::theme::{
     self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
 };
 use crate::view::{
-    El, SONGS_BG, art, artists_line, back, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable,
-    go, hov, icon_btn, liked_art, media, pane, tip, tool_btn, vgap,
+    El, SONGS_BG, album_of, art, artists_line, back, bands, btn, cover, fmt_dur, fmt_long, fmt_n,
+    focusable, go, hov, icon_btn, liked_art, media, pane, shade, tip, tool_btn, vgap,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -446,15 +446,10 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         .align_y(Center);
     let a = [[0.0, 0.1], [0.3; 2]][usize::from(sel)][usize::from(hot)];
     let k = key.to_string();
-    let r = container(r);
-    let m = mouse_area(if a > 0.0 {
-        r.style(fill(theme::tint(a), 4.0))
-    } else {
-        r
-    })
-    .on_press(act(move |a| a.pick(k.clone(), n)))
-    .on_double_click(at)
-    .on_right_press(Message::RowMenu(key.into(), n));
+    let m = mouse_area(container(r).style(theme::wash(a)))
+        .on_press(act(move |a| a.pick(k.clone(), n)))
+        .on_double_click(at)
+        .on_right_press(Message::RowMenu(key.into(), n));
     hov(m, hk, None).into()
 }
 
@@ -816,26 +811,35 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let pls = app.data::<Lib>("lib").map_or(&[][..], |l| &l.playlists[..]);
     let (n, tw, th, gap) = home_tiles(app);
     let big = th > 48.0;
-    let tile = |art: El<'a>, name: &'a str, route: String, cid: &str| -> El<'a> {
+    let tile = |art: El<'a>, name: &'a str, cid: &str, k: Option<MenuKind>| -> El<'a> {
+        let route = match &k {
+            Some(MenuKind::Playlist(p)) => format!("playlist:{}", p.id),
+            Some(MenuKind::Album(a)) => format!("album:{}", a.id),
+            _ => "liked".into(),
+        };
         let name = ell(name, tw - th - 56.0, [14.0, 16.0][usize::from(big)], Bold);
         let body = row![art, name].spacing([8, 16][usize::from(big)]);
-        let style = theme::btn([0.1, 0.2, 0.3].map(theme::tint), [TEXT; 3], 4.0);
+        let idle = [0.1, 0.2][usize::from(app.menu_on(&route))];
+        let style = theme::btn([idle, 0.2, 0.3].map(theme::tint), [TEXT; 3], 4.0);
         let b = button(body.align_y(Center)).padding(0).width(tw).height(th);
         let b = b.clip(true).style(style);
         let b = b.on_press(Message::Nav(route.clone()));
         let play = play_btn(app, [32.0, 48.0][usize::from(big)], &route);
         let play = container(play).align_right(Fill).center_y(th);
         let play = play.padding([0, 8]);
-        let m = mouse_area(play_over(app, b.into(), play.into(), &route));
+        let menu = k.map_or(Message::Noop, |k| Message::Menu(Box::new(k)));
+        let m = mouse_area(play_over(app, b.into(), play.into(), &route)).on_right_press(menu);
         hov(m, format!("tile:{cid}"), None).into()
     };
     let pins = pls.iter().take(3);
-    let pins = pins.map(|p| (&p.cover, &p.name, format!("playlist:{}", p.id)));
+    let pins = pins.map(|p| (&p.cover, &p.name, MenuKind::Playlist(p.clone())));
     let recent = h[0].iter();
-    let recent = recent.map(|a| (&a.cover, &a.name, format!("album:{}", a.id)));
+    let recent = recent.map(|a| (&a.cover, &a.name, MenuKind::Album(Box::new(a.clone()))));
     let small = |c| cover(app, c, th, false);
-    let rest = pins.chain(recent).map(|(c, n, r)| tile(small(c), n, r, c));
-    let liked = tile(liked_art(th), "Liked Songs", "liked".into(), "");
+    let rest = pins
+        .chain(recent)
+        .map(|(c, n, k)| tile(small(c), n, c, Some(k)));
+    let liked = tile(liked_art(th), "Liked Songs", "", None);
     let mut tiles = std::iter::once(liked).chain(rest).take(8);
     let rows = std::iter::from_fn(|| {
         let r: Vec<El> = tiles.by_ref().take(n).collect();
@@ -1684,74 +1688,45 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         _ => {
             let (top, mix) = search_hits((artists_res, albums_res, songs_res), q);
             let rw = (app.main_w() - 2.0 * PAD).min(1152.0);
-            let pick = |(k, i): Hit| match k {
-                0 => {
-                    let a = &artists_res[i];
-                    let ctx = format!("artist:{}", a.id);
-                    let live = app.ctx == ctx && app.current_song().is_some();
-                    let play = if live {
-                        Message::Toggle
-                    } else {
-                        Message::PlayCtx(ctx, 0)
-                    };
-                    let menu = Message::Menu(Box::new(MenuKind::Artist(a.clone())));
-                    (
-                        &a.cover,
-                        &a.name,
-                        "",
-                        &a.id,
-                        a.starred,
-                        live,
-                        go("artist", &a.id),
-                        play,
-                        menu,
-                    )
-                }
-                1 => {
-                    let a = &albums_res[i];
-                    let ctx = format!("album:{}", a.id);
-                    let live = app.ctx == ctx && app.current_song().is_some();
-                    let play = if live {
-                        Message::Toggle
-                    } else {
-                        Message::PlayCtx(ctx, 0)
-                    };
-                    let menu = Message::Menu(Box::new(MenuKind::Album(Box::new(a.clone()))));
-                    (
-                        &a.cover,
-                        &a.name,
-                        &a.artist[..],
-                        &a.id,
-                        a.starred,
-                        live,
-                        go("album", &a.id),
-                        play,
-                        menu,
-                    )
-                }
-                _ => {
-                    let s = &songs_res[i];
-                    let live = app.current_song().is_some_and(|x| x.id == s.id);
-                    let (play, menu) = (
-                        if live {
-                            Message::Toggle
-                        } else {
-                            Message::PlayAt(app.route.clone(), i)
-                        },
-                        Message::RowMenu(app.route.clone(), i),
-                    );
-                    (
-                        &s.cover,
-                        &s.title,
-                        &s.artist[..],
-                        &s.id,
-                        s.starred,
-                        live,
-                        go("album", &s.album_id),
-                        play,
-                        menu,
-                    )
-                }
+            let pick = |(k, i): Hit| {
+                let (cid, name, by, id, on, nav) = match k {
+                    0 => {
+                        let a = &artists_res[i];
+                        (&a.cover, &a.name, "", &a.id, a.starred, go("artist", &a.id))
+                    }
+                    1 => {
+                        let a = &albums_res[i];
+                        (
+                            &a.cover,
+                            &a.name,
+                            &a.artist[..],
+                            &a.id,
+                            a.starred,
+                            go("album", &a.id),
+                        )
+                    }
+                    _ => {
+                        let s = &songs_res[i];
+                        let nav = go("album", &s.album_id);
+                        (&s.cover, &s.title, &s.artist[..], &s.id, s.starred, nav)
+                    }
+                };
+                let ctx = || format!("{}:{id}", ["artist", "album"][k]);
+                let live = match k {
+                    2 => app.current_song().is_some_and(|x| x.id == *id),
+                    _ => app.ctx == ctx() && app.current_song().is_some(),
+                };
+                let play = match (live, k) {
+                    (true, _) => Message::Toggle,
+                    (_, 2) => Message::PlayAt(app.route.clone(), i),
+                    _ => Message::PlayCtx(ctx(), 0),
+                };
+                let menu = match k {
+                    0 => Message::Menu(Box::new(MenuKind::Artist(artists_res[i].clone()))),
+                    1 => Message::Menu(Box::new(MenuKind::Album(Box::new(albums_res[i].clone())))),
+                    _ => Message::RowMenu(app.route.clone(), i),
+                };
+                (cid, name, by, id, on, live, nav, play, menu)
             };
             let save = |k: usize, id: &str, on: bool| -> El<'a> {
                 let on = app.is_starred(id, on);
@@ -1838,11 +1813,12 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 ];
                 let r = r.spacing(16).align_y(Center).height(80);
                 let r = container(r.padding(Padding::new(8.0).left(12).right(16)));
-                let r = if hot {
-                    r.style(fill(theme::tint(0.1), 4.0))
-                } else {
-                    r
+                let sel = app.sel.as_ref().is_some_and(|x| x.0 == app.route);
+                let open = match h.0 {
+                    2 => app.menu.is_some() && sel && app.picked.contains(&h.1),
+                    k => app.menu_on(&format!("{}:{id}", ["artist", "album"][k])),
                 };
+                let r = r.style(theme::wash([0.0, 0.1][usize::from(hot || open)]));
                 let m = mouse_area(r).on_right_press(menu).on_double_click(play);
                 let m = if h.0 == 2 { m } else { m.on_press(nav) };
                 hov(m, hk, None).into()
@@ -2438,12 +2414,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let artist = btn(artist, go("artist", lead.map_or(&s.artist_id, |a| &a.id)));
     let title = ell(&s.title, w - 40.0, 24.0, Bold);
     let radio = !s.url.is_empty();
-    let home = if radio {
-        Message::Nav("radio".into())
-    } else {
-        go("album", &s.album_id)
-    };
-    let title = btn(title, home);
+    let title = btn(title, album_of(s));
     let next = app.queue.get(app.real_at(app.index + 1)).map(|n| {
         let open = link_btn(bold("Open queue", 14.0), SUB, Message::Panel(2));
         let head = row![bold("Next in queue", 16.0).width(Fill), open];
@@ -2531,7 +2502,21 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         || app.current_song().is_some_and(|x| x.id == s.id),
         |i| i == app.index,
     );
+    let tag = format!("q:{:p}", s);
+    let hot = app.hover.as_deref() == Some(tag.as_str());
+    let dbl = match (cur, n) {
+        (true, _) => Message::Toggle,
+        (_, Some(i)) => Message::PlayQueue(i),
+        _ => Message::Play(vec![s.clone()], 0, "Recently played".into()),
+    };
     let art = cover(app, &s.cover, 48.0, false);
+    let art = match hot {
+        true => {
+            let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(cur && app.playing)];
+            stack![art, shade(g, 4.0, dbl.clone())].into()
+        }
+        false => art,
+    };
     let x = n
         .filter(|_| !cur)
         .map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
@@ -2541,7 +2526,6 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         true => Message::Menu(Box::new(MenuKind::Song(vec![s.clone()]))),
         false => Message::Noop,
     };
-    let play = || Message::Play(vec![s.clone()], 0, "Recently played".into());
     let movable = n.filter(|&n| n > app.index && app.panel == 2);
     let to = app.qmove.filter(|&(f, t)| f != t && Some(t) == movable);
     let line = |on: bool| {
@@ -2552,17 +2536,16 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
     let pad = Padding::new(8.0)
         .top(8.0 - 2.0 * f32::from(up))
         .bottom(8.0 - 2.0 * f32::from(down));
-    let r = column![line(up), container(r).padding(pad), line(down)];
-    let dbl = match (cur, n) {
-        (true, _) => Message::Toggle,
-        (_, Some(i)) => Message::PlayQueue(i),
-        _ => play(),
-    };
-    let r = mouse_area(r).on_double_click(dbl);
+    let r = container(r)
+        .padding(pad)
+        .style(theme::wash([0.0, 0.1][usize::from(hot)]));
+    let r = column![line(up), r, line(down)];
+    let r = hov(mouse_area(r).on_double_click(dbl), tag.clone(), None);
     let r = match movable {
         Some(n) => r
             .on_press(act(move |a| a.qmove = Some((n, n))))
             .on_enter(act(move |a| {
+                a.hover = Some(tag.clone());
                 if let Some(m) = &mut a.qmove {
                     m.1 = n;
                 }
@@ -2706,11 +2689,7 @@ pub fn queue_panel(app: &App) -> El<'_> {
 type Item = Option<(char, String, Message, bool)>;
 
 pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
-    let w = if matches!(m.kind, MenuKind::User) {
-        328.0
-    } else {
-        250.0
-    };
+    let w = [250.0, 328.0][usize::from(matches!(m.kind, MenuKind::User))];
     let entry = |r: Row<'a, Message>, msg: Message, h: f32| -> El<'a> {
         let hover = [theme::CLEAR, theme::MENU_HOVER, theme::MENU_HOVER];
         let b = button(container(r.spacing(12).align_y(Center)).center_y(Fill));
@@ -2742,11 +2721,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
     };
     let boxed = |el: El<'a>, w: f32, h: f32, pad: u16| {
         let c = container(el).padding(pad).width(w).height(h);
-        let r = if matches!(m.kind, MenuKind::Create) {
-            8.0
-        } else {
-            4.0
-        };
+        let r = [4.0, 8.0][usize::from(matches!(m.kind, MenuKind::Create))];
         (c.style(fill(theme::MENU, r)).into(), w, h)
     };
     let it = |c: char, l: &str, m: Message| Some((c, l.to_string(), m, false));
@@ -2761,18 +2736,18 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         it([i::SAVE, i::SAVED][k], [no, yes][k], m)
     };
     let queue = |r: &str| it(i::LISTPLUS, "Add to queue", Message::PlayCtx(r.into(), 2));
-    let to_pl = |r: String, skip: &str| -> Vec<Item> {
+    let pl_list = |new: Message, add: &dyn Fn(&Playlist) -> Message, skip: &str| -> Vec<Item> {
         let pls = app.data::<Lib>("lib").into_iter();
         let pls = pls.flat_map(|l| l.playlists.iter());
-        let add = |p: &Playlist| it(' ', &p.name, Message::AddCtx(r.clone(), p.id.clone()));
-        let new = it(
-            i::PLUS,
-            "New playlist",
-            Message::AddCtx(r.clone(), String::new()),
-        );
-        let pls: Vec<Item> = pls.filter(|p| found(p) && p.id != skip).map(add).collect();
+        let pls = pls.filter(|p| found(p) && p.id != skip);
+        let pls: Vec<Item> = pls.map(|p| it(' ', &p.name, add(p))).collect();
         let gap = (!pls.is_empty()).then_some(None);
+        let new = it(i::PLUS, "New playlist", new);
         [new].into_iter().chain(gap).chain(pls).collect()
+    };
+    let to_pl = |r: String, skip: &str| {
+        let add = |p: &Playlist| Message::AddCtx(r.clone(), p.id.clone());
+        pl_list(Message::AddCtx(r.clone(), String::new()), &add, skip)
     };
     let ids = |s: &[Song]| s.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
     let pin = |kind: &str, id: &str| {
@@ -2991,16 +2966,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 [x] => x.title.clone(),
                 _ => String::new(),
             };
-            let pls = app
-                .data::<Lib>("lib")
-                .into_iter()
-                .flat_map(|l| l.playlists.iter());
-            let pls = pls.filter(found);
-            let add = |p: &Playlist| it(' ', &p.name, Message::PlAdd(p.id.clone(), ids(s)));
-            let new = it(i::PLUS, "New playlist", Message::PlNew(name, ids(s)));
-            let pls: Vec<Item> = pls.map(add).collect();
-            let gap = (!pls.is_empty()).then_some(None);
-            [new].into_iter().chain(gap).chain(pls).collect()
+            let add = |p: &Playlist| Message::PlAdd(p.id.clone(), ids(s));
+            pl_list(Message::PlNew(name, ids(s)), &add, "")
         }
         MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
