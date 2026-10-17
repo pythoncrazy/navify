@@ -263,12 +263,8 @@ mod wrap {
                 }
                 let n = (b.height / 4.0).ceil().max(1.0);
                 let at = |f: f32| {
-                    let i = self
-                        .5
-                        .0
-                        .iter()
-                        .position(|s| s.0 >= f)
-                        .unwrap_or(self.5.0.len() - 1);
+                    let s = &self.5.0;
+                    let i = s.iter().position(|s| s.0 >= f).unwrap_or(s.len() - 1);
                     let (a, z) = (self.5.0[i.saturating_sub(1)], self.5.0[i]);
                     let k = ((f - a.0) / (z.0 - a.0)).clamp(0.0, 1.0);
                     let m = |x: f32, y: f32| x + (y - x) * if k.is_nan() { 1.0 } else { k };
@@ -757,10 +753,7 @@ pub fn fmt_long(s: f32) -> String {
 }
 
 fn caps<'a>(combo: &str, size: f32, color: Color) -> Row<'a, Message> {
-    let edge = Border::default()
-        .color(color!(0x7c7c7c))
-        .width(1)
-        .rounded(4);
+    let edge = iced::border::rounded(4).color(color!(0x7c7c7c)).width(1);
     let cap = |k: &str| -> El<'a> {
         let k = container(txt(k.to_string(), size).color(color)).padding([0, 6]);
         k.center_y(size + 12.0)
@@ -801,12 +794,8 @@ fn top_bar(app: &App) -> El<'_> {
     let search = text_input(hint, &app.search_q);
     let search = search.id("search").on_input(Message::Search);
     let search = search.on_submit(Message::SearchGo(app.search_seq));
-    let search = search
-        .style(style)
-        .icon(theme::glass(22.0, 12.0))
-        .width(474)
-        .size(16);
-    let search = search.font(theme::fw(Normal));
+    let search = search.style(style).icon(theme::glass(22.0, 12.0));
+    let search = search.width(474).size(16).font(theme::fw(Normal));
     let search = search.padding(iced::Padding::new(13.0).left(16.0).right(100.0));
     let search = search.line_height(text::LineHeight::Absolute(22.0.into()));
     let on = app.route == "search" && app.search_q.is_empty();
@@ -831,10 +820,8 @@ fn top_bar(app: &App) -> El<'_> {
     });
     let all = tip(all, "Browse", Bottom);
     let tail = row![x, bar, all].spacing(12).align_y(Center);
-    let tail = container(tail)
-        .padding(padding::right(16))
-        .align_right(474)
-        .center_y(48);
+    let tail = container(tail).padding(padding::right(16));
+    let tail = tail.align_right(474).center_y(48);
     let search = stack![mouse_area(search).on_release(browse)]
         .push(tail)
         .clip(true);
@@ -876,21 +863,12 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         .filter(|_| !wait)
         .into_iter()
         .flat_map(|l| {
-            let pls = l
-                .playlists
-                .iter()
-                .filter(|_| f < 2)
-                .map(|p| (&p.cover, &p.name, "playlist", p.id.as_str(), &p.owner));
-            let als = l
-                .albums
-                .iter()
-                .filter(|_| matches!(f, 0 | 2))
-                .map(|a| (&a.cover, &a.name, "album", a.id.as_str(), &a.artist));
-            let ars = l
-                .artists
-                .iter()
-                .filter(|_| matches!(f, 0 | 3))
-                .map(|a| (&a.cover, &a.name, "artist", a.id.as_str(), &a.name));
+            let pls = l.playlists.iter().filter(|_| f < 2);
+            let pls = pls.map(|p| (&p.cover, &p.name, "playlist", p.id.as_str(), &p.owner));
+            let als = l.albums.iter().filter(|_| matches!(f, 0 | 2));
+            let als = als.map(|a| (&a.cover, &a.name, "album", a.id.as_str(), &a.artist));
+            let ars = l.artists.iter().filter(|_| matches!(f, 0 | 3));
+            let ars = ars.map(|a| (&a.cover, &a.name, "artist", a.id.as_str(), &a.name));
             pls.chain(als).chain(ars)
         });
     let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();
@@ -1012,11 +990,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let b = tip(b, "Expand Your Library", Right);
         container(b).center_x(Fill).into()
     } else {
-        let side = app
-            .hover
-            .as_ref()
-            .filter(|h| h.starts_with("lib"))
-            .map(|_| i(i::SIDE, 16.0));
+        let side = app.hover.as_ref().filter(|h| h.starts_with("lib"));
+        let side = side.map(|_| i(i::SIDE, 16.0));
         let title = row![side, bold("Your Library", 16.0)].spacing(12);
         let title = theme::link_btn(title.align_y(Center), TEXT, task(App::lib_collapse));
         let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::Create));
@@ -1081,11 +1056,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let mut tiles = pins.into_iter().filter(|_| lo == 0).chain(rows).peekable();
     let mut list = column![top];
     while tiles.peek().is_some() {
-        let r = tiles
-            .by_ref()
-            .take(cols)
-            .map(|t| container(t).width(Fill).into());
-        let r: Vec<El> = r.collect();
+        let r = tiles.by_ref().take(cols);
+        let r: Vec<El> = r.map(|t| container(t).width(Fill).into()).collect();
         let pad = (r.len()..cols).map(|_| Space::new().width(Fill).into());
         list = list.push(Row::with_children(r).extend(pad));
     }
@@ -1114,10 +1086,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                     a.covers_now()
                 })
             });
-            let t = t
-                .on_submit(Message::Noop)
-                .style(style)
-                .font(theme::fw(Normal));
+            let t = t.on_submit(Message::Noop).style(style);
+            let t = t.font(theme::fw(Normal));
             let t = t.line_height(text::LineHeight::Absolute(18.0.into()));
             let t = t
                 .padding(iced::Padding::new(7.0).left(32).right(28))
@@ -1156,10 +1126,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         a.hover = h.or(Some("lib".into()));
     });
     let off = act(|a| a.hover = a.hover.take().filter(|h| !h.starts_with("lib")));
-    mouse_area(body.height(Fill))
-        .on_enter(on)
-        .on_exit(off)
-        .into()
+    let m = mouse_area(body.height(Fill)).on_enter(on);
+    m.on_exit(off).into()
 }
 
 fn player_bar(app: &App) -> El<'_> {
@@ -1393,11 +1361,8 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let body = row![stats.width(180), txt(bio, 16.0).color(SUB).width(Fill)].padding(40);
         let body = scrollable(pane(column![top, body])).style(theme::scroll);
         let h = app.view_size().1 * 0.7;
-        return container(body)
-            .width(768)
-            .height(h)
-            .style(fill(theme::PANEL, 8.0))
-            .into();
+        let body = container(body).width(768).height(h);
+        return body.style(fill(theme::PANEL, 8.0)).into();
     }
     if kind == 5 {
         let key = format!("song:{id}");
@@ -1469,10 +1434,8 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let list = scrollable(pane(list.padding([24, 24]).width(Fill)))
             .height(Fill)
             .style(theme::scroll);
-        let title = v
-            .and_then(|v| v["title"].as_str())
-            .unwrap_or_default()
-            .to_string();
+        let title = v.and_then(|v| v["title"].as_str()).unwrap_or_default();
+        let title = title.to_string();
         let head = row![bold("Song details", 24.0).width(Fill), close].align_y(Center);
         let head = column![
             head,
@@ -1577,10 +1540,8 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         column![head, fields].spacing(24),
         save.padding(padding::right(9))
     ];
-    let body = body
-        .spacing(8)
-        .width(524)
-        .padding(iced::Padding::new(24.0).top(22).right(15));
+    let body = body.spacing(8).width(524);
+    let body = body.padding(iced::Padding::new(24.0).top(22).right(15));
     container(body).style(style).into()
 }
 
@@ -1655,11 +1616,8 @@ pub fn view(app: &App) -> El<'_> {
         let body = column![body.padding(48).height(Fill), player_bar(app)];
         let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];
         let body = back(&bg, 0.0, body);
-        let top = [modal, menu]
-            .into_iter()
-            .flatten()
-            .map(El::from)
-            .chain(toast.map(El::from));
+        let top = [modal, menu].into_iter().flatten().map(El::from);
+        let top = top.chain(toast.map(El::from));
         return stack![body].extend(top).into();
     }
     let mut scroll = scrollable(pane(pages::route(app))).id(SCROLL);
@@ -1723,10 +1681,7 @@ pub fn view(app: &App) -> El<'_> {
     let caps = row![gap(), caps(app.lib_w()), gap(), caps(app.main_w())].push(right);
     let pad = |h| Space::new().height(h);
     let caps = column![pad(64), caps.height(Fill), pad(88)];
-    let top = [modal, menu]
-        .into_iter()
-        .flatten()
-        .map(El::from)
-        .chain(toast.map(El::from));
+    let top = [modal, menu].into_iter().flatten().map(El::from);
+    let top = top.chain(toast.map(El::from));
     stack![base, caps].extend(top).into()
 }
