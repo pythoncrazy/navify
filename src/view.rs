@@ -697,24 +697,29 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     let f = app.lib_filter;
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| q.is_empty() || name.to_lowercase().contains(&q);
-    let rows = app.data::<Lib>("lib").into_iter().flat_map(|l| {
-        let pls = l
-            .playlists
-            .iter()
-            .filter(|_| f < 2)
-            .map(|p| (&p.cover, &p.name, "playlist", p.id.as_str(), &p.owner));
-        let als = l
-            .albums
-            .iter()
-            .filter(|_| matches!(f, 0 | 2))
-            .map(|a| (&a.cover, &a.name, "album", a.id.as_str(), &a.artist));
-        let ars = l
-            .artists
-            .iter()
-            .filter(|_| matches!(f, 0 | 3))
-            .map(|a| (&a.cover, &a.name, "artist", a.id.as_str(), &a.name));
-        pls.chain(als).chain(ars)
-    });
+    let wait = app.pending.contains("home#0") || app.covers.wait && app.covers.empty();
+    let rows = app
+        .data::<Lib>("lib")
+        .filter(|_| !wait)
+        .into_iter()
+        .flat_map(|l| {
+            let pls = l
+                .playlists
+                .iter()
+                .filter(|_| f < 2)
+                .map(|p| (&p.cover, &p.name, "playlist", p.id.as_str(), &p.owner));
+            let als = l
+                .albums
+                .iter()
+                .filter(|_| matches!(f, 0 | 2))
+                .map(|a| (&a.cover, &a.name, "album", a.id.as_str(), &a.artist));
+            let ars = l
+                .artists
+                .iter()
+                .filter(|_| matches!(f, 0 | 3))
+                .map(|a| (&a.cover, &a.name, "artist", a.id.as_str(), &a.name));
+            pls.chain(als).chain(ars)
+        });
     let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();
     match app.cfg.settings.lib_sort {
         1 => rows.sort_by_cached_key(|r| r.1.to_lowercase()),

@@ -220,6 +220,8 @@ pub struct Covers {
     color: HashMap<String, Color>,
     want: HashSet<(String, u32)>,
     failed: HashSet<String>,
+    pub wait: bool,
+    disk: usize,
 }
 
 fn slot(size: u32) -> usize {
@@ -228,6 +230,10 @@ fn slot(size: u32) -> usize {
 }
 
 impl Covers {
+    pub fn empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     pub fn get(&self, id: &str, size: u32) -> Option<image::Handle> {
         let ((_, e), mut near) = (self.map.get(bare(id))?, [0, 1, 2, 3]);
         near.sort_unstable_by_key(|&j| SIZES[j].abs_diff(size));
@@ -1146,12 +1152,13 @@ impl App {
             return Task::none();
         }
         let ok = |(songs, cur, pos): (Vec<Song>, String, u64)| {
-            act(move |a| {
+            task(move |a| {
                 if !songs.is_empty() && !a.loaded {
                     a.position = pos as f32 / 1000.0;
                     a.index = songs.iter().position(|s| s.id == cur).unwrap_or(0);
                     (a.queue, a.shuffle) = (songs.clone(), None);
                 }
+                a.covers_now()
             })
         };
         let fail = "Could not restore the play queue.";
@@ -1194,7 +1201,7 @@ impl App {
         let Some(s) = self.session.clone() else {
             return Task::none();
         };
-        let mut tasks = Vec::new();
+        let mut need = Vec::new();
         for (id, size) in ids {
             self.covers.tick += 1;
             let (t, e) = (self.covers.tick, self.covers.map.get_mut(bare(&id)));
@@ -1208,37 +1215,99 @@ impl App {
             if id.is_empty() || have || bad || !self.covers.want.insert((bare(&id).into(), size)) {
                 continue;
             }
-            let (own, k) = (s.clone(), id.clone());
-            let s = s.clone();
-            let load = async move {
-                let b = s.cover(&k, size).await.map_err(|e| e.to_string())?;
-                let wide = k.strip_prefix('b').and_then(|r| r.split_once(':'));
-                let wide = wide.and_then(|(n, _)| n.parse::<f32>().ok());
-                let px = if wide.is_some() { 1280 } else { size };
-                let aspect = wide.map_or(5.0 / 3.0 * f32::from(k.starts_with("w:")), |n| n / 10.0);
-                static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-                let _one = ONE.acquire().await.expect("the decode semaphore is open");
-                let round = k.starts_with("o:");
-                let d = tokio::task::spawn_blocking(move || decode(b, px, aspect, round));
-                d.await.expect("decode task")
-            };
-            let done = move |r: Result<Decoded, String>| {
-                let id = id.clone();
-                let t = task(move |a| {
-                    a.covers.want.remove(&(bare(&id).into(), size));
-                    match r.clone() {
-                        Ok(d) => (a.covers.insert(id.clone(), size, d), Task::none()).1,
-                        Err(e) => {
-                            a.covers.failed.insert(bare(&id).into());
-                            a.toast(&format!("Could not load a cover. {e}"))
-                        }
-                    }
-                });
-                ours(&own, t)
-            };
-            tasks.push(Task::perform(load, done));
+            need.push((id, size));
         }
-        Task::batch(tasks)
+        if need.is_empty() {
+            return Task::none();
+        }
+        type Batch = Vec<(String, u32, Result<Decoded, String>)>;
+        static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let dec = |items: Vec<(String, u32, Result<bytes::Bytes, String>)>,
+                   mut colors: HashMap<String, Color>| async move {
+            if items.is_empty() {
+                return Vec::new();
+            }
+            let _one = ONE.acquire().await.expect("the decode semaphore is open");
+            tokio::task::spawn_blocking(move || {
+                items
+                    .into_iter()
+                    .map(|(k, sz, b)| {
+                        let c = colors.get(bare(&k)).copied();
+                        let r = b.and_then(|b| decode(b, &k, sz, c));
+                        if let Ok((c, _, _)) = &r {
+                            colors.insert(bare(&k).into(), *c);
+                        }
+                        (k, sz, r)
+                    })
+                    .collect::<Batch>()
+            })
+            .await
+            .expect("decode task")
+        };
+        let apply = |a: &mut App, out: Batch| {
+            let mut err = None;
+            for (id, size, r) in out {
+                a.covers.want.remove(&(bare(&id).into(), size));
+                match r {
+                    Ok(d) => a.covers.insert(id, size, d),
+                    Err(e) => {
+                        a.covers.failed.insert(bare(&id).into());
+                        err = Some(e);
+                    }
+                }
+            }
+            err.map(|e| a.toast(&format!("Could not load a cover. {e}")))
+        };
+        self.covers.disk += 1;
+        let (colors, own, s2) = (self.covers.color.clone(), s.clone(), s.clone());
+        let load = async move {
+            let (mut hit, mut miss) = (Vec::new(), Vec::new());
+            for (k, sz) in need {
+                match tokio::fs::read(s.cover_file(&k, sz)).await {
+                    Ok(b) if !b.is_empty() => hit.push((k, sz, Ok(b.into()))),
+                    _ => miss.push((k, sz)),
+                }
+            }
+            (dec(hit, colors).await, miss)
+        };
+        Task::perform(load, move |(out, miss)| {
+            let s = s2.clone();
+            let t = task(move |a| {
+                a.covers.disk = a.covers.disk.saturating_sub(1);
+                if a.covers.disk == 0 {
+                    a.covers.wait = false;
+                }
+                let mut tasks: Vec<_> = apply(a, out.clone()).into_iter().collect();
+                for chunk in miss.chunks(4) {
+                    let (chunk, s, own, colors) =
+                        (chunk.to_vec(), s.clone(), s.clone(), a.covers.color.clone());
+                    let net = async move {
+                        let mut dl = Vec::new();
+                        for (k, sz) in chunk {
+                            let s = s.clone();
+                            dl.push(tokio::spawn(async move {
+                                (
+                                    k.clone(),
+                                    sz,
+                                    s.cover(&k, sz).await.map_err(|e| e.to_string()),
+                                )
+                            }));
+                        }
+                        let mut got = Vec::new();
+                        for h in dl {
+                            got.push(h.await.expect("cover task"));
+                        }
+                        dec(got, colors).await
+                    };
+                    tasks.push(Task::perform(net, move |res| {
+                        let res = res.clone();
+                        ours(&own, task(move |a| Task::batch(apply(a, res.clone()))))
+                    }));
+                }
+                Task::batch(tasks)
+            });
+            ours(&own, t)
+        })
     }
 
     fn call<T, F>(
@@ -1306,6 +1375,7 @@ impl App {
     fn show(&mut self) -> Task<Message> {
         let route = self.history[self.hi].clone();
         (self.route, self.pl_find, self.pl_more) = (route.clone(), None, None);
+        self.covers.wait = false;
         self.panel = [self.panel, 0][usize::from(self.panel == 4)];
         (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
         (self.popular_all, self.disc_chip) = (false, 0);
@@ -1530,7 +1600,8 @@ impl App {
                 }
                 let known = self.cache.contains_key(&key) || self.seeds.contains_key(&key);
                 if known || key != self.key_of(&self.route) {
-                    return self.toast(&e);
+                    let load = (key == "lib" && self.route == "home").then(|| self.disc_load());
+                    return Task::batch([self.toast(&e)].into_iter().chain(load));
                 }
                 self.cache.insert(key, (Instant::now(), Arc::new(e)));
             }
@@ -1541,7 +1612,7 @@ impl App {
                     .and_then(|id| self.find_artist(id))
                     .map(|a| a.music_brainz_id.clone())
                     .filter(|m| !m.is_empty());
-                self.seeds.remove(&key);
+                let seeded = self.seeds.remove(&key).is_some();
                 let old = self.cache.get(&key).map(|c| &c.1).filter(|_| off > 0);
                 let join = |old: &AnyData| {
                     pager!(v, b => old.downcast_ref::<Page<_>>().filter(|a| a.0.len() == off).map(|a| {
@@ -1568,7 +1639,20 @@ impl App {
                 let banner = Task::batch(banner.map(|k| self.request(&k, 0)));
                 let setup = shot_key(self.shot.as_deref()).is_some_and(|k| k == key);
                 let setup = Task::batch(setup.then(|| self.apply_shot_setup()));
-                return Task::batch([self.disc_load(), setup, banner]);
+                let wait = self.route == "home"
+                    && matches!(key.as_str(), "home" | "lib")
+                    && (self.pending.contains("home#0") || self.pending.contains("lib#0"));
+                if wait {
+                    return Task::batch([setup, banner]);
+                }
+                let d0 = self.covers.disk;
+                let load = self.disc_load();
+                let active =
+                    key == self.key_of(&self.route) || (self.route == "home" && key == "lib");
+                if off == 0 && !seeded && self.covers.disk > d0 && active {
+                    self.covers.wait = true;
+                }
+                return Task::batch([load, setup, banner]);
             }
             Message::Nav(r) => return self.nav(r),
             Message::Back if self.hi > 0 => {
@@ -2595,15 +2679,15 @@ impl App {
         let art = crate::pages::art_px(self);
         let [top, rows, genre, tiles] = wide;
         let lists = [
-            (big, cw - 24.0),
             (head, art),
-            (now, side),
-            (small, 56.0),
+            (tiles, crate::pages::home_tiles(self).2),
+            (big, cw - 24.0),
             (lib, lib_px),
+            (small, 56.0),
+            (now, side),
             (top, 72.0),
             (rows, 64.0),
             (genre, (tw * 0.45).round()),
-            (tiles, crate::pages::home_tiles(self).2),
         ];
         let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
         banner
@@ -2833,8 +2917,27 @@ pub const KEYS: [KeyAction; 27] = [
     ("queue", "Queue", "Alt+Shift+Q", || Message::Panel(2)),
 ];
 
-fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Decoded, String> {
-    use {::image::imageops::FilterType, std::hash::BuildHasher};
+fn decode(raw: bytes::Bytes, k: &str, size: u32, color: Option<Color>) -> Result<Decoded, String> {
+    use {::image::ImageReader, ::image::imageops::FilterType, std::hash::BuildHasher};
+    let wide = k.strip_prefix('b').and_then(|r| r.split_once(':'));
+    let wide = wide.and_then(|(n, _)| n.parse::<f32>().ok());
+    let (size, round) = (
+        if wide.is_some() { 1280 } else { size },
+        k.starts_with("o:"),
+    );
+    let aspect = wide.map_or(5.0 / 3.0 * f32::from(k.starts_with("w:")), |n| n / 10.0);
+    if aspect == 0.0
+        && !round
+        && let Some(c) = color
+        && let Some((w, h)) = ImageReader::new(std::io::Cursor::new(&raw))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.into_dimensions().ok())
+        && w <= size
+        && h <= size
+    {
+        return Ok((c, image::Handle::from_bytes(raw.clone()), raw.len()));
+    }
     static BIG: std::sync::Mutex<Vec<(u64, Decoded)>> = std::sync::Mutex::new(Vec::new());
     let hash = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
     let key = hash.hash_one((&raw[..], size, round, aspect.to_bits()));
@@ -2851,98 +2954,100 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
     if big {
         img = img.thumbnail(size, size);
     }
-    let hsl = |[r, g, b]: [f32; 3]| {
-        let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
-        let (d, l) = (mx - mn, (mx + mn) / 2.0);
-        let h = match () {
-            _ if d == 0.0 => 0.0,
-            _ if mx == r => ((g - b) / d).rem_euclid(6.0),
-            _ if mx == g => (b - r) / d + 2.0,
-            _ => (r - g) / d + 4.0,
+    let color = color.unwrap_or_else(|| {
+        let hsl = |[r, g, b]: [f32; 3]| {
+            let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+            let (d, l) = (mx - mn, (mx + mn) / 2.0);
+            let h = match () {
+                _ if d == 0.0 => 0.0,
+                _ if mx == r => ((g - b) / d).rem_euclid(6.0),
+                _ if mx == g => (b - r) / d + 2.0,
+                _ => (r - g) / d + 4.0,
+            };
+            (h * 60.0, d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6), l)
         };
-        (h * 60.0, d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6), l)
-    };
-    let ok = |c: [f32; 3]| {
-        let (h, s, l) = hsl(c);
-        l > 0.05 && l < 0.95 && !((10.0..=37.0).contains(&h) && s <= 0.82)
-    };
-    let rgb = |q: [u8; 3]| q.map(|c| f32::from(c << 3) / 255.0);
-    let mut hist = std::collections::BTreeMap::<[u8; 3], u32>::new();
-    for p in img
-        .resize_exact(112, 112, FilterType::Triangle)
-        .to_rgb8()
-        .pixels()
-    {
-        *hist.entry(p.0.map(|c| c >> 3)).or_default() += 1;
-    }
-    let span = |b: &[([u8; 3], u32)], i: usize| {
-        let v = b.iter().map(|x| x.0[i]);
-        v.clone().max().unwrap_or(0) - v.min().unwrap_or(0)
-    };
-    let mut boxes = vec![
-        hist.into_iter()
-            .filter(|x| ok(rgb(x.0)))
-            .collect::<Vec<_>>(),
-    ];
-    while boxes.len() < 16 {
-        let vol = |b: &Vec<_>| (0..3).map(|i| u32::from(span(b, i)) + 1).product::<u32>();
-        let k = (0..boxes.len())
-            .max_by_key(|&k| vol(&boxes[k]))
-            .expect("a box");
-        let mut b = boxes.swap_remove(k);
-        if b.len() < 2 {
-            boxes.push(b);
-            break;
+        let ok = |c: [f32; 3]| {
+            let (h, s, l) = hsl(c);
+            l > 0.05 && l < 0.95 && !((10.0..=37.0).contains(&h) && s <= 0.82)
+        };
+        let rgb = |q: [u8; 3]| q.map(|c| f32::from(c << 3) / 255.0);
+        let mut hist = std::collections::BTreeMap::<[u8; 3], u32>::new();
+        for p in img
+            .resize_exact(64, 64, FilterType::Nearest)
+            .to_rgb8()
+            .pixels()
+        {
+            *hist.entry(p.0.map(|c| c >> 3)).or_default() += 1;
         }
-        let d = (0..3).max_by_key(|&i| span(&b, i)).expect("three channels");
-        b.sort_by_key(|x| x.0[d]);
-        let (all, mut acc) = (b.iter().map(|x| x.1).sum::<u32>(), 0);
-        let at = b.iter().position(|x| {
-            acc += x.1;
-            2 * acc >= all
-        });
-        let rest = b.split_off(at.expect("a median").min(b.len() - 2) + 1);
-        boxes.extend([b, rest]);
-    }
-    let sw: Vec<([f32; 3], f32)> = boxes
-        .iter()
-        .filter(|b| !b.is_empty())
-        .map(|b| {
-            let n = b.iter().map(|x| x.1).sum::<u32>();
-            let avg = [0, 1, 2].map(|i| {
-                let t: u32 = b.iter().map(|x| u32::from(x.0[i]) * x.1).sum();
-                ((t + n / 2) / n) as u8
+        let span = |b: &[([u8; 3], u32)], i: usize| {
+            let v = b.iter().map(|x| x.0[i]);
+            v.clone().max().unwrap_or(0) - v.min().unwrap_or(0)
+        };
+        let mut boxes = vec![
+            hist.into_iter()
+                .filter(|x| ok(rgb(x.0)))
+                .collect::<Vec<_>>(),
+        ];
+        while boxes.len() < 16 {
+            let vol = |b: &Vec<_>| (0..3).map(|i| u32::from(span(b, i)) + 1).product::<u32>();
+            let k = (0..boxes.len())
+                .max_by_key(|&k| vol(&boxes[k]))
+                .expect("a box");
+            let mut b = boxes.swap_remove(k);
+            if b.len() < 2 {
+                boxes.push(b);
+                break;
+            }
+            let d = (0..3).max_by_key(|&i| span(&b, i)).expect("three channels");
+            b.sort_by_key(|x| x.0[d]);
+            let (all, mut acc) = (b.iter().map(|x| x.1).sum::<u32>(), 0);
+            let at = b.iter().position(|x| {
+                acc += x.1;
+                2 * acc >= all
             });
-            (rgb(avg), n as f32)
-        })
-        .filter(|w| ok(w.0))
-        .collect();
-    let bright = |c| hsl(c).2 >= 0.8 && hsl(c).1 < 0.25;
-    let top = sw
-        .iter()
-        .filter(|w| !bright(w.0))
-        .map(|w| w.1)
-        .fold(0.0, f32::max);
-    let pick = |l: [f32; 3], s: [f32; 3]| {
-        let fit = sw
+            let rest = b.split_off(at.expect("a median").min(b.len() - 2) + 1);
+            boxes.extend([b, rest]);
+        }
+        let sw: Vec<([f32; 3], f32)> = boxes
             .iter()
-            .filter(|w| w.1 >= top * 0.1)
-            .filter_map(|&(c, n)| {
-                let (_, cs, cl) = hsl(c);
-                let fit = (s[0]..=s[2]).contains(&cs) && (l[0]..=l[2]).contains(&cl);
-                let score = (1.0 - (cs - s[1]).abs()) * 0.24 + (1.0 - (cl - l[1]).abs()) * 0.52;
-                fit.then_some((score + (n / top).min(1.0) * 0.24, c))
-            });
-        fit.max_by(|a, b| a.0.total_cmp(&b.0)).map(|x| x.1)
-    };
-    let color = pick([0.3, 0.5, 0.7], [0.35, 1.0, 1.0])
-        .or_else(|| pick([0.0, 0.26, 0.45], [0.35, 1.0, 1.0]))
-        .or_else(|| pick([0.55, 0.74, 1.0], [0.35, 1.0, 1.0]))
-        .or_else(|| pick([0.15, 0.26, 0.45], [0.05, 0.3, 0.4]))
-        .map_or(Color::from_rgb8(83, 83, 83), |c| {
-            let [r, g, b] = c.map(|x| x - (hsl(c).2 - 0.5).max(0.0));
-            Color::from_rgb(r, g, b)
-        });
+            .filter(|b| !b.is_empty())
+            .map(|b| {
+                let n = b.iter().map(|x| x.1).sum::<u32>();
+                let avg = [0, 1, 2].map(|i| {
+                    let t: u32 = b.iter().map(|x| u32::from(x.0[i]) * x.1).sum();
+                    ((t + n / 2) / n) as u8
+                });
+                (rgb(avg), n as f32)
+            })
+            .filter(|w| ok(w.0))
+            .collect();
+        let bright = |c| hsl(c).2 >= 0.8 && hsl(c).1 < 0.25;
+        let top = sw
+            .iter()
+            .filter(|w| !bright(w.0))
+            .map(|w| w.1)
+            .fold(0.0, f32::max);
+        let pick = |l: [f32; 3], s: [f32; 3]| {
+            let fit = sw
+                .iter()
+                .filter(|w| w.1 >= top * 0.1)
+                .filter_map(|&(c, n)| {
+                    let (_, cs, cl) = hsl(c);
+                    let fit = (s[0]..=s[2]).contains(&cs) && (l[0]..=l[2]).contains(&cl);
+                    let score = (1.0 - (cs - s[1]).abs()) * 0.24 + (1.0 - (cl - l[1]).abs()) * 0.52;
+                    fit.then_some((score + (n / top).min(1.0) * 0.24, c))
+                });
+            fit.max_by(|a, b| a.0.total_cmp(&b.0)).map(|x| x.1)
+        };
+        pick([0.3, 0.5, 0.7], [0.35, 1.0, 1.0])
+            .or_else(|| pick([0.0, 0.26, 0.45], [0.35, 1.0, 1.0]))
+            .or_else(|| pick([0.55, 0.74, 1.0], [0.35, 1.0, 1.0]))
+            .or_else(|| pick([0.15, 0.26, 0.45], [0.05, 0.3, 0.4]))
+            .map_or(Color::from_rgb8(83, 83, 83), |c| {
+                let [r, g, b] = c.map(|x| x - (hsl(c).2 - 0.5).max(0.0));
+                Color::from_rgb(r, g, b)
+            })
+    });
     if aspect == 0.0 && !big && !round {
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
