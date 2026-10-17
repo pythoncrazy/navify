@@ -129,6 +129,13 @@ pub fn hov<'a>(
         }))
 }
 
+pub fn album_of(s: &crate::api::Song) -> Message {
+    match s.url.is_empty() {
+        true => go("album", &s.album_id),
+        false => Message::Nav("radio".into()),
+    }
+}
+
 pub fn shade<'a>(g: char, r: f32, m: Message) -> El<'a> {
     let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
     let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
@@ -1188,12 +1195,7 @@ fn player_bar(app: &App) -> El<'_> {
         let on = app.is_starred(&s.id, s.starred);
         let title = theme::ell(&s.title, tw, 14.0, Normal);
         let radio = !s.url.is_empty();
-        let home = if radio {
-            Message::Nav("radio".into())
-        } else {
-            go("album", &s.album_id)
-        };
-        let title = btn(title, home);
+        let title = btn(title, album_of(s));
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));

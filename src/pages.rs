@@ -14,8 +14,8 @@ use crate::theme::{
     self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
 };
 use crate::view::{
-    El, SONGS_BG, art, artists_line, back, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable,
-    go, hov, icon_btn, liked_art, media, pane, shade, tip, tool_btn, vgap,
+    El, SONGS_BG, album_of, art, artists_line, back, bands, btn, cover, fmt_dur, fmt_long, fmt_n,
+    focusable, go, hov, icon_btn, liked_art, media, pane, shade, tip, tool_btn, vgap,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -2414,12 +2414,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let artist = btn(artist, go("artist", lead.map_or(&s.artist_id, |a| &a.id)));
     let title = ell(&s.title, w - 40.0, 24.0, Bold);
     let radio = !s.url.is_empty();
-    let home = if radio {
-        Message::Nav("radio".into())
-    } else {
-        go("album", &s.album_id)
-    };
-    let title = btn(title, home);
+    let title = btn(title, album_of(s));
     let next = app.queue.get(app.real_at(app.index + 1)).map(|n| {
         let open = link_btn(bold("Open queue", 14.0), SUB, Message::Panel(2));
         let head = row![bold("Next in queue", 16.0).width(Fill), open];
