@@ -76,7 +76,7 @@ fn own_pl(app: &App) -> Option<&(Playlist, Vec<Song>)> {
 }
 
 pub fn list_y(app: &App) -> f32 {
-    let tools = own_pl(app).is_some_and(|x| !x.1.is_empty());
+    let tools = own_pl(app).is_some_and(|(p, s)| !s.is_empty() || p.song_count > 0);
     hero_h(app) + BAR + HEAD + [0.0, 42.0][usize::from(tools)]
 }
 
@@ -102,7 +102,7 @@ fn find_input<'a>(q: &str, id: &'static str) -> iced::widget::TextInput<'a, Mess
                     _ => iced::Task::none(),
                 },
             );
-            later(0.25, go)
+            iced::Task::batch([a.covers_now(), later(0.25, go)])
         })
     });
     let glass = text_input::Icon {
@@ -722,7 +722,7 @@ fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
         let col = container(col.spacing(16).align_x(Center));
         return Some(col.center_x(Fill).padding(80).into());
     }
-    if app.cache.contains_key(key) {
+    if app.cache.contains_key(key) || (app.route == key && app.seeds.contains_key(key)) {
         return None;
     }
     let px = art_px(app);
@@ -914,7 +914,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let empty = app.route == "profile"
         || app
             .data::<(Playlist, Vec<Song>)>(&app.route)
-            .is_some_and(|x| x.1.is_empty())
+            .is_some_and(|(p, s)| s.is_empty() && p.song_count == 0)
         || app
             .data::<(Vec<Song>, usize)>(&app.route)
             .is_some_and(|x| x.1 == 0);
@@ -980,7 +980,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             ],
             banner: None,
         };
-        let c = cols(app, true, false, songs.len());
+        let c = cols(app, true, false, songs.len().max(a.song_count as usize));
         let w = c.0 + c.1 + 80.0 * f32::from(app.cfg.settings.plays);
         let fr = (app.main_w() - 2.0 * PAD - 80.0 - c.3) / 7.0;
         let c = match c.1 > 0.0 {
@@ -1025,7 +1025,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                     .into()
             }
         };
-        let some = !songs.is_empty();
+        let some = !songs.is_empty() || p.song_count > 0;
         let comment = (!p.comment.is_empty()).then(|| sub(&p.comment, 14.0));
         let owner = row![avatar(&p.owner, 24.0), bold(&p.owner, 14.0)].spacing(8);
         let meta = column![comment, meta(owner.align_y(Center), rest)];
@@ -1043,7 +1043,8 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             banner: None,
         };
         let songs = app.songs_of(key).map_or(&songs[..], |x| x.0);
-        return Some((page, songs, cols(app, true, true, songs.len())));
+        let n = songs.len().max(p.song_count as usize);
+        return Some((page, songs, cols(app, true, true, n)));
     }
     let liked = key == "liked";
     let (items, total) = app
@@ -1153,9 +1154,10 @@ pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
 
 fn detail(app: &App) -> Option<El<'_>> {
     let (p, songs, c) = detail_of(app)?;
+    let loaded = app.cache.contains_key(&app.route);
     let y0 = list_y(app);
     let pl = own_pl(app);
-    let empty = pl.is_some_and(|x| x.1.is_empty());
+    let empty = pl.is_some_and(|(p, s)| s.is_empty() && p.song_count == 0);
     let liked = app.route == "liked";
     let tools = pl.filter(|_| !empty).map(|(p, _)| {
         let pill = |c, label, on: bool, m| {
@@ -1199,33 +1201,39 @@ fn detail(app: &App) -> Option<El<'_>> {
             .padding(PAD)
             .into(),
     };
-    let body = body.push((songs.is_empty() && !empty).then_some(none));
-    let body = body.push(pl.map(|(p, _)| finder(app, p, empty)));
-    let foot = app.data::<(Album, Vec<Song>)>(&app.route).map(|(a, _)| {
-        let day = Some(date(&a.release_date, true)).filter(|d| !d.is_empty());
-        let day = day.or((a.year > 0).then(|| a.year.to_string()));
-        let label =
-            (!a.labels.is_empty()).then(|| format!("\u{2117} {} {}", a.year, a.labels.join(", ")));
-        let notes = column![day.map(|d| sub(d, 14.0)), label.map(|l| sub(l, 12.0))].spacing(2);
-        let year = |x: &Album| {
-            if x.year > 0 {
-                x.year.to_string()
-            } else {
-                String::new()
-            }
-        };
-        let more = more_by(app, a)
-            .into_iter()
-            .map(|x| album_card(app, x, year(x)));
-        let all = Some(format!("discography:{}", a.artist_id));
-        let more = shelf(format!("More by {}", a.artist), all, more);
-        column![
-            container(notes).padding(Padding::from([0.0, PAD]).top(9)),
-            more
-        ]
-        .spacing(66)
-        .padding(padding::bottom(PAD))
-    });
+    let body = body.push((loaded && songs.is_empty() && !empty).then_some(none));
+    let body = body.push(
+        pl.filter(|_| loaded || empty)
+            .map(|(p, _)| finder(app, p, empty)),
+    );
+    let foot = app
+        .data::<(Album, Vec<Song>)>(&app.route)
+        .filter(|_| loaded)
+        .map(|(a, _)| {
+            let day = Some(date(&a.release_date, true)).filter(|d| !d.is_empty());
+            let day = day.or((a.year > 0).then(|| a.year.to_string()));
+            let label = (!a.labels.is_empty())
+                .then(|| format!("\u{2117} {} {}", a.year, a.labels.join(", ")));
+            let notes = column![day.map(|d| sub(d, 14.0)), label.map(|l| sub(l, 12.0))].spacing(2);
+            let year = |x: &Album| {
+                if x.year > 0 {
+                    x.year.to_string()
+                } else {
+                    String::new()
+                }
+            };
+            let more = more_by(app, a)
+                .into_iter()
+                .map(|x| album_card(app, x, year(x)));
+            let all = Some(format!("discography:{}", a.artist_id));
+            let more = shelf(format!("More by {}", a.artist), all, more);
+            column![
+                container(notes).padding(Padding::from([0.0, PAD]).top(9)),
+                more
+            ]
+            .spacing(66)
+            .padding(padding::bottom(PAD))
+        });
     Some(page(app, p, body.push(foot).into()))
 }
 

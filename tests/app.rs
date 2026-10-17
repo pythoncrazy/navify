@@ -40,8 +40,12 @@ fn album_reopen_in_stale_time_sends_no_request() {
         .data::<(Vec<Album>, usize)>("albums")
         .expect("merged page");
     assert!(p.0.len() == 150 && p.0[120].id == "120");
+    let _ = app.update(Message::Nav("album:120".into()));
+    assert!(app.seeds.contains_key("album:120"));
     let _ = app.update(Message::Nav("search:long".into()));
     assert_eq!(app.search_q, "long");
+    let _ = app.update(Message::Search(String::new()));
+    assert_eq!(app.route, "search");
     let _ = app.update(Message::Back);
     assert!(app.search_q.is_empty());
 }

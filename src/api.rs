@@ -569,6 +569,8 @@ impl Session {
         {
             return Ok(b.into());
         }
+        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+        let _net = NET.acquire().await.expect("the cover semaphore is open");
         let url = match id.starts_with("https://") {
             true => id.to_string(),
             false => {
