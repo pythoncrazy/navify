@@ -131,12 +131,13 @@ fn plural(n: u32, word: &str) -> String {
 fn cols(app: &App, album: bool, date: bool, n: usize) -> Cols {
     let idx = 16.0 + 8.0 * n.max(1).ilog10().saturating_sub(1) as f32;
     let st = &app.cfg.settings;
-    let extra = 106.0 * f32::from(st.ratings) + 80.0 * f32::from(st.plays)
-        - 58.0 * f32::from(st.hide_duration);
-    let w = app.main_w() - 2.0 * PAD - 166.0 - idx - extra;
     let plays = ["album:", "discography:"]
         .iter()
         .any(|p| app.route.starts_with(p));
+    let tail = st.plays && !plays && !app.route.starts_with("artist:");
+    let extra =
+        106.0 * f32::from(st.ratings) + 80.0 * f32::from(tail) - 58.0 * f32::from(st.hide_duration);
+    let w = app.main_w() - 2.0 * PAD - 166.0 - idx - extra;
     let shown = [!st.hide_album, !st.hide_plays][usize::from(plays)];
     let (album, date) = (album && shown, date && !st.hide_added);
     let (a, d) = (f32::from(album && w > 480.0), f32::from(date && w > 640.0));
@@ -650,25 +651,26 @@ fn discography(app: &App) -> Option<El<'_>> {
         let g = grid(app, rows.len(), cols, cw + 52.0, grid_y(app), card);
         return Some(column![head, g].into());
     }
-    let (c, (off, view)) = (cols(app, true, false, 0), app.scroll());
+    let (off, view) = app.scroll();
     let (mut gap, mut col) = (0.0, Column::new().push(head));
     for (y, h, al) in rows {
         if y + h < off - 200.0 || y > off + view + 200.0 {
             gap += h;
         } else {
             col = col.push(Space::new().height(gap));
-            col = col.push(release(app, al, y, c));
+            col = col.push(release(app, al, y));
             gap = 0.0;
         }
     }
     Some(col.push(Space::new().height(gap)).into())
 }
 
-fn release<'a>(app: &'a App, al: &'a Album, y: f32, c: Cols) -> El<'a> {
+fn release<'a>(app: &'a App, al: &'a Album, y: f32) -> El<'a> {
     let key = format!("album:{}", al.id);
     let songs = app.data::<(Album, Vec<Song>)>(&key).map(|x| &x.1[..]);
     let songs = songs.filter(|s| !s.is_empty());
     let n = songs.map_or(al.song_count as usize, <[Song]>::len);
+    let c = cols(app, true, false, n);
     let ((off, view), top) = (app.scroll(), y + DISC_HEAD);
     let (lo, hi) = span(off - top, off + view - top, app.row_h(), n, 6);
     let year = (al.year > 0).then(|| al.year.to_string());
@@ -1011,7 +1013,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
             banner: None,
         };
         let c = cols(app, true, false, songs.len().max(a.song_count as usize));
-        let w = c.0 + c.1 + 80.0 * f32::from(app.cfg.settings.plays);
+        let w = c.0 + c.1;
         let fr = (app.main_w() - 2.0 * PAD - 80.0 - c.3) / 7.0;
         let c = match c.1 > 0.0 {
             true => (4.0 * fr, w - 4.0 * fr, c.2, c.3),
@@ -1344,21 +1346,24 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         return Some(bar(t.into(), bg).into());
     }
     let artist = app.data::<(Artist, Vec<Album>)>(&app.route);
-    let (title, color, cols, banner) = match artist {
+    let (title, color, cols, banner, some) = match artist {
         Some((a, _)) => {
             let b = banner(app, a);
             let color = head_color(app, b.as_deref().unwrap_or(&a.cover));
-            (&a.name[..], color, None, b.is_some())
+            (&a.name[..], color, None, b.is_some(), true)
         }
-        None => detail_of(app).map(|(p, _, c)| (p.title, p.color, Some(c), false))?,
+        None => detail_of(app).map(|(p, s, c)| {
+            let some = !s.is_empty();
+            (p.title, p.color, some.then_some(c), false, some)
+        })?,
     };
     let top = [hero_h(app), banner_h(app)][usize::from(banner)];
     if off <= top - 24.0 {
         return None;
     }
     let title = ell(title, app.main_w() - 120.0, 24.0, Bold);
-    let play = play_btn(app, 48.0, &app.route);
-    let head = row![play, title].spacing(8).align_y(Center);
+    let play = some.then(|| play_btn(app, 48.0, &app.route));
+    let head = Row::new().push(play).push(title).spacing(8).align_y(Center);
     let head = bar(head.into(), theme::dark(color, 0.2));
     let cols = cols
         .filter(|_| off > list_y(app) - HEAD - 64.0)
@@ -1442,16 +1447,14 @@ fn artist(app: &App) -> Option<El<'_>> {
     let newest = newest.filter(|_| app.main_w() >= 1000.0 && !top.is_empty());
     let cut = (app.main_w() - 2.0 * PAD) * [0.0, 0.5][usize::from(newest.is_some())];
     let c = cols(app, false, false, n);
-    let c3 = (
-        c.0 + 80.0 * f32::from(app.cfg.settings.plays) - cut - 136.0,
-        120.0,
-        0.0,
-        c.3,
-    );
+    let c3 = (c.0 - cut - 136.0, 120.0, 0.0, c.3);
     let more = (top.len() > 5).then(|| {
         let label = bold(if all { "Show less" } else { "See more" }, 14.0);
         let b = button(label).padding(16).style(theme::link(SUB));
-        let b = b.on_press(act(|a| a.popular_all = !a.popular_all));
+        let b = b.on_press(task(|a| {
+            a.popular_all = !a.popular_all;
+            a.covers_now()
+        }));
         container(b).padding(Padding::from([0.0, PAD]).bottom(19))
     });
     let rows = top.iter().take(n).enumerate();
@@ -2535,7 +2538,7 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         false => Message::Noop,
     };
     let play = || Message::Play(vec![s.clone()], 0, "Recently played".into());
-    let movable = n.filter(|&n| n > app.index);
+    let movable = n.filter(|&n| n > app.index && app.panel == 2);
     let to = app.qmove.filter(|&(f, t)| f != t && Some(t) == movable);
     let line = |on: bool| {
         let l = container(Space::new().width(Fill).height(2));

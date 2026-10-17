@@ -1389,8 +1389,10 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         return body.style(fill(ELEVATED, 4.0)).into();
     }
     if kind == 6 {
-        let a = app.data::<(Artist, Vec<crate::api::Album>)>(&format!("artist:{id}"));
-        let a = &a.expect("the artist page opens the dialog").0;
+        let Some((a, _)) = app.data::<(Artist, Vec<crate::api::Album>)>(&format!("artist:{id}"))
+        else {
+            return Space::new().into();
+        };
         let bio = app.data::<crate::api::Info>(&format!("info:{id}"));
         let bio = bio.map_or(String::new(), |i| pages::plain(&i.biography));
         let pic = app
