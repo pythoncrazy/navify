@@ -1,7 +1,7 @@
 use std::{
     any::Any,
     collections::{BTreeSet, HashMap, HashSet},
-    sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed},
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -1020,6 +1020,7 @@ impl App {
         if self.queue.is_empty() {
             return Task::none();
         }
+        self.qmove = None;
         let done = Task::batch(self.loaded.then(|| self.listen(false)));
         (self.index, self.playing) = (i.min(self.queue.len() - 1), true);
         let t = self.track(&self.queue[self.real_at(self.index)]);
@@ -1046,6 +1047,7 @@ impl App {
     }
 
     fn began(&mut self) -> Task<Message> {
+        self.seek_preview = None;
         (self.position, self.scrobbled, self.heard, self.loaded) = (0.0, false, 0.0, true);
         self.lyric = true;
         self.queue_next_refresh();
@@ -1490,6 +1492,7 @@ impl App {
 
     fn halt(&mut self) -> Task<Message> {
         let l = self.listen(false);
+        self.seek_preview = None;
         (self.playing, self.loaded) = (false, false);
         self.player.iter().for_each(|p| p.stop());
         l
@@ -1867,6 +1870,9 @@ impl App {
             Message::MenuClose => {
                 if self.menu.is_none() && self.modal.is_none() {
                     (self.sel, self.picked) = (None, BTreeSet::new());
+                    if self.pl_find.take().is_some() | self.lib_find.take().is_some() {
+                        return self.covers_now();
+                    }
                 }
                 (self.menu, self.modal, self.recording) = (None, None, None);
             }
@@ -3202,6 +3208,7 @@ fn shuffle(r: std::ops::Range<usize>, first: usize) -> Vec<usize> {
     o
 }
 
+pub static DOWN: AtomicBool = AtomicBool::new(false);
 pub static CURSOR: AtomicU64 = AtomicU64::new(0);
 
 pub fn cursor() -> (f32, f32) {

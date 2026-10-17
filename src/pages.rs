@@ -1039,10 +1039,11 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                     spacing: 8.0,
                     side: text_input::Side::Left,
                 };
-                let t = t.icon(glass);
-                t.style(style)
-                    .font(theme::fw(Normal))
-                    .padding([8, 12])
+                let t = t.icon(glass).style(style).font(theme::fw(Normal));
+                let t = t.padding(Padding::new(8.0).left(12).right(28));
+                let x = icon_btn(i::X, 14.0, act(|a| a.pl_find = None));
+                stack![t, container(x).align_right(Fill).center_y(Fill)]
+                    .width(220)
                     .into()
             }
         };
@@ -1719,7 +1720,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
             };
             let kinds = ["Artist", "Album", "Song"];
             let top = top.map(|h| {
-                let (cid, name, artist, id, on, nav, play, _) = pick(h);
+                let (cid, name, artist, id, on, nav, play, menu) = pick(h);
                 let line = match h.0 {
                     0 => kinds[0].to_string(),
                     k => format!("{}{DOT}{artist}", kinds[k]),
@@ -1735,10 +1736,11 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                     [TEXT; 3],
                     6.0,
                 );
-                button(r.align_y(Center))
+                let b = button(r.align_y(Center))
                     .padding(16)
                     .style(style)
-                    .on_press(nav)
+                    .on_press(nav);
+                mouse_area(b).on_right_press(menu)
             });
             let tw = (rw - 28.0 - 120.0 - 32.0) * 6.0 / 7.0 - 126.0;
             let rows = mix.into_iter().enumerate().map(|(n, h)| -> El<'a> {
@@ -2345,7 +2347,13 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 side: text_input::Side::Left,
             };
             let t = t.on_submit(Message::Noop).icon(glass).style(style);
-            t.font(theme::fw(Normal)).padding([8, 12]).into()
+            let t = t
+                .font(theme::fw(Normal))
+                .padding(Padding::new(8.0).left(12).right(28));
+            let x = icon_btn(i::X, 14.0, act(|a| a.pl_find = None));
+            stack![t, container(x).align_right(Fill).center_y(Fill)]
+                .width(240)
+                .into()
         }
     };
     let title = row![bold("Settings", 32.0), Space::new().width(Fill), find];
