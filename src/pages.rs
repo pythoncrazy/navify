@@ -15,7 +15,7 @@ use crate::theme::{
 };
 use crate::view::{
     El, SONGS_BG, art, artists_line, back, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable,
-    go, icon_btn, liked_art, media, pane, tip, tool_btn, vgap,
+    go, hov, icon_btn, liked_art, media, pane, tip, tool_btn, vgap,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -255,10 +255,10 @@ fn card<'a>(
     let cw = app.grid().1;
     let img = cw - 24.0;
     let art = cover(app, cid, img, round);
-    let play = play_btn(app, 48.0, &route);
-    let play = container(play).align_right(Fill).align_bottom(Fill);
-    let over = |art| play_over(app, art, play.padding(8).into(), &route);
-    let art = if round { art } else { over(art) };
+    let play = container(play_btn(app, 48.0, &route)).align_right(cw);
+    let play = play
+        .align_bottom(12.0 + img)
+        .padding(padding::right(20).bottom(8));
     let tag = format!("card:{:p}", title.as_ptr());
     let title = ell(title, img, 16.0, Normal);
     let lines = column![title, ell(sub, img, 14.0, Normal).color(SUB)].spacing(4);
@@ -267,7 +267,12 @@ fn card<'a>(
     let style = theme::btn([idle, ELEVATED, BG], [TEXT; 3], 6.0);
     let b = button(column![art, lines].spacing(8)).padding(12);
     let b = b.style(style).width(cw).height(cw + 52.0);
-    let b = b.on_press(Message::Nav(route));
+    let b: El = b.on_press(Message::Nav(route.clone())).into();
+    let b = if round {
+        b
+    } else {
+        play_over(app, b, play.into(), &route)
+    };
     let menu = task(move |a| {
         a.hover = Some(tag.clone());
         a.update(Message::Menu(Box::new(k.clone())))
@@ -440,19 +445,17 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
         .height(app.row_h())
         .align_y(Center);
     let a = [[0.0, 0.1], [0.3; 2]][usize::from(sel)][usize::from(hot)];
-    let (k, enter) = (key.to_string(), hk.clone());
+    let k = key.to_string();
     let r = container(r);
-    mouse_area(if a > 0.0 {
+    let m = mouse_area(if a > 0.0 {
         r.style(fill(theme::tint(a), 4.0))
     } else {
         r
     })
     .on_press(act(move |a| a.pick(k.clone(), n)))
     .on_double_click(at)
-    .on_right_press(Message::RowMenu(key.into(), n))
-    .on_enter(act(move |a| a.hover = Some(enter.clone())))
-    .on_exit(act(move |a| a.hover = a.hover.take().filter(|h| *h != hk)))
-    .into()
+    .on_right_press(Message::RowMenu(key.into(), n));
+    hov(m, hk, None).into()
 }
 
 fn span(top: f32, bottom: f32, row_h: f32, n: usize, extra: usize) -> (usize, usize) {
@@ -823,11 +826,8 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
         let play = play_btn(app, [32.0, 48.0][usize::from(big)], &route);
         let play = container(play).align_right(Fill).center_y(th);
         let play = play.padding([0, 8]);
-        let (on, off) = (format!("tile:{cid}"), format!("tile:{cid}"));
-        mouse_area(play_over(app, b.into(), play.into(), &route))
-            .on_enter(act(move |a| a.hover = Some(on.clone())))
-            .on_exit(act(move |a| a.hover = a.hover.take().filter(|h| *h != off)))
-            .into()
+        let m = mouse_area(play_over(app, b.into(), play.into(), &route));
+        hov(m, format!("tile:{cid}"), None).into()
     };
     let pins = pls.iter().take(3);
     let pins = pins.map(|p| (&p.cover, &p.name, format!("playlist:{}", p.id)));
@@ -1841,10 +1841,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 };
                 let m = mouse_area(r).on_right_press(menu).on_double_click(play);
                 let m = if h.0 == 2 { m } else { m.on_press(nav) };
-                let enter = hk.clone();
-                m.on_enter(act(move |a| a.hover = Some(enter.clone())))
-                    .on_exit(act(move |a| a.hover = a.hover.take().filter(|x| *x != hk)))
-                    .into()
+                hov(m, hk, None).into()
             });
             let col = column![top, Column::with_children(rows)]
                 .spacing(16)
