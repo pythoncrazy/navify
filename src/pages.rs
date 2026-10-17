@@ -15,7 +15,7 @@ use crate::theme::{
 };
 use crate::view::{
     El, SONGS_BG, art, artists_line, back, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable,
-    go, hov, icon_btn, liked_art, media, pane, tip, tool_btn, vgap,
+    go, hov, icon_btn, liked_art, media, pane, shade, tip, tool_btn, vgap,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -2531,7 +2531,21 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         || app.current_song().is_some_and(|x| x.id == s.id),
         |i| i == app.index,
     );
+    let tag = format!("q:{:p}", s);
+    let hot = app.hover.as_deref() == Some(tag.as_str());
+    let dbl = match (cur, n) {
+        (true, _) => Message::Toggle,
+        (_, Some(i)) => Message::PlayQueue(i),
+        _ => Message::Play(vec![s.clone()], 0, "Recently played".into()),
+    };
     let art = cover(app, &s.cover, 48.0, false);
+    let art = match hot {
+        true => {
+            let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(cur && app.playing)];
+            stack![art, shade(g, 4.0, dbl.clone())].into()
+        }
+        false => art,
+    };
     let x = n
         .filter(|_| !cur)
         .map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
@@ -2541,7 +2555,6 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         true => Message::Menu(Box::new(MenuKind::Song(vec![s.clone()]))),
         false => Message::Noop,
     };
-    let play = || Message::Play(vec![s.clone()], 0, "Recently played".into());
     let movable = n.filter(|&n| n > app.index && app.panel == 2);
     let to = app.qmove.filter(|&(f, t)| f != t && Some(t) == movable);
     let line = |on: bool| {
@@ -2552,17 +2565,19 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
     let pad = Padding::new(8.0)
         .top(8.0 - 2.0 * f32::from(up))
         .bottom(8.0 - 2.0 * f32::from(down));
-    let r = column![line(up), container(r).padding(pad), line(down)];
-    let dbl = match (cur, n) {
-        (true, _) => Message::Toggle,
-        (_, Some(i)) => Message::PlayQueue(i),
-        _ => play(),
+    let r = container(r).padding(pad);
+    let r = if hot {
+        r.style(fill(theme::tint(0.1), 4.0))
+    } else {
+        r
     };
-    let r = mouse_area(r).on_double_click(dbl);
+    let r = column![line(up), r, line(down)];
+    let r = hov(mouse_area(r).on_double_click(dbl), tag.clone(), None);
     let r = match movable {
         Some(n) => r
             .on_press(act(move |a| a.qmove = Some((n, n))))
             .on_enter(act(move |a| {
+                a.hover = Some(tag.clone());
                 if let Some(m) = &mut a.qmove {
                     m.1 = n;
                 }

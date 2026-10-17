@@ -129,6 +129,12 @@ pub fn hov<'a>(
         }))
 }
 
+pub fn shade<'a>(g: char, r: f32, m: Message) -> El<'a> {
+    let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
+    let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
+    top.style(theme::link(TEXT)).on_press(m).into()
+}
+
 pub fn vgap<'a>(c: impl Into<El<'a>>, lo: usize) -> El<'a> {
     Element::new(wrap::Wrap(
         c.into(),
@@ -952,12 +958,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                         let b = container(b).align_right(px).align_bottom(px);
                         b.padding(8).into()
                     }
-                    false => {
-                        let r = [4.0, 24.0][usize::from(route.starts_with("artist:"))];
-                        let top = container(theme::filled(g, 20.0).color(TEXT)).center(48);
-                        let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
-                        top.style(theme::link(TEXT)).on_press(m).into()
-                    }
+                    false => shade(g, [4.0, 24.0][usize::from(route.starts_with("artist:"))], m),
                 }
             }
         };
