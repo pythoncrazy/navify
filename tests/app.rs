@@ -314,8 +314,21 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     assert_eq!(app.modal.as_ref().map(|m| m.1), Some(3));
     let _ = app.update(Message::Key("C+N".into()));
     assert_eq!(app.modal.as_ref().map(|m| m.1), Some(3));
+    let _ = app.update(Message::Nav("settings".into()));
+    let _ = app.update(Message::Back);
+    assert_eq!(app.route, "settings");
     let _ = app.update(Message::Key("C+/".into()));
     assert!(app.modal.is_none());
+    let _ = app.update(Message::LibMenu("liked".into()));
+    assert!(app.menu.is_none());
+    app.pl_more = Some("x".into());
+    let _ = app.update(Message::MenuClose);
+    assert!(app.pl_more.is_none());
+    app.full = true;
+    app.panel = 2;
+    app.lib_find = Some("a".into());
+    let _ = app.update(Message::LogOut);
+    assert!(!app.full && app.panel == 0 && app.lib_find.is_none());
 }
 
 #[test]

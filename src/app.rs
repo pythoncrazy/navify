@@ -1492,9 +1492,13 @@ impl App {
     fn reset(&mut self) -> Task<Message> {
         let h = self.halt();
         (self.queue, self.shuffle, self.index, self.position) = (Vec::new(), None, 0, 0.0);
+        (self.ctx, self.source, self.qmove) = Default::default();
         (self.starred, self.ratings, self.plays, self.recent) = Default::default();
-        (self.cache, self.seeds, self.pending) = Default::default();
-        (self.covers, self.ctx, self.history, self.hi) = Default::default();
+        (self.cache, self.seeds, self.pending, self.scrolls) = Default::default();
+        (self.covers, self.history, self.hi, self.panel) = Default::default();
+        (self.menu, self.modal, self.recording, self.hover) = Default::default();
+        (self.sel, self.picked, self.pl_find, self.pl_more) = Default::default();
+        (self.lib_find, self.full) = Default::default();
         (self.route, self.expired.0, self.save_seq) =
             (String::new(), Vec::new(), self.save_seq + 1);
         h
@@ -1668,11 +1672,15 @@ impl App {
                 return Task::batch([load, setup, banner]);
             }
             Message::Nav(r) => return self.nav(r),
-            Message::Back if self.hi > 0 => {
+            Message::Back if self.hi > 0 && self.session.is_some() && self.modal.is_none() => {
                 self.hi -= 1;
                 return self.show();
             }
-            Message::Fwd if self.hi + 1 < self.history.len() => {
+            Message::Fwd
+                if self.hi + 1 < self.history.len()
+                    && self.session.is_some()
+                    && self.modal.is_none() =>
+            {
                 self.hi += 1;
                 return self.show();
             }
@@ -1887,7 +1895,10 @@ impl App {
             Message::MenuClose => {
                 if self.menu.is_none() && self.modal.is_none() && self.recording.is_none() {
                     (self.sel, self.picked) = (None, BTreeSet::new());
-                    if self.pl_find.take().is_some() | self.lib_find.take().is_some() {
+                    if self.pl_find.take().is_some()
+                        | self.lib_find.take().is_some()
+                        | self.pl_more.take().is_some()
+                    {
                         return self.covers_now();
                     }
                 }
@@ -1940,7 +1951,6 @@ impl App {
                         return Task::batch(
                             self.sel
                                 .clone()
-                                .filter(|s| s.0 == self.route)
                                 .map(|(k, n)| self.update(Message::PlayAt(k, n))),
                         );
                     }
@@ -2124,21 +2134,12 @@ impl App {
                 return self.ctx_songs(route, "Nothing to play.", "Could not play.", play);
             }
             Message::LibMenu(route) => {
-                let lib = self.data::<Lib>("lib").expect("the library is loaded");
                 let kind = match route.split_once(':') {
                     Some(("playlist", id)) => self.playlist(id).cloned().map(MenuKind::Playlist),
-                    Some(("album", id)) => lib
-                        .albums
-                        .iter()
-                        .find(|a| a.id == id)
-                        .cloned()
-                        .map(|a| MenuKind::Album(Box::new(a))),
-                    Some(("artist", id)) => lib
-                        .artists
-                        .iter()
-                        .find(|a| a.id == id)
-                        .cloned()
-                        .map(MenuKind::Artist),
+                    Some(("album", id)) => {
+                        self.find_album(id).map(|a| MenuKind::Album(Box::new(a)))
+                    }
+                    Some(("artist", id)) => self.find_artist(id).cloned().map(MenuKind::Artist),
                     _ => None,
                 };
                 return kind.map_or_else(Task::none, |k| self.update(Message::Menu(Box::new(k))));
@@ -2235,6 +2236,13 @@ impl App {
                 {
                     return Task::none();
                 }
+                let more = self
+                    .cache
+                    .get(&key)
+                    .and_then(|(_, v)| {
+                        pager!(v, p => (p.0.len() < p.1 && n + 20 >= p.0.len()).then_some(p.0.len()))
+                    })
+                    .map(|off| self.request(&key, off));
                 let discs = (1 + discs) * usize::from(multi && kind == "album");
                 let top = match kind {
                     "folder" => DIR_Y,
@@ -2245,10 +2253,14 @@ impl App {
                 let to = match () {
                     _ if top < off + 100.0 => top - 100.0,
                     _ if top + self.row_h() > off + view => top + self.row_h() - view,
-                    _ => return Task::none(),
+                    _ => return Task::batch(more),
                 };
                 self.scrolls.insert(key, (to.max(0.0), view));
-                return self.scroll_to(to.max(0.0));
+                return Task::batch(
+                    [self.scroll_to(to.max(0.0)), self.covers_now()]
+                        .into_iter()
+                        .chain(more),
+                );
             }
             Message::Resize(w, h) if w == 0.0 || h == 0.0 => {}
             Message::Resize(w, h) => {
@@ -2622,6 +2634,7 @@ impl App {
             small.extend(
                 s[span(s.len(), self.row_h(), 1, DIR_Y)]
                     .iter()
+                    .filter(|s| !s.is_dir)
                     .map(|s| &s.cover),
             );
         } else if key.starts_with("discography:") {
@@ -2639,7 +2652,12 @@ impl App {
             if banner.is_none() {
                 head.push(&a.cover);
             }
-            small.extend(top.iter().flat_map(|v| v.iter().take(10)).map(|s| &s.cover));
+            let pop = [5, 10][usize::from(self.popular_all)];
+            small.extend(
+                top.iter()
+                    .flat_map(|v| v.iter().take(pop))
+                    .map(|s| &s.cover),
+            );
             big.extend(shelf.iter().map(|x| &x.cover));
             big.extend(
                 crate::pages::by_date(albums.iter())
@@ -2669,9 +2687,10 @@ impl App {
                     .expect("a search hit")
             };
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
-            let pls = pls
+            let pls: Vec<_> = pls
                 .iter()
-                .filter(|p| p.name.to_lowercase().contains(&q.to_lowercase()));
+                .filter(|p| p.name.to_lowercase().contains(&q.to_lowercase()))
+                .collect();
             match self.search_tab {
                 0 if !ar.is_empty() || !al.is_empty() || !sg.is_empty() => {
                     let (top, mix) = crate::pages::search_hits((ar, al, sg), q);
@@ -2681,7 +2700,7 @@ impl App {
                 1 => small.extend(sg.iter().map(|s| &s.cover)),
                 2 => big.extend(al[tiles(al.len())].iter().map(|a| &a.cover)),
                 3 => big.extend(ar[tiles(ar.len())].iter().map(|a| &a.cover)),
-                _ => big.extend(pls.map(|p| &p.cover).take(tiles(usize::MAX).end)),
+                _ => big.extend(pls[tiles(pls.len())].iter().map(|p| &p.cover)),
             }
         } else if let Some(gs) = self
             .data::<Vec<crate::api::Genre>>("genres")
