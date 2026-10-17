@@ -110,17 +110,36 @@ fn find_input<'a>(q: &str, id: &'static str) -> iced::widget::TextInput<'a, Mess
             iced::Task::batch([a.covers_now(), later(0.25, go)])
         })
     });
-    let glass = text_input::Icon {
-        font: theme::LUCIDE,
-        code_point: i::SEARCH,
-        size: Some(16.0.into()),
-        spacing: 8.0,
-        side: text_input::Side::Left,
-    };
     field
         .on_submit(Message::Noop)
-        .icon(glass)
+        .icon(theme::glass(16.0, 8.0))
         .font(theme::fw(Normal))
+}
+
+fn find_box<'a>(q: &str, hint: &'a str, id: &'static str, w: f32) -> El<'a> {
+    let style = theme::input([ELEVATED; 2], [BG; 2], [0.0; 2], 4.0);
+    let t = text_input(hint, q).id(id).width(w).size(14).style(style);
+    let t = t.on_input(|v| {
+        task(move |a| {
+            a.pl_find = Some(v.clone());
+            a.covers_now()
+        })
+    });
+    let t = t.on_submit(Message::Noop).icon(theme::glass(16.0, 8.0));
+    let t = t
+        .font(theme::fw(Normal))
+        .padding(Padding::new(8.0).left(12).right(28));
+    let x = icon_btn(
+        i::X,
+        14.0,
+        task(|a| {
+            a.pl_find = None;
+            a.covers_now()
+        }),
+    );
+    stack![t, container(x).align_right(Fill).center_y(Fill)]
+        .width(w)
+        .into()
 }
 
 fn plural(n: u32, word: &str) -> String {
@@ -1039,40 +1058,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
                 });
                 tool_btn(i::SEARCH, false, open).into()
             }
-            Some(q) => {
-                let style = theme::input([ELEVATED; 2], [BG; 2], [0.0; 2], 4.0);
-                let t = text_input("Search in playlist", q)
-                    .id("plfind")
-                    .width(220)
-                    .size(14);
-                let t = t.on_input(|v| {
-                    task(move |a| {
-                        a.pl_find = Some(v.clone());
-                        a.covers_now()
-                    })
-                });
-                let t = t.on_submit(Message::Noop);
-                let glass = text_input::Icon {
-                    font: theme::LUCIDE,
-                    code_point: i::SEARCH,
-                    size: Some(16.0.into()),
-                    spacing: 8.0,
-                    side: text_input::Side::Left,
-                };
-                let t = t.icon(glass).style(style).font(theme::fw(Normal));
-                let t = t.padding(Padding::new(8.0).left(12).right(28));
-                let x = icon_btn(
-                    i::X,
-                    14.0,
-                    task(|a| {
-                        a.pl_find = None;
-                        a.covers_now()
-                    }),
-                );
-                stack![t, container(x).align_right(Fill).center_y(Fill)]
-                    .width(220)
-                    .into()
-            }
+            Some(q) => find_box(q, "Search in playlist", "plfind", 220.0),
         };
         let some = !songs.is_empty() || p.song_count > 0;
         let comment = (!p.comment.is_empty()).then(|| sub(&p.comment, 14.0));
@@ -2347,29 +2333,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
                 iced::widget::tooltip::Position::Bottom,
             )
         }
-        Some(q) => {
-            let style = theme::input([ELEVATED; 2], [BG; 2], [0.0; 2], 4.0);
-            let t = text_input("Search settings", q)
-                .id("setfind")
-                .width(240)
-                .size(14);
-            let t = t.on_input(|v| act(move |a| a.pl_find = Some(v.clone())));
-            let glass = text_input::Icon {
-                font: theme::LUCIDE,
-                code_point: i::SEARCH,
-                size: Some(16.0.into()),
-                spacing: 8.0,
-                side: text_input::Side::Left,
-            };
-            let t = t.on_submit(Message::Noop).icon(glass).style(style);
-            let t = t
-                .font(theme::fw(Normal))
-                .padding(Padding::new(8.0).left(12).right(28));
-            let x = icon_btn(i::X, 14.0, act(|a| a.pl_find = None));
-            stack![t, container(x).align_right(Fill).center_y(Fill)]
-                .width(240)
-                .into()
-        }
+        Some(q) => find_box(q, "Search settings", "setfind", 240.0),
     };
     let title = row![bold("Settings", 32.0), Space::new().width(Fill), find];
     let title = container(title.height(55)).padding(padding::bottom(4));
@@ -2551,33 +2515,29 @@ pub fn device_panel(app: &App) -> El<'_> {
     let cur = &app.cfg.settings.device;
     let (on, others): (Vec<_>, Vec<_>) = devices(app).into_iter().partition(|d| &d.0 == cur);
     let name = on.into_iter().next().map_or_else(|| cur.clone(), |d| d.1);
-    let card = row![
+    let (pc, name) = (
         i(i::LAPTOP, 24.0).color(ACCENT),
-        txt(name, 16.0).color(ACCENT)
-    ];
-    let card = container(card.spacing(12).align_y(Center))
-        .padding([0, 20])
+        txt(name, 16.0).color(ACCENT),
+    );
+    let card = container(row![pc, name].spacing(12).align_y(Center)).padding([0, 20]);
+    let card = card
         .height(64)
         .align_y(Center)
-        .width(Fill);
-    let card = container(card.style(fill(ELEVATED, 8.0))).padding(Padding::from([0, 8]).top(8));
+        .width(Fill)
+        .style(fill(ELEVATED, 8.0));
     let title = ["Select another device", "No other devices found"][usize::from(others.is_empty())];
     let title = container(bold(title, 16.0)).padding(Padding::new(20.0).top(24).bottom(12));
     let rows = others.into_iter().map(|(id, name)| {
-        let r = row![i(i::DEVICE, 24.0), txt(name, 16.0)]
-            .spacing(12)
-            .align_y(Center);
-        let b = button(r)
-            .padding([12, 20])
-            .width(Fill)
-            .style(theme::track(0.0));
+        let r = row![i(i::DEVICE, 24.0), txt(name, 16.0)].spacing(12);
+        let b = button(r.align_y(Center)).padding(12).width(Fill);
+        let b = b.style(theme::track(0.0));
         b.on_press(set(|s, v| s.device = v, id)).into()
     });
-    let list = column![card, title]
-        .extend(rows)
-        .padding(padding::bottom(16));
+    let card = container(card).padding(Padding::from([0, 8]).top(8));
+    let list = column![card, title, Column::with_children(rows).padding([0, 8])];
     let head = panel_head(bold("Connect", 16.0), 3);
-    column![head, scrollable(pane(list)).style(theme::scroll)].into()
+    let list = scrollable(pane(list.padding(padding::bottom(16))));
+    column![head, list.style(theme::scroll)].into()
 }
 
 pub fn add_panel(app: &App) -> El<'_> {
@@ -2601,9 +2561,14 @@ pub fn add_panel(app: &App) -> El<'_> {
         let add =
             add.on_press_maybe((!on).then(|| Message::PlAdd(p.id.clone(), vec![s.id.clone()])));
         let art = cover(app, &s.cover, 48.0, false);
-        let r = row![media(art, &s.title, &s.artist, w, TEXT), add];
-        container(r.spacing(12).align_y(Center))
-            .padding([8, 16])
+        let r = row![media(art, &s.title, &s.artist, w, TEXT), add].spacing(12);
+        let tag = format!("add:{}", s.id);
+        let a = f32::from(u8::from(app.hover.as_ref() == Some(&tag))) * 0.1;
+        let r = container(r.align_y(Center))
+            .padding(8)
+            .style(theme::wash(a));
+        container(hov(mouse_area(r), tag, None))
+            .padding([0, 8])
             .into()
     });
     let list = column![label, Column::with_children(rows)].padding(padding::bottom(16));
@@ -2841,15 +2806,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 let on = app.cfg.settings.lib_view == v;
                 let fg = if on { ACCENT } else { SUB };
                 let b = button(i(c, 16.0).color(fg).center()).width(48).height(32);
-                let b = b.style(theme::btn(
-                    [
-                        theme::tint(f32::from(u8::from(on)) * 0.1),
-                        theme::tint(0.1),
-                        theme::tint(0.1),
-                    ],
-                    [fg; 3],
-                    4.0,
-                ));
+                let [a, h] = [theme::tint(f32::from(u8::from(on)) * 0.1), theme::tint(0.1)];
+                let b = b.style(theme::btn([a, h, h], [fg; 3], 4.0));
                 b.on_press(set(|s, v| s.lib_view = v, v)).into()
             });
             let views = container(Row::with_children(views)).padding(4);
@@ -2857,12 +2815,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let line = container(rule()).padding(padding::top(2).bottom(3));
             let col = col.push(line).push(section("View as"));
             let col = col.push(views.style(fill(ELEVATED, 4.0)));
-            return boxed(
-                col.into(),
-                208.0,
-                42.0 * 2.0 + 40.0 * 3.0 + 6.0 + 40.0 + 8.0,
-                4,
-            );
+            let h = 42.0 * 2.0 + 40.0 * 3.0 + 6.0 + 40.0 + 8.0;
+            return boxed(col.into(), 208.0, h, 4);
         }
         MenuKind::Disc => {
             let Some((id, f, _, albums)) = disc_args(app) else {
@@ -2871,13 +2825,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let has = |g: &str| g == "all" || albums.iter().any(|x| kind(x).1 == g);
             let rows = GROUPS.iter().filter(|(g, _)| has(g)).map(|(g, l)| {
                 let l = if *g == "all" { "All" } else { l };
-                item(
-                    l,
-                    None,
-                    f == *g,
-                    i::CHECK,
-                    go("discography", &format!("{id}:{g}")),
-                )
+                let m = go("discography", &format!("{id}:{g}"));
+                item(l, None, f == *g, i::CHECK, m)
             });
             let rows: Vec<El> = rows.collect();
             let h = 40.0 * rows.len() as f32 + 8.0;
@@ -3004,11 +2953,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let radio =
                 art.map(|id| it(i::RADIO, "Go to artist radio", Message::Radio(id.clone())));
             let art = art.filter(|id| app.route != format!("artist:{id}"));
-            v.extend(
-                radio
-                    .into_iter()
-                    .chain(art.map(|id| it(i::USER, "Go to artist", go("artist", id)))),
-            );
+            v.extend(radio);
+            v.extend(art.map(|id| it(i::USER, "Go to artist", go("artist", id))));
             v.extend([
                 None,
                 open(1, i::PLUS, "Add to playlist"),
@@ -3020,11 +2966,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let radio = Message::Radio(a.id.clone());
             let on = app.is_starred(&a.id, a.starred);
             let star = Message::Star(vec![a.id.clone()], !on);
-            let follow = it(
-                [i::USERPLUS, i::X][usize::from(on)],
-                ["Follow", "Unfollow"][usize::from(on)],
-                star,
-            );
+            let k = usize::from(on);
+            let follow = it([i::USERPLUS, i::X][k], ["Follow", "Unfollow"][k], star);
             let radio = it(i::RADIO, "Go to artist radio", radio);
             vec![follow, radio, pin("artist", &a.id)]
         }
@@ -3055,22 +2998,15 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         }
     };
     if level == 1 {
-        let style = theme::input(
-            [theme::MENU_HOVER; 2],
-            [theme::MENU_HOVER; 2],
-            [0.0; 2],
-            4.0,
-        );
+        let hover = [theme::MENU_HOVER; 2];
+        let style = theme::input(hover, hover, [0.0; 2], 4.0);
         let t = text_input("Find a playlist", &m.find).on_submit(Message::Noop);
         let t = t.on_input(|v| act(move |a| a.menu.iter_mut().for_each(|m| m.find = v.clone())));
-        let glass = text_input::Icon {
-            font: theme::LUCIDE,
-            code_point: i::SEARCH,
-            size: Some(16.0.into()),
-            spacing: 8.0,
-            side: text_input::Side::Left,
-        };
-        let t = t.icon(glass).style(style).font(theme::fw(Normal)).size(14);
+        let t = t
+            .icon(theme::glass(16.0, 8.0))
+            .style(style)
+            .font(theme::fw(Normal))
+            .size(14);
         head = Some(container(t.padding([6, 8])).center_y(40).into());
     }
     let flag = |b: bool| 28.0 * f32::from(u8::from(b));

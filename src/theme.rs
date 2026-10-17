@@ -286,6 +286,17 @@ pub fn input(
     }
 }
 
+pub fn glass(size: f32, spacing: f32) -> text_input::Icon<Font> {
+    let side = text_input::Side::Left;
+    text_input::Icon {
+        font: LUCIDE,
+        code_point: icon::SEARCH,
+        size: Some(size.into()),
+        spacing,
+        side,
+    }
+}
+
 pub fn seek(t: &Theme, s: slider::Status) -> slider::Style {
     let hot = s != slider::Status::Active;
     let mut st = slider::default(t, s);
