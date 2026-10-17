@@ -170,13 +170,21 @@ async fn log_out_clears_the_play_state() {
     let songs: Vec<Song> = parse(songs.into()).expect("songs");
     let _ = app.update(Message::Play(songs.clone(), 1, "t".into()));
     let _ = app.update(Message::Play(songs, 1, "t".into()));
+    assert!(!app.pending.contains("lyrics:b#0"));
+    let _ = app.update(Message::Panel(1));
+    assert!(app.pending.contains("lyrics:b#0"));
     assert_eq!(app.plays.get("b"), Some(&6));
+    (app.ctx, app.qmove) = ("album:a1".into(), Some((1, 2)));
+    let _ = app.q_clear();
+    assert!(app.ctx.is_empty() && app.source.is_empty() && app.qmove.is_none());
     let _ = app.update(Message::Shuffle);
     app.starred.insert("a".into(), true);
     let _ = app.update(Message::LogOut);
     assert!(app.queue.is_empty() && app.shuffle.is_none() && app.starred.is_empty());
     assert!(app.plays.is_empty());
     assert!(app.current_song().is_none() && app.route == "login");
+    let _ = app.update(Message::Key("C+,".into()));
+    assert_eq!(app.route, "login");
 }
 
 #[tokio::test]
@@ -302,6 +310,12 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     app.recording = Some("shuffle");
     let _ = app.update(Message::Key("Tab".into()));
     assert!(app.recording.is_none() && app.binding("shuffle") == "C+R");
+    let _ = app.update(Message::Key("C+/".into()));
+    assert_eq!(app.modal.as_ref().map(|m| m.1), Some(3));
+    let _ = app.update(Message::Key("C+N".into()));
+    assert_eq!(app.modal.as_ref().map(|m| m.1), Some(3));
+    let _ = app.update(Message::Key("C+/".into()));
+    assert!(app.modal.is_none());
 }
 
 #[test]

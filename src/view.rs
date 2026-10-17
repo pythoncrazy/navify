@@ -389,7 +389,11 @@ mod wrap {
             let ring = t.state.downcast_mut::<Ring>();
             if self.3 == 2 {
                 match e {
-                    Event::Mouse(CursorMoved { .. } | iced::mouse::Event::ButtonPressed(_)) => {
+                    Event::Mouse(
+                        CursorMoved { .. }
+                        | iced::mouse::Event::ButtonPressed(_)
+                        | iced::mouse::Event::ButtonReleased(_),
+                    ) => {
                         (ring.2, ring.4) = (None, false);
                     }
                     Event::Window(RedrawRequested(now)) => {
@@ -513,6 +517,9 @@ mod wrap {
             }
             match e {
                 Event::Keyboard(ModifiersChanged(m)) if root => ring.4 = !m.is_empty(),
+                Event::Mouse(iced::mouse::Event::ButtonPressed(_)) if root => {
+                    (ring.1, ring.2) = (0.0, None);
+                }
                 Event::Mouse(WheelScrolled {
                     delta: ScrollDelta::Lines { x, y },
                 }) if root
@@ -784,8 +791,8 @@ fn top_bar(app: &App) -> El<'_> {
     let search = search.font(theme::fw(Normal));
     let search = search.padding(iced::Padding::new(13.0).left(16.0).right(100.0));
     let search = search.line_height(text::LineHeight::Absolute(22.0.into()));
-    let on = app.route.starts_with("search");
-    let browse = match on {
+    let on = app.route == "search" && app.search_q.is_empty();
+    let browse = match app.route.starts_with("search") || !app.search_q.is_empty() {
         true => Message::Noop,
         false => Message::Nav("search".into()),
     };
@@ -799,7 +806,11 @@ fn top_bar(app: &App) -> El<'_> {
     };
     let all = button(all).padding(0);
     let all = all.style(theme::link([SUB, TEXT][usize::from(on)]));
-    let all = all.on_press(if on { clear } else { browse.clone() });
+    let all = all.on_press(if app.route.starts_with("search") {
+        clear
+    } else {
+        Message::Nav("search".into())
+    });
     let all = tip(all, "Browse", Bottom);
     let tail = row![x, bar, all].spacing(12).align_y(Center);
     let tail = container(tail)
@@ -880,9 +891,11 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         .filter(|p| p.0 >> f & 1 == 1 && hit(p.3))
         .count();
     let ((off, view), (_, cols, _, h)) = (app.lib_scroll, app.lib_layout());
-    let lo = ((off / h) as usize).saturating_sub(4) * cols;
-    let hi = lo + ((view.max(600.0) / h) as usize + 8) * cols;
     let n = rows.len();
+    let vis = (view.max(600.0) / h) as usize;
+    let r0 = ((off / h) as usize).min((n + k).div_ceil(cols).saturating_sub(vis));
+    let lo = r0.saturating_sub(4) * cols;
+    let hi = (r0 + vis + 8) * cols;
     (
         rows,
         lo.saturating_sub(k).min(n)..hi.saturating_sub(k).min(n),
@@ -907,7 +920,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let item = |art: El<'a>, title: &'a str, sub: Cow<'a, str>, route: String| -> El<'a> {
         let same =
             |r: &str| r == route || r.strip_prefix(&route).is_some_and(|s| s.starts_with(':'));
-        let on = !app.ctx.is_empty() && same(&app.ctx);
+        let on = app.current_song().is_some() && !app.ctx.is_empty() && same(&app.ctx);
         let fg = if on { ACCENT } else { TEXT };
         let tag = format!("lib:{route}");
         let art = match route.as_str() {
