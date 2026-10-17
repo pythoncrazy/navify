@@ -456,7 +456,8 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
 
 fn span(top: f32, bottom: f32, row_h: f32, n: usize, extra: usize) -> (usize, usize) {
     let at = |y: f32| (y / row_h).max(0.0) as usize;
-    let lo = at(top).saturating_sub(extra).min(n);
+    let max = n.saturating_sub(at(bottom - top).max(1));
+    let lo = at(top).min(max + extra).saturating_sub(extra).min(n);
     (lo, (at(bottom) + extra + 1).clamp(lo, n))
 }
 
@@ -980,7 +981,12 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         if names.is_empty() {
             names.push((&a.artist_id, &a.artist));
         }
-        let face = a.artists.first().map_or(&a.artist_id, |x| &x.cover);
+        let face = a
+            .artists
+            .first()
+            .map(|x| x.cover.as_str())
+            .filter(|c| !c.is_empty())
+            .unwrap_or(&a.artist_id);
         let links = names.iter().enumerate().map(|(n, (id, name))| {
             let name = format!("{}{name}", if n > 0 { ", " } else { "" });
             link_btn(bold(name, 14.0), TEXT, go("artist", id)).into()
@@ -1639,7 +1645,9 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
     let chips = chips.map(|(n, l)| {
         let m = task(move |a| {
             a.search_tab = n;
-            a.covers_now()
+            (a.sel, a.picked) = (None, Default::default());
+            a.scrolls.remove(&a.route);
+            iced::Task::batch([a.scroll_to(0.0), a.covers_now()])
         });
         theme::chip_btn(l, tab == n, m)
     });
@@ -1676,7 +1684,13 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
             let pick = |(k, i): Hit| match k {
                 0 => {
                     let a = &artists_res[i];
-                    let play = Message::PlayCtx(format!("artist:{}", a.id), 0);
+                    let ctx = format!("artist:{}", a.id);
+                    let live = app.ctx == ctx && app.current_song().is_some();
+                    let play = if live {
+                        Message::Toggle
+                    } else {
+                        Message::PlayCtx(ctx, 0)
+                    };
                     let menu = Message::Menu(Box::new(MenuKind::Artist(a.clone())));
                     (
                         &a.cover,
@@ -1684,6 +1698,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                         "",
                         &a.id,
                         a.starred,
+                        live,
                         go("artist", &a.id),
                         play,
                         menu,
@@ -1691,7 +1706,13 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 }
                 1 => {
                     let a = &albums_res[i];
-                    let play = Message::PlayCtx(format!("album:{}", a.id), 0);
+                    let ctx = format!("album:{}", a.id);
+                    let live = app.ctx == ctx && app.current_song().is_some();
+                    let play = if live {
+                        Message::Toggle
+                    } else {
+                        Message::PlayCtx(ctx, 0)
+                    };
                     let menu = Message::Menu(Box::new(MenuKind::Album(Box::new(a.clone()))));
                     (
                         &a.cover,
@@ -1699,6 +1720,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                         &a.artist[..],
                         &a.id,
                         a.starred,
+                        live,
                         go("album", &a.id),
                         play,
                         menu,
@@ -1706,8 +1728,13 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 }
                 _ => {
                     let s = &songs_res[i];
+                    let live = app.current_song().is_some_and(|x| x.id == s.id);
                     let (play, menu) = (
-                        Message::PlayAt(app.route.clone(), i),
+                        if live {
+                            Message::Toggle
+                        } else {
+                            Message::PlayAt(app.route.clone(), i)
+                        },
                         Message::RowMenu(app.route.clone(), i),
                     );
                     (
@@ -1716,6 +1743,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                         &s.artist[..],
                         &s.id,
                         s.starred,
+                        live,
                         go("album", &s.album_id),
                         play,
                         menu,
@@ -1735,14 +1763,15 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
             };
             let kinds = ["Artist", "Album", "Song"];
             let top = top.map(|h| {
-                let (cid, name, artist, id, on, nav, play, menu) = pick(h);
+                let (cid, name, artist, id, on, live, nav, play, menu) = pick(h);
                 let line = match h.0 {
                     0 => kinds[0].to_string(),
                     k => format!("{}{DOT}{artist}", kinds[k]),
                 };
                 let tw = rw - 32.0 - 72.0 - 24.0 - 3.0 * 16.0 - 100.0 - 48.0;
                 let text = column![ell(name, tw, 24.0, Bold), sub(line, 14.0)].spacing(2);
-                let green = theme::filled(theme::fill::PLAY, 19.0).color(BG).center();
+                let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(live && app.playing)];
+                let green = theme::filled(g, 19.0).color(BG).center();
                 let green = theme::sq(green, 48.0).style(theme::accent).on_press(play);
                 let r = row![cover(app, cid, 72.0, h.0 == 0), text.width(Fill)].spacing(24);
                 let r = r.push(row![save(h.0, id, on), green].spacing(16).align_y(Center));
@@ -1759,7 +1788,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
             });
             let tw = (rw - 28.0 - 120.0 - 32.0) * 6.0 / 7.0 - 126.0;
             let rows = mix.into_iter().enumerate().map(|(n, h)| -> El<'a> {
-                let (cid, name, artist, id, on, nav, play, menu) = pick(h);
+                let (cid, name, artist, id, on, live, nav, play, menu) = pick(h);
                 let hk = format!("{}#m{n}", app.route);
                 let hot = app.hover.as_deref() == Some(hk.as_str());
                 let round = h.0 == 0;
@@ -1774,10 +1803,8 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                     .center_y(64);
                 let thumb = thumb.style(fill(bg, 4.0));
                 let shade = Color { a: 0.5, ..BG };
-                let over = btn(
-                    theme::filled(theme::fill::PLAY, 24.0).center(),
-                    play.clone(),
-                );
+                let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(live && app.playing)];
+                let over = btn(theme::filled(g, 24.0).center(), play.clone());
                 let over = container(over.width(64).height(64))
                     .center_x(bw)
                     .center_y(64);
@@ -1916,7 +1943,7 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
 fn folders<'a>(app: &'a App) -> El<'a> {
     let (w, rh) = (app.main_w() - 2.0 * PAD - 80.0, app.row_h());
     let dir = |c: char, name: &'a str, url: &'a str, m: Message| -> El<'a> {
-        let fg = if app.current_song().is_some_and(|s| s.url == url) {
+        let fg = if !url.is_empty() && app.current_song().is_some_and(|s| s.url == url) {
             ACCENT
         } else {
             TEXT
@@ -3113,8 +3140,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         }
         None => rule(),
     });
-    let list = scrollable(pane(Column::new().push(head).extend(rows)));
-    boxed(list.style(theme::scroll).into(), w, h, 4)
+    let list = scrollable(pane(Column::with_children(rows))).style(theme::scroll);
+    boxed(Column::new().push(head).push(list).into(), w, h, 4)
 }
 
 pub fn login(app: &App) -> El<'_> {

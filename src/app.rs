@@ -1037,13 +1037,23 @@ impl App {
     }
 
     pub fn artist_cover<'a>(&'a self, id: &'a str) -> &'a str {
-        self.find_artist(id).map_or(id, |a| &a.cover)
+        self.find_artist(id)
+            .map(|a| a.cover.as_str())
+            .filter(|c| !c.is_empty())
+            .unwrap_or(id)
     }
 
     fn about(&mut self) -> Task<Message> {
-        let key = self.lead_artist().filter(|_| self.panel == 1);
-        let key = key.map(|id| format!("info:{id}"));
-        Task::batch(key.map(|k| self.request(&k, 0)))
+        let go = self.panel == 1 && !self.full;
+        let id = self
+            .lead_artist()
+            .filter(|_| go)
+            .map(|id| format!("info:{id}"));
+        let lyr = self
+            .current_song()
+            .filter(|s| (go || self.route == "lyrics") && s.url.is_empty())
+            .map(|s| format!("lyrics:{}", s.id));
+        Task::batch([id, lyr].into_iter().flatten().map(|k| self.request(&k, 0)))
     }
 
     fn began(&mut self) -> Task<Message> {
@@ -1066,8 +1076,7 @@ impl App {
         );
         let radio = !song.url.is_empty();
         let now = Task::batch((self.cfg.settings.scrobble && !radio).then_some(now));
-        let lyr = (!radio).then(|| self.request(&format!("lyrics:{}", song.id), 0));
-        let lyr = Task::batch([Task::batch(lyr), self.about()]);
+        let lyr = self.about();
         #[cfg(all(unix, not(target_os = "macos")))]
         let files = self
             .session
@@ -1214,7 +1223,8 @@ impl App {
                 .map(|s| s.0 = t)
                 .is_some();
             let bad = self.covers.failed.contains(bare(&id));
-            if id.is_empty() || have || bad || !self.covers.want.insert((bare(&id).into(), size)) {
+            let raw = bare(&id).rsplit(':').next().unwrap_or_default();
+            if raw.is_empty() || have || bad || !self.covers.want.insert((bare(&id).into(), size)) {
                 continue;
             }
             need.push((id, size));
@@ -1370,7 +1380,7 @@ impl App {
         }
     }
 
-    fn scroll_to(&self, y: f32) -> Task<Message> {
+    pub(crate) fn scroll_to(&self, y: f32) -> Task<Message> {
         op::scroll_to(crate::view::SCROLL, AbsoluteOffset { x: 0.0, y })
     }
 
@@ -1588,7 +1598,7 @@ impl App {
         };
         if replaces && st.confirm_queue && self.modal.is_none() && !self.queue.is_empty() {
             (self.menu, self.modal, self.held) = (None, Some((String::new(), 4)), Some(m));
-            return Task::none();
+            return layer_focus(true, |_, n| n.min(2) - 1);
         }
         match m {
             Message::Confirm => {
@@ -1728,7 +1738,7 @@ impl App {
                     None => {
                         let done = self.halt();
                         (self.index, self.position) = (0, 0.0);
-                        done
+                        Task::batch([done, self.covers_now()])
                     }
                 };
             }
@@ -1823,6 +1833,7 @@ impl App {
                 return Task::batch([self.save_later(), self.toast("Added to queue")]);
             }
             Message::QDel(i) => {
+                self.qmove = None;
                 let ri = self.real_at(i);
                 if ri < self.queue.len() && i != self.index {
                     self.queue.remove(ri);
@@ -1880,7 +1891,7 @@ impl App {
                         return self.covers_now();
                     }
                 }
-                (self.menu, self.modal, self.recording) = (None, None, None);
+                (self.menu, self.modal, self.recording, self.held) = (None, None, None, None);
             }
             Message::Key(c) if self.recording.is_some() => {
                 let id = self.recording.take().expect("a recording");
@@ -1910,21 +1921,30 @@ impl App {
                 return self.persist();
             }
             Message::Key(c) => {
-                let hit = KEYS.iter().find(|k| self.binding(k.0) == c);
+                let hit = KEYS.iter().find(|k| {
+                    self.binding(k.0) == c
+                        && (matches!(k.0, "close" | "quit")
+                            || self.session.is_some()
+                                && (self.modal.is_none()
+                                    || k.0 == "shortcuts"
+                                        && self.modal.as_ref().is_some_and(|m| m.1 == 3)))
+                });
                 let base = c.rsplit('+').next().filter(|_| !c.starts_with("C+"));
+                let open = self.session.is_some() && self.modal.is_none();
                 let m = match (hit, base.unwrap_or_default()) {
                     (Some(k), _) => (k.3)(),
                     (_, "Tab") => return self.focus_move(c.contains("Shift+")),
-                    (_, "ArrowUp") => Message::Arrow(true),
-                    (_, "ArrowDown") => Message::Arrow(false),
-                    (_, "Enter") if self.menu.is_none() && self.modal.is_none() => {
+                    (_, "ArrowUp") if open => Message::Arrow(true),
+                    (_, "ArrowDown") if open => Message::Arrow(false),
+                    (_, "Enter") if open && self.menu.is_none() => {
                         return Task::batch(
                             self.sel
                                 .clone()
+                                .filter(|s| s.0 == self.route)
                                 .map(|(k, n)| self.update(Message::PlayAt(k, n))),
                         );
                     }
-                    (_, "Delete" | "Backspace") if self.menu.is_none() && self.modal.is_none() => {
+                    (_, "Delete" | "Backspace") if open && self.menu.is_none() => {
                         Message::DeleteSel
                     }
                     _ => return Task::none(),
@@ -2259,16 +2279,18 @@ impl App {
                 let Some(p) = self.playlist(&id) else {
                     return self.toast("The playlist is not available.");
                 };
-                let cover = p.cover.clone();
-                (self.new_pl, self.new_pl_desc, self.new_pl_public) = (
-                    p.name.clone(),
-                    text_editor::Content::with_text(&p.comment),
-                    p.public,
-                );
+                let cover = (kind == 1).then(|| (p.cover.clone(), self.bucket(180.0)));
+                if kind == 1 {
+                    (self.new_pl, self.new_pl_desc, self.new_pl_public) = (
+                        p.name.clone(),
+                        text_editor::Content::with_text(&p.comment),
+                        p.public,
+                    );
+                }
                 self.modal = Some((id, kind));
                 let all = op::select_all(iced::widget::Id::new("layer"));
                 let focus = layer_focus(true, |_, n| n.min(2) - 1).chain(all);
-                return Task::batch([self.want_covers([(cover, self.bucket(180.0))]), focus]);
+                return Task::batch([self.want_covers(cover), focus]);
             }
             Message::Edit(id, name, comment, public) => {
                 (self.menu, self.modal) = (None, None);
@@ -2314,7 +2336,8 @@ impl App {
 
     pub fn q_clear(&mut self) -> Task<Message> {
         let done = self.halt();
-        (self.queue, self.index) = (Vec::new(), 0);
+        (self.queue, self.index, self.position) = (Vec::new(), 0, 0.0);
+        (self.ctx, self.source, self.qmove) = (String::new(), String::new(), None);
         self.shuffle = self.shuffle.as_ref().map(|_| Vec::new());
         Task::batch([done, self.save_later()])
     }
@@ -2557,8 +2580,9 @@ impl App {
         let (cols, cw) = self.grid();
         use crate::pages::{DIR_Y, PAD};
         let span = |n: usize, h: f32, per: usize, y0: f32| {
-            let lo = ((off - y0) / h).max(0.0) as usize;
-            (lo.saturating_sub(1) * per).min(n)..((lo + (view / h) as usize + 3) * per).min(n)
+            let vis = (view / h) as usize;
+            let lo = (((off - y0) / h).max(0.0) as usize).min(n.div_ceil(per).saturating_sub(vis));
+            (lo.saturating_sub(1) * per).min(n)..((lo + vis + 3) * per).min(n)
         };
         let y0 = crate::pages::list_y(self);
         let rows = |v: &[Song]| match self.row_h() < 56.0 {
@@ -2574,7 +2598,13 @@ impl App {
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
             big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
-            small.push(a.artists.first().map_or(&a.artist_id, |x| &x.cover));
+            small.push(
+                a.artists
+                    .first()
+                    .map(|x| &x.cover)
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or(&a.artist_id),
+            );
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             let s = self.songs_of(key).map_or(&s[..], |x| x.0);
             let q = self.pl_more.as_deref().unwrap_or("").trim();
@@ -2694,7 +2724,6 @@ impl App {
         small.extend(
             crate::pages::recent(self)
                 .filter(|_| self.panel == 2 && self.recent_tab)
-                .take(20)
                 .map(|s| &s.cover),
         );
         let next = (self.index + 1..self.queue.len()).take(ahead);
@@ -2728,12 +2757,11 @@ impl App {
             .chain(lists.flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b))))
             .chain(lead)
             .chain(about)
-            .chain(
-                self.modal
-                    .as_ref()
-                    .filter(|m| m.1 == 6)
-                    .map(|m| (format!("b18:{}", self.artist_cover(&m.0)), 640)),
-            )
+            .chain(self.modal.as_ref().and_then(|(id, k)| match k {
+                1 => Some((self.playlist(id)?.cover.clone(), self.bucket(180.0))),
+                6 => Some((format!("b18:{}", self.artist_cover(id)), 640)),
+                _ => None,
+            }))
             .collect()
     }
 
@@ -2887,7 +2915,7 @@ pub const KEYS: [KeyAction; 27] = [
                 _ => return Task::none(),
             };
             a.pl_find.get_or_insert_default();
-            op::focus(id)
+            Task::batch([a.scroll_to(0.0), op::focus(id)])
         })
     }),
     ("lib_find", "Search in Your Library", "C+Alt+F", || {
