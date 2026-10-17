@@ -1665,7 +1665,7 @@ impl App {
             }
             Message::Back | Message::Fwd => {}
             Message::Scrolled(off, view, content) => {
-                let key = self.route.clone();
+                let (key, step) = (self.route.clone(), self.row_h() as usize);
                 let old = self
                     .scrolls
                     .insert(key.clone(), (off, view))
@@ -1674,7 +1674,7 @@ impl App {
                 let more = v.and_then(|v| pager!(v, p => (p.0.len() < p.1).then_some(p.0.len())));
                 let more = more.filter(|_| content > 0.0 && off + view * 3.0 >= content);
                 let more = Task::batch(more.map(|n| self.request(&key, n)));
-                let moved = old.0 as usize / 28 != off as usize / 28 || old.1 != view;
+                let moved = old.0 as usize / step != off as usize / step || old.1 != view;
                 return Task::batch([more, Task::batch(moved.then(|| self.disc_load()))]);
             }
             Message::Search(q) => {

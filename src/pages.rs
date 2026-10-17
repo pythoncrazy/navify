@@ -14,8 +14,8 @@ use crate::theme::{
     self, ACCENT, BG, CLEAR, ELEVATED, SUB, TEXT, bold, ell, fill, icon as i, link_btn, sub, txt,
 };
 use crate::view::{
-    El, SONGS_BG, art, artists_line, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable, go,
-    icon_btn, liked_art, media, pane, tip, tool_btn, vgap,
+    El, SONGS_BG, art, artists_line, back, bands, btn, cover, fmt_dur, fmt_long, fmt_n, focusable,
+    go, icon_btn, liked_art, media, pane, tip, tool_btn, vgap,
 };
 
 type Cols = (f32, f32, f32, f32);
@@ -175,8 +175,7 @@ fn genre_color(app: &App, name: &str) -> Color {
 }
 
 fn fade<'a>(top: Color, h: f32, body: impl Into<El<'a>>) -> El<'a> {
-    let g = container(bands(&[(0.0, top), (1.0, theme::PANEL)])).height(h);
-    stack![body.into()].push_under(g).into()
+    back(&[(0.0, top), (1.0, theme::PANEL)], h, body)
 }
 
 pub fn rule<'a>() -> El<'a> {
@@ -909,9 +908,7 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let hero = container(hero)
             .padding(Padding::new(PAD).top(72.0))
             .width(Fill);
-        stack![hero.height(hero_h(app))]
-            .push_under(bands(&bg))
-            .into()
+        back(&bg, 0.0, hero.height(hero_h(app)))
     };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
     let play = play_btn(app, 56.0, &app.route);
@@ -1886,7 +1883,7 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
         let h = grid_y(app) - PAD - 40.0;
         let head = container(huge(arg, app.main_w() - 2.0 * PAD)).padding(PAD);
         let head = head.width(Fill).height(h).align_bottom(h);
-        let head = stack![head].push_under(bands(&[(0.0, c), (1.0, theme::shade(c, 0.5))]));
+        let head = back(&[(0.0, c), (1.0, theme::shade(c, 0.5))], 0.0, head);
         let title = container(heading("Albums", None)).height(32);
         let body = column![Space::new().height(PAD), title, Space::new().height(8)];
         let body = body.push(albums).width(Fill);
@@ -3150,7 +3147,6 @@ pub fn login(app: &App) -> El<'_> {
     let card = card.width(width).center_x(Fill);
     let card = card.max_width(734).style(fill(theme::PANEL, 8.0));
     let page = container(card).center_x(Fill).padding(32);
-    let bg = bands(&[(0.0, color!(0x2a2a2a)), (1.0, BG)]);
     let page = scrollable(pane(page)).style(theme::scroll).height(Fill);
-    stack![page].push_under(bg).into()
+    back(&[(0.0, color!(0x2a2a2a)), (1.0, BG)], 0.0, page)
 }
