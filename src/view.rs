@@ -35,7 +35,10 @@ pub fn btn<'a>(c: impl Into<El<'a>>, msg: Message) -> Btn<'a, Message> {
 }
 
 pub fn go(kind: &str, id: &str) -> Message {
-    Message::Nav(format!("{kind}:{id}"))
+    match id.is_empty() {
+        true => Message::Noop,
+        false => Message::Nav(format!("{kind}:{id}")),
+    }
 }
 
 pub fn icon_btn<'a>(c: char, size: f32, msg: Message) -> Btn<'a, Message> {
@@ -1181,11 +1184,11 @@ fn player_bar(app: &App) -> El<'_> {
         let title = theme::ell(&s.title, tw, 14.0, Normal);
         let radio = !s.url.is_empty();
         let home = if radio {
-            "radio".into()
+            Message::Nav("radio".into())
         } else {
-            format!("album:{}", s.album_id)
+            go("album", &s.album_id)
         };
-        let title = btn(title, Message::Nav(home));
+        let title = btn(title, home);
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));
@@ -1281,8 +1284,11 @@ fn player_bar(app: &App) -> El<'_> {
             Message::Step(true, y.clamp(-60.0, 60.0) / 60.0)
         }
     });
-    let words = [Message::Nav("lyrics".into()), Message::Back];
-    let words = words[usize::from(lyrics)].clone();
+    let words = match (lyrics, app.hi > 0) {
+        (false, _) => Message::Nav("lyrics".into()),
+        (true, true) => Message::Back,
+        (true, false) => Message::Nav("home".into()),
+    };
     let mute = if app.muted { "Unmute" } else { "Mute" };
     let np = Message::Panel(1);
     let hot = app.hover.as_deref() == Some("queue");
@@ -1331,8 +1337,7 @@ fn player_bar(app: &App) -> El<'_> {
 }
 
 fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
-    let lib = app.data::<Lib>("lib");
-    let pl = lib.and_then(|l| l.playlists.iter().find(|p| p.id == id));
+    let pl = app.playlist(id);
     let act = |label: &'static str, bg: [Color; 3], fg: Color, x: u16, m: Option<Message>| {
         let b = button(bold(label, 16.0)).style(theme::solid(bg, fg));
         let b = b.padding([14, x]).on_press_maybe(m.clone());

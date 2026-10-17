@@ -2526,7 +2526,10 @@ fn panel_head<'a>(title: impl Into<El<'a>>, n: u8) -> El<'a> {
 }
 
 fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> {
-    let cur = n == Some(app.index);
+    let cur = n.map_or_else(
+        || app.current_song().is_some_and(|x| x.id == s.id),
+        |i| i == app.index,
+    );
     let art = cover(app, &s.cover, 48.0, false);
     let x = n
         .filter(|_| !cur)
@@ -2549,7 +2552,12 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         .top(8.0 - 2.0 * f32::from(up))
         .bottom(8.0 - 2.0 * f32::from(down));
     let r = column![line(up), container(r).padding(pad), line(down)];
-    let r = mouse_area(r).on_double_click(n.map_or_else(play, Message::PlayQueue));
+    let dbl = match (cur, n) {
+        (true, _) => Message::Toggle,
+        (_, Some(i)) => Message::PlayQueue(i),
+        _ => play(),
+    };
+    let r = mouse_area(r).on_double_click(dbl);
     let r = match movable {
         Some(n) => r
             .on_press(act(move |a| a.qmove = Some((n, n))))
