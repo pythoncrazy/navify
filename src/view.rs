@@ -209,9 +209,9 @@ mod wrap {
                 Color::from_rgba(m(a.r, z.r), m(a.g, z.g), m(a.b, z.b), m(a.a, z.a))
             };
             for i in 0..n as usize {
-                let y = b.y + b.height * i as f32 / n;
-                let h = b.y + b.height * (i + 1) as f32 / n - y;
-                let q = Rect::new(Point::new(b.x, y.round()), Size::new(b.width, h.round()));
+                let y0 = (b.y + b.height * i as f32 / n).round();
+                let y1 = (b.y + b.height * (i + 1) as f32 / n).round();
+                let q = Rect::new(Point::new(b.x, y0), Size::new(b.width, y1 - y0));
                 let c = at((i as f32 + 0.5) / n);
                 if q.intersects(v) && c.a > 0.0 {
                     r.fill_quad(
@@ -317,7 +317,7 @@ mod wrap {
             }
             use std::sync::atomic::Ordering::Relaxed;
             match (e, &self.1, &self.2) {
-                _ if self.3 == 2 => {}
+                _ if self.3 >= 2 => {}
                 (Event::Mouse(CursorMoved { position: p }), None, None) => {
                     let bits = (p.x.to_bits() as u64) << 32 | p.y.to_bits() as u64;
                     crate::app::CURSOR.store(bits, Relaxed);

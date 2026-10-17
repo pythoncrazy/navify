@@ -57,13 +57,18 @@ pub fn art_px(app: &App) -> f32 {
 }
 
 pub fn banner_h(app: &App) -> f32 {
-    (app.view_size().1 * 0.4).clamp(340.0, 500.0)
+    (app.view_size().1 * 0.4).clamp(340.0, 500.0).round()
 }
 
 pub fn banner(app: &App, a: &Artist) -> Option<String> {
-    let url = app.data::<String>(&a.banner_key())?;
+    if !app.cfg.settings.banners {
+        return None;
+    }
+    let Some(url) = app.data::<String>(&a.banner_key()) else {
+        return Some(String::new());
+    };
     let tenths = (app.main_w() / banner_h(app) * 10.0).round();
-    (app.cfg.settings.banners && !url.is_empty()).then(|| format!("b{tenths}:{url}"))
+    (!url.is_empty()).then(|| format!("b{tenths}:{url}"))
 }
 
 pub fn hero_h(app: &App) -> f32 {

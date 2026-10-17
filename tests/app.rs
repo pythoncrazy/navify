@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use navify::api::{Album, Lyrics, Song, parse};
+use navify::api::{Album, Artist, Lyrics, Song, parse};
 use navify::app::{AnyData, App, Message, act};
-use navify::pages::{lyric_line, lyric_wait};
+use navify::pages::{banner, lyric_line, lyric_wait};
 use serde_json::json;
 
 fn app() -> App {
@@ -48,6 +48,30 @@ fn album_reopen_in_stale_time_sends_no_request() {
     assert_eq!(app.route, "search");
     let _ = app.update(Message::Back);
     assert!(app.search_q.is_empty());
+    let ar: Artist = parse(json!({"id": "ar1", "name": "A", "mbzArtistId": "m1"})).expect("artist");
+    let _ = app.update(Message::Loaded(
+        "artists".into(),
+        0,
+        Ok(Arc::new((vec![ar.clone()], 1usize))),
+    ));
+    let _ = app.update(Message::Nav("artist:ar1".into()));
+    assert!(app.pending.contains("banner:mb:m1#0") && banner(&app, &ar) == Some(String::new()));
+    let bare: Artist = parse(json!({"id": "ar1", "name": "A"})).expect("artist");
+    let _ = app.update(Message::Loaded(
+        "artist:ar1".into(),
+        0,
+        Ok(Arc::new((bare, Vec::<Album>::new()))),
+    ));
+    assert_eq!(app.find_artist("ar1").unwrap().music_brainz_id, "m1");
+    let _ = app.update(Message::Loaded(
+        "banner:mb:m1".into(),
+        0,
+        Ok(Arc::new(String::new())),
+    ));
+    assert!(banner(&app, &ar).is_none());
+    let _ = app.update(Message::Nav("home".into()));
+    let _ = app.update(Message::Nav("artist:ar1".into()));
+    assert!(!app.pending.contains("banner:mb:m1#0"));
 }
 
 #[tokio::test]

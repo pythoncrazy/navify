@@ -783,8 +783,9 @@ impl App {
     }
 
     pub fn find_artist(&self, id: &str) -> Option<&Artist> {
-        self.cache.values().find_map(|(_, v)| {
-            let lists = [
+        let mut all = self.cache.values().flat_map(|(_, v)| {
+            [
+                v.downcast_ref::<Lib>().map(|l| &l.artists[..]),
                 v.downcast_ref::<Page<Artist>>().map(|p| &p.0[..]),
                 v.downcast_ref::<Trio>().map(|r| &r.0[..]),
                 v.downcast_ref::<(Artist, Vec<Album>)>()
@@ -793,11 +794,14 @@ impl App {
                     .map(|x| &x.0[..]),
                 v.downcast_ref::<Vec<Artist>>().map(|x| &x[..]),
                 v.downcast_ref::<Info>().map(|x| &x.similar[..]),
-                v.downcast_ref::<Lib>().map(|l| &l.artists[..]),
-            ];
-            let mut all = lists.into_iter().flatten().flatten();
-            all.find(|a| a.id == id)
-        })
+            ]
+            .into_iter()
+            .flatten()
+            .flatten()
+        });
+        all.clone()
+            .find(|a| a.id == id && !a.music_brainz_id.is_empty())
+            .or_else(|| all.find(|a| a.id == id))
     }
 
     fn star(&mut self, ids: &[String], on: bool) {
@@ -845,7 +849,9 @@ impl App {
     }
 
     pub(crate) fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
-        let fresh = |(t, v): &(Instant, AnyData)| t.elapsed() < STALE && !v.is::<String>();
+        let fresh = |(t, v): &(Instant, AnyData)| {
+            t.elapsed() < STALE && (key.starts_with("banner:") || !v.is::<String>())
+        };
         if offset == 0 && self.cache.get(key).is_some_and(fresh) {
             return Task::none();
         }
@@ -1530,6 +1536,11 @@ impl App {
             }
             Message::Loaded(key, off, Ok(v)) => {
                 self.pending.remove(&format!("{key}#{off}"));
+                let mb = key
+                    .strip_prefix("artist:")
+                    .and_then(|id| self.find_artist(id))
+                    .map(|a| a.music_brainz_id.clone())
+                    .filter(|m| !m.is_empty());
                 self.seeds.remove(&key);
                 let old = self.cache.get(&key).map(|c| &c.1).filter(|_| off > 0);
                 let join = |old: &AnyData| {
@@ -1537,11 +1548,17 @@ impl App {
                         Arc::new(([&a.0[..], &b.0[..]].concat(), b.1)) as AnyData
                     }))
                 };
-                let v = match old.and_then(join) {
+                let mut v = match old.and_then(join) {
                     None if off == 0 => v,
                     Some(v) => v,
                     _ => return Task::none(),
                 };
+                if let Some((m, (a, _))) = mb.zip(
+                    Arc::get_mut(&mut v).and_then(|x| x.downcast_mut::<(Artist, Vec<Album>)>()),
+                ) && a.music_brainz_id.is_empty()
+                {
+                    a.music_brainz_id = m;
+                }
                 let banner = key.starts_with("artist:") && self.cfg.settings.banners;
                 let banner = banner
                     .then(|| v.downcast_ref::<(Artist, Vec<Album>)>())
@@ -2470,11 +2487,13 @@ impl App {
             let info = self.data::<Info>(&format!("info:{id}"));
             let appears = self.data::<Vec<Album>>(&format!("appears:{id}"));
             let shelf = crate::pages::disc_shelf(self, albums);
-            head.push(&a.cover);
             about = info
                 .filter(|i| !i.biography.is_empty())
                 .map(|_| (crate::pages::about_key(self, a), 640));
             banner = crate::pages::banner(self, a);
+            if banner.is_none() {
+                head.push(&a.cover);
+            }
             small.extend(top.iter().flat_map(|v| v.iter().take(10)).map(|s| &s.cover));
             big.extend(shelf.iter().map(|x| &x.cover));
             big.extend(
@@ -2587,9 +2606,11 @@ impl App {
             (tiles, crate::pages::home_tiles(self).2),
         ];
         let lists = lists.into_iter().map(|(v, px)| (v, self.bucket(px)));
-        lists
-            .flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b)))
-            .chain(banner.map(|k| (k, 640)))
+        banner
+            .filter(|k| !k.is_empty())
+            .map(|k| (k, 640))
+            .into_iter()
+            .chain(lists.flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b))))
             .chain(lead)
             .chain(about)
             .chain(
@@ -2823,7 +2844,8 @@ fn decode(raw: bytes::Bytes, size: u32, aspect: f32, round: bool) -> Result<Deco
     let mut img = ::image::load_from_memory(&raw).map_err(|e| e.to_string())?;
     if aspect > 0.0 {
         let h = ((img.width() as f32 / aspect) as u32).min(img.height());
-        img = img.crop_imm(0, (img.height() - h) * 3 / 10, img.width(), h);
+        let w = ((h as f32 * aspect) as u32).min(img.width());
+        img = img.crop_imm((img.width() - w) / 2, (img.height() - h) * 3 / 10, w, h);
     }
     let big = img.width() > size || img.height() > size;
     if big {
@@ -2970,7 +2992,13 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             "top" => Arc::new(s.top_songs(arg).await?),
             "info" => Arc::new(s.artist_info(arg).await?),
             "appears" => Arc::new(s.appears(arg).await?),
-            "banner" => Arc::new(s.banner(arg).await?),
+            "banner" => {
+                let url = s.banner(arg).await.unwrap_or_default();
+                if !url.is_empty() {
+                    let _ = s.cover(&url, 640).await;
+                }
+                Arc::new(url)
+            }
             "playlist" => Arc::new(s.playlist(arg).await?),
             "liked" => Arc::new(s.songs("starred", offset, PAGE).await?),
             "albums" => Arc::new(s.albums(or("newest"), &[], offset, PAGE).await?),
