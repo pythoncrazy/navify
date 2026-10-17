@@ -112,7 +112,7 @@ fn scan_devices() -> Task<Message> {
 fn ours(s: &Session, m: Message) -> Message {
     let s = s.clone();
     task(
-        move |a| match a.session.as_ref().is_some_and(|x| x.same(&s)) {
+        move |a: &mut App| match a.session.as_ref().is_some_and(|x| x.same(&s)) {
             true => a.update(m.clone()),
             false => Task::none(),
         },
@@ -464,10 +464,8 @@ impl App {
                     }
                 }
                 "menu" if !songs.is_empty() => {
-                    CURSOR.store(
-                        (480f32.to_bits() as u64) << 32 | 300f32.to_bits() as u64,
-                        Relaxed,
-                    );
+                    let at = (480f32.to_bits() as u64) << 32 | 300f32.to_bits() as u64;
+                    CURSOR.store(at, Relaxed);
                     let kind = Box::new(MenuKind::Song(songs[..1].to_vec()));
                     task = self.update(Message::Menu(kind));
                 }
@@ -497,13 +495,8 @@ impl App {
     pub fn playlist(&self, id: &str) -> Option<&Playlist> {
         let lib = self.data::<Lib>("lib");
         let p = lib.and_then(|l| l.playlists.iter().find(|p| p.id == id));
-        p.or_else(|| {
-            Some(
-                &self
-                    .data::<(Playlist, Vec<Song>)>(&format!("playlist:{id}"))?
-                    .0,
-            )
-        })
+        let key = format!("playlist:{id}");
+        p.or_else(|| Some(&self.data::<(Playlist, Vec<Song>)>(&key)?.0))
     }
 
     pub fn owns(&self, p: &Playlist) -> bool {
@@ -1071,11 +1064,8 @@ impl App {
         self.recent.truncate(50);
         let song_id = song.id.clone();
         let now = |s: Session| async move { s.scrobble(&song_id, false).await };
-        let now = self.send(
-            now,
-            "Could not send the playing track to the server.",
-            |_| Task::none(),
-        );
+        let msg = "Could not send the playing track to the server.";
+        let now = self.send(now, msg, |_| Task::none());
         let radio = !song.url.is_empty();
         let now = Task::batch((self.cfg.settings.scrobble && !radio).then_some(now));
         let lyr = self.about();
@@ -1927,19 +1917,8 @@ impl App {
             }
             Message::Key(c) if self.recording.is_some() => {
                 let id = self.recording.take().expect("a recording");
-                let fixed = matches!(
-                    c.as_str(),
-                    "Tab"
-                        | "Shift+Tab"
-                        | "ArrowUp"
-                        | "ArrowDown"
-                        | "ArrowLeft"
-                        | "ArrowRight"
-                        | "Enter"
-                        | "Delete"
-                        | "Backspace"
-                );
-                if fixed {
+                let named = ["Tab", "Shift+Tab", "Enter", "Delete", "Backspace"];
+                if c.starts_with("Arrow") || named.contains(&c.as_str()) {
                     return Task::none();
                 }
                 let used: Vec<&str> = KEYS
@@ -2641,13 +2620,12 @@ impl App {
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
             big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
-            small.push(
-                a.artists
-                    .first()
-                    .map(|x| &x.cover)
-                    .filter(|c| !c.is_empty())
-                    .unwrap_or(&a.artist_id),
-            );
+            let art = a
+                .artists
+                .first()
+                .map(|x| &x.cover)
+                .filter(|c| !c.is_empty());
+            small.push(art.unwrap_or(&a.artist_id));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             let empty = s.is_empty() && p.song_count == 0;
             let s = self.songs_of(key).map_or(&s[..], |x| x.0);
@@ -2655,22 +2633,15 @@ impl App {
             let hits = self
                 .data::<Trio>(&format!("search:{q}"))
                 .filter(|_| empty && !q.is_empty());
-            small.extend(
-                hits.iter()
-                    .flat_map(|t| t.2.iter().take(10))
-                    .map(|s| &s.cover),
-            );
+            let hits = hits.iter().flat_map(|t| t.2.iter().take(10));
+            small.extend(hits.map(|s| &s.cover));
             head.push(&p.cover);
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if let Some((s, _)) = self.data::<Page<Song>>(key) {
             small.extend(s[rows(s)].iter().map(|s| &s.cover));
         } else if let Some((_, s)) = self.data::<(String, Vec<Song>)>(key) {
-            small.extend(
-                s[span(s.len(), self.row_h(), 1, DIR_Y)]
-                    .iter()
-                    .filter(|s| !s.is_dir)
-                    .map(|s| &s.cover),
-            );
+            let s = &s[span(s.len(), self.row_h(), 1, DIR_Y)];
+            small.extend(s.iter().filter(|s| !s.is_dir).map(|s| &s.cover));
         } else if key.starts_with("discography:") {
             big.extend(crate::pages::disc_view(self).iter().map(|a| &a.cover));
         } else if let Some((a, albums)) = self.data::<(Artist, Vec<Album>)>(key) {
@@ -2687,17 +2658,11 @@ impl App {
                 head.push(&a.cover);
             }
             let pop = [5, 10][usize::from(self.popular_all)];
-            small.extend(
-                top.iter()
-                    .flat_map(|v| v.iter().take(pop))
-                    .map(|s| &s.cover),
-            );
+            let top = top.iter().flat_map(|v| v.iter().take(pop));
+            small.extend(top.map(|s| &s.cover));
             big.extend(shelf.iter().map(|x| &x.cover));
-            big.extend(
-                crate::pages::by_date(albums.iter())
-                    .first()
-                    .map(|x| &x.cover),
-            );
+            let latest = crate::pages::by_date(albums.iter());
+            big.extend(latest.first().map(|x| &x.cover));
             let similar = info.map_or(&[][..], |i| &i.similar);
             big.extend(similar.iter().take(cols).map(|x| &x.cover));
             let appears = appears.map_or(&[][..], |v| &v[..]);
@@ -2760,25 +2725,17 @@ impl App {
             let shelves = shelves.filter(|l: &Vec<_>| !l.is_empty()).enumerate();
             for (n, l) in shelves {
                 let y = y0 + n as f32 * hs;
-                big.extend(
-                    l.into_iter()
-                        .filter(|_| (off - hs..off + view + hs).contains(&y)),
-                );
+                let shown = (off - hs..off + view + hs).contains(&y);
+                big.extend(l.into_iter().filter(|_| shown));
             }
         }
         let now = self.current_song().map(|s| &s.cover);
         small.extend(now);
         let ahead = [0, 1, 100, 0, 0][self.panel as usize];
-        small.extend(
-            crate::pages::add_songs(self)
-                .filter(|_| self.panel == 4)
-                .map(|s| &s.cover),
-        );
-        small.extend(
-            crate::pages::recent(self)
-                .filter(|_| self.panel == 2 && self.recent_tab)
-                .map(|s| &s.cover),
-        );
+        let add = crate::pages::add_songs(self).filter(|_| self.panel == 4);
+        small.extend(add.map(|s| &s.cover));
+        let recent = crate::pages::recent(self).filter(|_| self.panel == 2 && self.recent_tab);
+        small.extend(recent.map(|s| &s.cover));
         let next = (self.index + 1..self.queue.len()).take(ahead);
         small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
         let (rows, span) = crate::view::lib_rows(self);
@@ -2901,9 +2858,8 @@ impl App {
             && (self.route == "lyrics" || self.panel == 1)
             && let Some(ms) = crate::pages::lyric_wait(self)
         {
-            subs.push(
-                iced::time::every(Duration::from_millis(ms)).map(|_| act(|a| a.position = a.pos())),
-            );
+            let tick = iced::time::every(Duration::from_millis(ms));
+            subs.push(tick.map(|_| act(|a| a.position = a.pos())));
         }
         iced::Subscription::batch(subs)
     }
@@ -2916,13 +2872,12 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
         Key::Named(n) => format!("{n:?}"),
         Key::Character(c) => c.to_uppercase(),
     };
-    let on = |b: bool, s: &'static str| if b { s } else { "" };
-    let c = format!(
-        "{}{}{}{k}",
-        on(m.command(), "C+"),
-        on(m.alt(), "Alt+"),
-        on(m.shift(), "Shift+")
-    );
+    let mods = [
+        (m.command(), "C+"),
+        (m.alt(), "Alt+"),
+        (m.shift(), "Shift+"),
+    ];
+    let c = mods.iter().filter(|x| x.0).map(|x| x.1).collect::<String>() + &k;
     match (c.as_str(), status) {
         ("Escape", _) => Some(Message::MenuClose),
         (_, iced::event::Status::Captured) => None,

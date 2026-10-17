@@ -1272,25 +1272,15 @@ fn player_bar(app: &App) -> El<'_> {
     let np = Message::Panel(1);
     let hot = app.hover.as_deref() == Some("queue");
     let q = [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(app.panel == 2)];
-    let queue = side(
-        queue_icon(14.5, q),
-        app.panel == 2,
-        "Queue",
-        Message::Panel(2),
-    );
+    let (p2, p3) = (app.panel == 2, app.panel == 3);
+    let queue = side(queue_icon(14.5, q), p2, "Queue", Message::Panel(2));
     let panels = row![
         song.map(|_| side(ic(i::PR), app.panel == 1, "Now playing view", np)),
         song.map(|_| side(ic(i::LYRICS), lyrics, "Lyrics", words)),
         hov(mouse_area(queue), "queue".into(), None),
     ];
-    let device = device.then(|| {
-        side(
-            ic(i::DEVICE),
-            app.panel == 3,
-            "Connect to a device",
-            Message::Panel(3),
-        )
-    });
+    let connect = Message::Panel(3);
+    let device = device.then(|| side(ic(i::DEVICE), p3, "Connect to a device", connect));
     let right = row![
         (!app.full).then_some(panels),
         device,
@@ -1711,11 +1701,8 @@ pub fn view(app: &App) -> El<'_> {
         ][app.panel as usize - 1](app);
         row![grip(1), container(p).width(app.right_w()).height(Fill)].into()
     } else {
-        let show = tip(
-            icon_btn(i::LEFT, 16.0, Message::Panel(1)),
-            "Show Now Playing view",
-            Left,
-        );
+        let show = icon_btn(i::LEFT, 16.0, Message::Panel(1));
+        let show = tip(show, "Show Now Playing view", Left);
         row![gap(), container(show).center_x(40).center_y(Fill)].into()
     };
     let panels = row![gap(), lib_panel(app), grip(0), main].push(right);
