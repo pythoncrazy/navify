@@ -240,9 +240,6 @@ mod wrap {
             self.0.as_widget().size()
         }
         fn layout(&mut self, t: &mut Tree, r: &R, l: &layout::Limits) -> layout::Node {
-            if self.3 == 2 {
-                t.state.downcast_mut::<Ring>().0 = true;
-            }
             self.0.as_widget_mut().layout(&mut t.children[0], r, l)
         }
         fn draw(&self, t: &Tree, r: &mut R, th: &T, s: &Style, l: Layout, c: Cursor, v: &Rect) {
@@ -292,8 +289,8 @@ mod wrap {
             match l.bounds().intersection(v).filter(|_| self.3 == 2) {
                 Some(mut b) => {
                     b.height -= (v.y * 0.618).fract() * 0.01;
-
-                    r.with_layer(b, |r| w.draw(&t.children[0], r, th, s, l, c, &b));
+                    let e = b.expand(1.0);
+                    r.with_layer(b, |r| w.draw(&t.children[0], r, th, s, l, c, &e));
                 }
                 None => w.draw(&t.children[0], r, th, s, l, c, v),
             }

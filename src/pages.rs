@@ -1816,7 +1816,11 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 let text = column![ell(name, tw, 16.0, Normal)];
                 let text = text
                     .push((!artist.is_empty()).then(|| ell(artist, tw, 14.0, Normal).color(SUB)));
-                let lead = row![hover(thumb, over), text.spacing(2)].spacing(12);
+                let thumb: El = match hot {
+                    true => stack![thumb, over].into(),
+                    false => thumb.into(),
+                };
+                let lead = row![thumb, text.spacing(2)].spacing(12);
                 let tag = container(bold(kinds[h.0], 12.0).color(SUB)).padding([0, 4]);
                 let tag = tag.style(fill(theme::tint(0.1), 4.0));
                 let dots = hot.then(|| {
