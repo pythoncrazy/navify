@@ -338,6 +338,19 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     let _ = app.update(Message::Star(vec!["a".into()], false));
     assert!(app.sel.is_none());
     assert!(matches!(navify::view::go("album", ""), Message::Noop));
+    let e: AnyData = Arc::new("Failed".to_string());
+    app.cache
+        .insert("playlist:p1".into(), (std::time::Instant::now(), e));
+    let pl: navify::api::Playlist = parse(json!({"id": "p1", "name": "P"})).expect("playlist");
+    let lib = navify::app::Lib {
+        playlists: vec![pl],
+        artists: Vec::new(),
+        albums: Vec::new(),
+    };
+    app.cache
+        .insert("lib".into(), (std::time::Instant::now(), Arc::new(lib)));
+    let _ = app.update(Message::Nav("playlist:p1".into()));
+    assert!(app.seeds.contains_key("playlist:p1"));
     app.full = true;
     app.panel = 2;
     app.lib_find = Some("a".into());
