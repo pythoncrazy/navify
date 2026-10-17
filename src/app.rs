@@ -1391,7 +1391,11 @@ impl App {
         (self.route, self.pl_find, self.pl_more) = (route.clone(), None, None);
         self.covers.wait = false;
         self.panel = [self.panel, 0][usize::from(self.panel == 4)];
-        (self.menu, self.hover, self.sel, self.picked) = (None, None, None, BTreeSet::new());
+        (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
+        self.hover = self
+            .hover
+            .take()
+            .filter(|h| h.starts_with("lib") || h == "queue");
         (self.popular_all, self.disc_chip) = (false, 0);
         if !route.starts_with("search") {
             self.search_tab = 0;

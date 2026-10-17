@@ -117,6 +117,18 @@ pub fn pane<'a>(c: impl Into<El<'a>>) -> El<'a> {
     ))
 }
 
+pub fn hov<'a>(
+    m: iced::widget::MouseArea<'a, Message>,
+    tag: String,
+    back: Option<&'static str>,
+) -> iced::widget::MouseArea<'a, Message> {
+    let t = tag.clone();
+    m.on_enter(act(move |a| a.hover = Some(tag.clone())))
+        .on_exit(act(move |a| {
+            a.hover = a.hover.take().filter(|h| *h != t).or(back.map(Into::into))
+        }))
+}
+
 pub fn vgap<'a>(c: impl Into<El<'a>>, lo: usize) -> El<'a> {
     Element::new(wrap::Wrap(
         c.into(),
@@ -558,7 +570,7 @@ mod wrap {
                 }
                 _ => {}
             }
-            if let (Event::Window(RedrawRequested(now)), true) = (e, ring.1 != 0.0) {
+            if let (Event::Window(RedrawRequested(now)), true) = (e, root && ring.1 != 0.0) {
                 match ring.2.map(|t| t + frame).filter(|d| d > now) {
                     Some(due) => sh.request_redraw_at(due),
                     None => {
@@ -997,16 +1009,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let t = theme::tint;
         let b = b.style(theme::btn([t(a), t(h), t(0.3)], [TEXT; 3], 4.0));
         let menu = Message::LibMenu(route.clone());
-        let (enter, exit) = (tag.clone(), tag);
-        mouse_area(b.on_press(Message::Nav(route)))
-            .on_right_press(menu)
-            .on_enter(act(move |a| a.hover = Some(enter.clone())))
-            .on_exit(act(move |a| {
-                if a.hover.as_ref() == Some(&exit) {
-                    a.hover = Some("lib".into());
-                }
-            }))
-            .into()
+        let m = mouse_area(b.on_press(Message::Nav(route))).on_right_press(menu);
+        hov(m, tag, Some("lib")).into()
     };
     let head: El = if mini {
         let b = icon_btn(i::LIBRARY, 20.0, task(App::lib_collapse));
@@ -1298,17 +1302,19 @@ fn player_bar(app: &App) -> El<'_> {
     let panels = row![
         song.map(|_| side(ic(i::PR).into(), app.panel == 1, "Now playing view", np)),
         song.map(|_| side(ic(i::LYRICS).into(), lyrics, "Lyrics", words)),
-        mouse_area(side(
-            queue_icon(
-                14.5,
-                [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(app.panel == 2)]
-            ),
-            app.panel == 2,
-            "Queue",
-            Message::Panel(2)
-        ))
-        .on_enter(act(|a| a.hover = Some("queue".into())))
-        .on_exit(act(|a| a.hover = a.hover.take().filter(|h| h != "queue"))),
+        hov(
+            mouse_area(side(
+                queue_icon(
+                    14.5,
+                    [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(app.panel == 2)]
+                ),
+                app.panel == 2,
+                "Queue",
+                Message::Panel(2)
+            )),
+            "queue".into(),
+            None
+        ),
     ];
     let right = row![
         (!app.full).then_some(panels),

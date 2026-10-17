@@ -349,8 +349,13 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     };
     app.cache
         .insert("lib".into(), (std::time::Instant::now(), Arc::new(lib)));
+    app.hover = Some("lib:playlist:p1".into());
     let _ = app.update(Message::Nav("playlist:p1".into()));
     assert!(app.seeds.contains_key("playlist:p1"));
+    assert_eq!(app.hover.as_deref(), Some("lib:playlist:p1"));
+    app.hover = Some("playlist:p1#0".into());
+    let _ = app.update(Message::Nav("liked".into()));
+    assert!(app.hover.is_none());
     app.full = true;
     app.panel = 2;
     app.lib_find = Some("a".into());
