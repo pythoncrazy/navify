@@ -208,6 +208,9 @@ async fn playlist_search_and_sort_keep_the_server_order() {
         .expect("playlist");
     assert_eq!(left.iter().map(|s| s.id.as_str()).collect::<String>(), "ca");
     assert_eq!((p.song_count, p.duration), (2, 120.0));
+    app.lib_find = Some("P".into());
+    let _ = app.update(Message::MenuClose);
+    assert!(app.pl_find.is_none() && app.lib_find.is_none());
 }
 
 #[tokio::test]
