@@ -1442,9 +1442,11 @@ impl App {
     }
 
     fn seed(&self, key: &str) -> Option<AnyData> {
-        let (kind, id) = key
-            .split_once(':')
-            .filter(|_| !self.cache.contains_key(key))?;
+        let (kind, id) = key.split_once(':')?;
+        let fresh = |(t, v): &(Instant, AnyData)| t.elapsed() < STALE && !v.is::<String>();
+        if self.cache.get(key).is_some_and(fresh) {
+            return None;
+        }
         Some(match kind {
             "album" => Arc::new((self.find_album(id)?, Vec::<Song>::new())),
             "artist" => Arc::new((self.find_artist(id)?.clone(), Vec::<Album>::new())),

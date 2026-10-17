@@ -926,9 +926,9 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let on = app.current_song().is_some() && !app.ctx.is_empty() && same(&app.ctx);
         let fg = if on { ACCENT } else { TEXT };
         let tag = format!("lib:{route}");
-        let art = match route.as_str() {
-            "folders" | "radio" => art,
-            _ if app.hover.as_deref() != Some(tag.as_str()) => art,
+        let top: El = match route.as_str() {
+            "folders" | "radio" => Space::new().into(),
+            _ if app.hover.as_deref() != Some(tag.as_str()) => Space::new().into(),
             _ => {
                 let live = on && app.playing;
                 let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(live)];
@@ -936,7 +936,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                     true => Message::Toggle,
                     false => Message::PlayCtx(route.clone(), 0),
                 };
-                let top: El = match view > 1 {
+                match view > 1 {
                     true => {
                         let b = theme::sq(theme::filled(g, 16.0).color(BG).center(), 40.0);
                         let b = b.style(theme::accent).on_press(m);
@@ -949,10 +949,10 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                         let top = button(top.style(fill(BG.scale_alpha(0.5), r))).padding(0);
                         top.style(theme::link(TEXT)).on_press(m).into()
                     }
-                };
-                stack![art, top].into()
+                }
             }
         };
+        let art: El = stack![art, top].into();
         let live = (on && app.playing).then(|| i(i::VOL2, 16.0).color(ACCENT));
         let pinned = route == "liked" || app.cfg.settings.pins.contains(&route);
         let line = |w: f32, sub: Cow<'a, str>| {
@@ -1038,6 +1038,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let chips = [(1u8, "Playlists"), (2, "Albums"), (3, "Artists")].map(|(n, name)| {
         let m = task(move |a| {
             a.lib_filter = if a.lib_filter == n { 0 } else { n };
+            a.lib_scroll.0 = 0.0;
             a.covers_now()
         });
         theme::chip_btn(name, f == n, m)
@@ -1102,6 +1103,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
     let open = app.lib_find.is_none();
     let find = task(move |a| {
         a.lib_find = open.then(String::new);
+        a.lib_scroll.0 = 0.0;
         let focus = open.then(|| iced::widget::operation::focus("libfind"));
         iced::Task::batch([a.covers_now()].into_iter().chain(focus))
     });
@@ -1117,6 +1119,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             let t = t.on_input(|v| {
                 task(move |a| {
                     a.lib_find = Some(v.clone());
+                    a.lib_scroll.0 = 0.0;
                     a.covers_now()
                 })
             });
