@@ -2308,8 +2308,9 @@ impl App {
                     return load;
                 }
                 if kind == 6 {
+                    let load = self.request(&format!("artist:{id}"), 0);
                     self.modal = Some((id, kind));
-                    return self.covers_now();
+                    return Task::batch([load, self.covers_now()]);
                 }
                 let Some(p) = self.playlist(&id) else {
                     return self.toast("The playlist is not available.");

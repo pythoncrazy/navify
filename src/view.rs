@@ -1352,9 +1352,11 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let b = b.padding([14, x]).on_press_maybe(m.clone());
         focusable(b, m, 500.0, Some("layer"))
     };
-    let x = theme::sq(i(i::X, 20.0).center(), 32.0).style(theme::link(SUB));
-    let x = x.on_press(Message::MenuClose);
-    let close = focusable(x, Some(Message::MenuClose), 16.0, Some("layer"));
+    let shut = |b: Btn<'a, Message>| {
+        let m = Some(Message::MenuClose);
+        focusable(b.on_press(Message::MenuClose), m, 16.0, Some("layer"))
+    };
+    let close = shut(theme::sq(i(i::X, 20.0).center(), 32.0).style(theme::link(SUB)));
     let style = fill(theme::MENU, 8.0);
     if kind == 3 {
         let caps = |id: &str| {
@@ -1387,13 +1389,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         .spacing(12);
         let top = container(top).padding(iced::Padding::new(24.0).top(23).bottom(18));
         let list = container(list.style(theme::scroll)).padding(iced::Padding::new(24.0).top(22));
-        let x = theme::sq(i(i::X, 32.0).center(), 32.0).style(theme::link(SUB));
-        let x = focusable(
-            x.on_press(Message::MenuClose),
-            Some(Message::MenuClose),
-            16.0,
-            Some("layer"),
-        );
+        let x = shut(theme::sq(i(i::X, 32.0).center(), 32.0).style(theme::link(SUB)));
         let x = container(x)
             .align_right(Fill)
             .padding(iced::Padding::ZERO.top(16).right(17));
@@ -1417,18 +1413,9 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             let img = img.border_radius(iced::border::Radius::new(8.0).bottom(0.0));
             img.content_fit(iced::ContentFit::Fill)
         });
-        let x = button(i(i::X, 16.0).center())
-            .width(32)
-            .height(32)
-            .padding(0);
         let dark = BG.scale_alpha(0.7);
-        let x = x.style(theme::solid([dark, BG.scale_alpha(0.8), dark], TEXT));
-        let x = focusable(
-            x.on_press(Message::MenuClose),
-            Some(Message::MenuClose),
-            16.0,
-            Some("layer"),
-        );
+        let x = theme::sq(i(i::X, 16.0).center(), 32.0);
+        let x = shut(x.style(theme::solid([dark, BG.scale_alpha(0.8), dark], TEXT)));
         let top = stack![
             container(pic).width(Fill).height(432),
             container(x).align_right(Fill).padding(16)
@@ -1468,61 +1455,43 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
                 "displayAlbumArtist" if v?.get("displayArtist") == Some(x) => return None,
                 _ => x.as_str().map_or_else(|| x.to_string(), String::from),
             };
-            (!s.is_empty() && s != "0").then_some(s)
+            let unit = match k {
+                "bitRate" => " kbps",
+                "samplingRate" => " Hz",
+                "bitDepth" => " bits",
+                "trackGain" | "albumGain" => " dB",
+                _ => "",
+            };
+            (!s.is_empty() && s != "0").then(|| s + unit)
         };
         let groups = [
             (
                 "Artist",
-                &[
-                    ("Artist", "displayArtist", ""),
-                    ("Album artist", "displayAlbumArtist", ""),
-                ][..],
+                "Artist displayArtist,Album artist displayAlbumArtist",
             ),
-            (
-                "Composition & Lyrics",
-                &[("Composer", "displayComposer", "")],
-            ),
+            ("Composition & Lyrics", "Composer displayComposer"),
             (
                 "Your listening",
-                &[
-                    ("Plays", "playCount", ""),
-                    ("Last played", "played", ""),
-                    ("Added", "created", ""),
-                ],
+                "Plays playCount,Last played played,Added created",
             ),
             (
                 "Song",
-                &[
-                    ("Album", "album", ""),
-                    ("Genre", "genre", ""),
-                    ("Year", "year", ""),
-                    ("Disc", "discNumber", ""),
-                    ("Track", "track", ""),
-                    ("Duration", "duration", ""),
-                    ("BPM", "bpm", ""),
-                    ("Comment", "comment", ""),
-                ],
+                "Album album,Genre genre,Year year,Disc discNumber,Track track,\
+                Duration duration,BPM bpm,Comment comment",
             ),
             (
                 "File",
-                &[
-                    ("Format", "suffix", ""),
-                    ("Bit rate", "bitRate", " kbps"),
-                    ("Sample rate", "samplingRate", " Hz"),
-                    ("Bit depth", "bitDepth", " bits"),
-                    ("Channels", "channelCount", ""),
-                    ("Size", "size", ""),
-                    ("Track gain", "trackGain", " dB"),
-                    ("Album gain", "albumGain", " dB"),
-                    ("Path", "path", ""),
-                ],
+                "Format suffix,Bit rate bitRate,Sample rate samplingRate,\
+                Bit depth bitDepth,Channels channelCount,Size size,\
+                Track gain trackGain,Album gain albumGain,Path path",
             ),
         ];
         let groups = groups.into_iter().filter_map(|(name, fields)| {
             let rows: Vec<El> = fields
-                .iter()
-                .filter_map(|&(label, k, unit)| {
-                    let t = text(val(k)? + unit).size(16).font(theme::fw(Normal));
+                .split(',')
+                .filter_map(|f| {
+                    let (label, k) = f.rsplit_once(' ').expect("label and key");
+                    let t = text(val(k)?).size(16).font(theme::fw(Normal));
                     let t = t.wrapping(text::Wrapping::WordOrGlyph);
                     Some(column![t, sub(label, 14.0)].spacing(2).into())
                 })
@@ -1549,8 +1518,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             head,
             theme::ell(title, 392.0, 16.0, iced::font::Weight::Bold)
         ];
-        let line = container(Space::new().width(Fill).height(1)).style(fill(theme::tint(0.1), 0.0));
-        let body = column![container(head).padding(24), line, list];
+        let body = column![container(head).padding(24), pages::rule(), list];
         let body = container(body).width(440).height(542);
         return body.style(fill(theme::PANEL, 8.0)).into();
     }

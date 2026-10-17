@@ -2453,8 +2453,8 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
         let body = column![artist].push(bio).spacing(12).width(Fill);
         let body = body.padding(Padding::new(16.0).top([0.0, 16.0][usize::from(pic.is_some())]));
         let top = pic.map_or_else(|| El::from(head()), El::from);
-        let c = container(column![top, body]);
-        c.style(fill(ELEVATED, 8.0))
+        let c = container(column![top, body]).style(fill(ELEVATED, 8.0));
+        btn(c, Message::Modal(id.into(), 6))
     });
     let preview = lyric_at(app, s).map(|(l, cur, _, _)| {
         let lines = l.lines[cur.unwrap_or(0)..]
