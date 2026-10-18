@@ -2292,11 +2292,13 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
         let lines = l.lines[cur.unwrap_or(0)..].iter();
         let lines = lines.filter(|x| !x.1.is_empty()).take(3);
         let lines = lines.zip([1.0, 1.0, 0.4]);
-        let lines =
-            lines.map(|((_, t), a)| ell(t, w - 32.0, 20.0, Bold).color(TEXT.scale_alpha(a)));
-        let body = column![bold("Lyrics preview", 16.0)].extend(lines.map(Into::into));
-        let body = container(body.spacing(8).padding(16).width(Fill));
+        let lines = lines.map(|((_, t), a)| bold(t, 20.0).color(TEXT.scale_alpha(a)).into());
         let bg = head_color(app, &s.cover);
+        let fade = container(container(bands(&[(0.0, bg.scale_alpha(0.0)), (1.0, bg)])).height(24));
+        let lines = stack![Column::from_iter(lines).spacing(8)].push(fade.align_bottom(Fill));
+        let lines = container(lines).max_height(100.0).clip(true);
+        let body = column![bold("Lyrics preview", 16.0), lines];
+        let body = container(body.spacing(8).padding(16).width(Fill));
         let b = button(body).padding(0);
         let b = b.style(theme::btn([bg; 3], [TEXT; 3], 8.0));
         b.on_press(Message::Nav("lyrics".into()))
