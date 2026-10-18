@@ -24,7 +24,7 @@ mod linux {
             let has = |l: &[Global]| l.iter().any(|g| g.interface.starts_with("zxdg_decoration"));
             Some(globals.contents().with_list(has))
         };
-        let frame = || navify::config::Config::load().settings.system_frame;
+        let frame = || navify::config::Config::load().settings.x11_frame;
         set.map(|v| v.is_some()) == [true, true, false] && ssd().is_none_or(|s| !s && frame())
     }
 
