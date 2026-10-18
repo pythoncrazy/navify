@@ -1162,6 +1162,7 @@ fn player_bar(app: &App) -> El<'_> {
             )
         });
         let seek = seek
+            .step(0.01f32)
             .on_release(task(|a| {
                 iced::Task::batch(a.seek_preview.take().map(|v| a.update(Message::Seek(v))))
             }))
