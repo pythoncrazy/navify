@@ -1359,7 +1359,7 @@ impl App {
         self.covers.wait = false;
         self.panel = [self.panel, 0][usize::from(self.panel == 4)];
         (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
-        let keep = |h: &String| h.starts_with("lib") || h == "queue";
+        let keep = |h: &String| h.starts_with("lib") || h == "queue" || h == "search";
         self.hover = self.hover.take().filter(keep);
         (self.popular_all, self.disc_chip) = (false, 0);
         if !route.starts_with("search") {
