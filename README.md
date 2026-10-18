@@ -38,6 +38,18 @@
 - **Resources:** no CPU use when paused, a small memory footprint, and a small binary.
   Covers are kept in a disk cache.
 
+## Size
+
+This table compares the Navify 0.1.0 files with the files of Feishin 1.17.0, an Electron player for the same servers.
+
+| System | Navify download | Navify installed | Feishin download | Feishin installed |
+| --- | --- | --- | --- | --- |
+| Linux x86_64 | 6.7 MB (deb) | 14.6 MB | 172 MB (deb) | 628 MB |
+| Linux arm64 | 6.1 MB (deb) | 12.2 MB | 167 MB (deb) | 633 MB |
+| Windows x64 | 5.6 MB (setup) | 11.6 MB | 187 MB (setup) | 675 MB |
+| macOS Apple silicon | 4.9 MB (dmg) | 9.5 MB | 214 MB (dmg) | 589 MB |
+| macOS Intel | 5.6 MB (dmg) | 11.4 MB | 222 MB (dmg) | 597 MB |
+
 ## Keyboard shortcuts
 
 On macOS, use Cmd in place of Ctrl. You can change the shortcuts in Settings.
