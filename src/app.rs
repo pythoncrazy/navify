@@ -935,12 +935,14 @@ impl App {
         let format = Some(st.transcode_format.as_str()).filter(|f| !f.is_empty());
         let (url, transcoded) = s.stream_url(song, format, st.transcode_max_bitrate);
         let (id, gain, duration) = (song.id.clone(), self.gain(song), song.duration);
+        let rate = [song.sampling_rate, 48_000][usize::from(format == Some("opus"))];
         Track {
             id,
             url,
             gain,
             transcoded,
             duration,
+            rate,
         }
     }
 

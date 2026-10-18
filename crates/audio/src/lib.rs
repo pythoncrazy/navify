@@ -47,6 +47,7 @@ pub struct Track {
     pub gain: f32,
     pub transcoded: bool,
     pub duration: f32,
+    pub rate: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -982,7 +983,39 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
             }
             sh.set_pos(at, u64::MAX);
         }
-        if let Some((t, at, pre, hit)) = play {
+        let mut woke = None;
+        loop {
+            let want = match (&play, &mix.cur) {
+                (Some(p), _) => p.0.rate,
+                (None, Some(c)) => c.rate as u32,
+                _ => 0,
+            };
+            if want > 0 && out.is_none() && !paused {
+                asked = want;
+                match open(&dev, asked, &sh, &tx) {
+                    Ok((s, p, rate)) => {
+                        let early = play.is_some();
+                        if early {
+                            s.play().map_err(|e| e.to_string()).unwrap_or_else(fail);
+                        }
+                        (written, running, idle, out, mix.rate) =
+                            (0, early, None, Some((s, p)), rate);
+                        woke = Some(Instant::now());
+                        sh.read.store(0, Relaxed);
+                        sh.flush.store(0, Relaxed);
+                        if !fresh {
+                            mix.seek(&io, get(&sh.pos)).unwrap_or_else(fail);
+                        }
+                    }
+                    Err(e) => {
+                        (mix.cur, mix.inc, play) = (None, None, None);
+                        fail(e.to_string());
+                    }
+                }
+            }
+            let Some((t, at, pre, hit)) = play.take() else {
+                break;
+            };
             let s = match (hit, pre) {
                 (Some(s), _) => Source { track: t, ..s }.moved(&io, mix.rate, at),
                 (None, Some(h)) => h
@@ -996,29 +1029,13 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
                 out = None;
             }
         }
-        if out.is_none()
-            && !paused
-            && let Some(c) = &mix.cur
+        if let Some(w) = woke
+            && let Some((_, p)) = &mut out
         {
-            asked = c.rate as u32;
-            match open(&dev, asked, &sh, &tx) {
-                Ok((s, mut p, rate)) => {
-                    p.push_entire_slice(&vec![0.0; rate as usize])
-                        .expect("ring buffer has room");
-                    let lead = u64::from(rate);
-                    (written, running, idle, out, mix.rate) =
-                        (lead, false, None, Some((s, p)), rate);
-                    sh.read.store(0, Relaxed);
-                    sh.flush.store(0, Relaxed);
-                    if !fresh {
-                        mix.seek(&io, get(&sh.pos)).unwrap_or_else(fail);
-                    }
-                }
-                Err(e) => {
-                    (mix.cur, mix.inc) = (None, None);
-                    fail(e.to_string());
-                }
-            }
+            let lead = (0.5 - w.elapsed().as_secs_f64()).max(0.0) * f64::from(mix.rate);
+            let lead = vec![0.0; lead as usize * 2];
+            p.push_entire_slice(&lead).expect("ring buffer has room");
+            written = lead.len() as u64;
         }
         if let Some((_, prod)) = &mut out {
             while !paused && mix.cur.is_some() && prod.slots() >= buf.len() {
