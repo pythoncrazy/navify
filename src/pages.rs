@@ -2345,12 +2345,15 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         }
         false => art,
     };
-    let x = n.filter(|_| hot && !cur);
-    let x = x.map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
+    let del = n.filter(|_| !cur).map(Message::QDel);
+    let x = del.clone().filter(|_| hot).map(|m| icon_btn(i::X, 14.0, m));
     let fg = if cur { ACCENT } else { TEXT };
     let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);
     let menu = match s.url.is_empty() {
-        true => Message::Menu(Box::new(MenuKind::Song(vec![s.clone()]))),
+        true => Message::Menu(Box::new(match del {
+            Some(d) => MenuKind::SongIn(vec![s.clone()], "Remove from queue", d),
+            None => MenuKind::Song(vec![s.clone()]),
+        })),
         false => Message::Noop,
     };
     let movable = n.filter(|&n| n > app.index && app.panel == 2);
@@ -2716,7 +2719,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let col = column![section("Columns")].extend(rows.into_iter().flatten());
             return boxed(col.into(), 160.0, 42.0 + 48.0 * n as f32 + 8.0, 4);
         }
-        MenuKind::Song(v) | MenuKind::SongIn(v, _) if level == 2 && v.len() == 1 => {
+        MenuKind::Song(v) | MenuKind::SongIn(v, ..) if level == 2 && v.len() == 1 => {
             let id = &v[0].id;
             let cur = app.ratings.get(id).copied().unwrap_or(v[0].user_rating);
             let stars = (1..=5u8).map(|n| {
@@ -2755,7 +2758,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let top = [account, profile, recents, settings];
             top.into_iter().chain(others).chain([out]).collect()
         }
-        MenuKind::Song(s) | MenuKind::SongIn(s, _) if level == 1 => {
+        MenuKind::Song(s) | MenuKind::SongIn(s, ..) if level == 1 => {
             let name = match &s[..] {
                 [x] => x.title.clone(),
                 _ => String::new(),
@@ -2763,7 +2766,7 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let add = |p: &Playlist| Message::PlAdd(p.id.clone(), ids(s));
             pl_list(Message::PlNew(name, ids(s)), &add, "")
         }
-        MenuKind::Song(songs) | MenuKind::SongIn(songs, _) => {
+        MenuKind::Song(songs) | MenuKind::SongIn(songs, ..) => {
             let on = songs.iter().all(|s| app.is_starred(&s.id, s.starred));
             let liked = usize::from(app.route == "liked");
             let like = [
@@ -2772,9 +2775,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             ];
             let q = |next| Message::Queue(songs.clone(), next);
             let mut v = vec![open(1, i::PLUS, "Add to playlist")];
-            if let MenuKind::SongIn(_, n) = &m.kind {
-                let rm = Message::PlRemove(n.clone());
-                v.push(it(i::MINUS, "Remove from this playlist", rm));
+            if let MenuKind::SongIn(_, t, rm) = &m.kind {
+                v.push(it(i::MINUS, t, rm.clone()));
             }
             let (star, k) = (Message::Star(ids(songs), !on), usize::from(on));
             v.push(it(['\0', [i::SAVED, '\0'][liked]][k], like[k], star));
