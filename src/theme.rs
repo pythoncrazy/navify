@@ -237,6 +237,19 @@ pub fn underline<'a, M: 'a>(
     iced::widget::hover(base, container(line).padding(pad))
 }
 
+pub fn ulink<'a, M: Clone + 'a>(
+    s: impl Into<std::borrow::Cow<'a, str>>,
+    px: f32,
+    size: f32,
+    w: Weight,
+    fg: Color,
+    m: M,
+) -> Element<'a, M> {
+    let s = s.into();
+    let line = width(&s, size, w).min(px);
+    underline(link_btn(ell(s, px, size, w), fg, m), 0.0, line, size)
+}
+
 pub fn pill_btn<'a, M: Clone + 'a>(label: impl Into<Element<'a, M>>, m: M) -> Btn<'a, M> {
     let style = |t: &Theme, s| {
         let edge = if s == Status::Active { FIELD } else { TEXT };
