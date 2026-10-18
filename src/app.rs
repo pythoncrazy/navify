@@ -2837,9 +2837,10 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
         (m.shift(), "Shift+"),
     ];
     let c = mods.iter().filter(|x| x.0).map(|x| x.1).collect::<String>() + &k;
+    let alt = m.alt() && matches!(key, Key::Named(_)) && !cfg!(target_os = "macos");
     match (c.as_str(), status) {
         ("Escape", _) => Some(Message::MenuClose),
-        (_, iced::event::Status::Captured) => None,
+        (_, iced::event::Status::Captured) if !alt => None,
         _ => Some(Message::Key(c)),
     }
 }
