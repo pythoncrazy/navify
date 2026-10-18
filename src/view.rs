@@ -7,7 +7,7 @@ use iced::widget::{
 use iced::{Background, Border, Center, Color, Element, Fill, FillPortion, color, padding};
 use std::borrow::Cow;
 
-use crate::api::Artist;
+use crate::api::{Artist, Playlist, Song};
 use crate::app::{App, Lib, MenuKind, Message, act, set, task};
 use crate::pages;
 use crate::theme::{
@@ -1429,15 +1429,45 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let body = container(body).width(440).height(542);
         return body.style(fill(theme::PANEL, 8.0)).into();
     }
-    if kind == 2 || kind == 4 {
+    if [2, 4, 7].contains(&kind) {
         let name = pl.map_or("", |p| p.name.as_str()).to_string();
         let b = theme::fw(iced::font::Weight::Bold);
         let red = [color!(0xe91429), color!(0xd81326), color!(0xa60e1d)];
         let green = [ACCENT, color!(0x3be477), color!(0x1abc54)];
         let n = app.queue.len();
-        let (title, label, ok, bg, fg, spans) = match kind {
-            2 => (
+        let no = ("Cancel", Message::MenuClose);
+        let (title, no, label, ok, bg, fg, spans) = match (kind, &app.held) {
+            (7, Some(Message::PlAdd(pid, ids))) => {
+                let have = app.data::<(Playlist, Vec<Song>)>(&format!("playlist:{pid}"));
+                let have = have.map_or(&[][..], |p| &p.1[..]);
+                let new = ids.iter().filter(|id| !have.iter().any(|s| &s.id == *id));
+                let new: Vec<String> = new.cloned().collect();
+                let (some, yes, ok, text) = match new.is_empty() {
+                    true => ("Add anyway", "Don't add", Message::MenuClose, "This is"),
+                    false => (
+                        "Add all",
+                        "Add new ones",
+                        Message::PlAdd(pid.clone(), new),
+                        "Some of these are",
+                    ),
+                };
+                (
+                    "Already added",
+                    (some, Message::Confirm),
+                    yes,
+                    ok,
+                    green,
+                    BG,
+                    vec![
+                        text::Span::new(format!("{text} already in the playlist ")),
+                        text::Span::new(name).font(b),
+                        text::Span::new("."),
+                    ],
+                )
+            }
+            (2, _) => (
                 "Delete from Your Library?",
+                no,
                 "Delete",
                 Message::PlDel(id.into()),
                 red,
@@ -1451,6 +1481,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             ),
             _ => (
                 "Replace the queue?",
+                no,
                 "Replace",
                 Message::Confirm,
                 green,
@@ -1462,8 +1493,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         };
         let msg = text::Rich::<(), Message>::with_spans(spans).size(14);
         let msg = msg.font(theme::fw(Normal)).color(BG);
-        let close = Some(Message::MenuClose);
-        let cancel = act("Cancel", [theme::CLEAR; 3], BG, 0, close);
+        let cancel = act(no.0, [theme::CLEAR; 3], BG, 0, Some(no.1));
         let ok = act(label, bg, fg, 32, Some(ok));
         let buttons = row![Space::new().width(Fill), cancel, ok].spacing(16);
         let buttons = buttons.align_y(Center).padding(padding::top(24));

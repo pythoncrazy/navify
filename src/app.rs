@@ -334,7 +334,7 @@ pub struct App {
     pub login: Login,
     pub hidden: bool,
     pub modal: Option<(String, u8)>,
-    held: Option<Message>,
+    pub held: Option<Message>,
     expired: (Vec<String>, Option<Instant>),
     pub recording: Option<&'static str>,
     awake: (bool, Option<std::sync::mpsc::Sender<bool>>),
@@ -1960,6 +1960,16 @@ impl App {
                 return self.update(m);
             }
             Message::PlAdd(pid, ids) => {
+                let have = self.data::<(Playlist, Vec<Song>)>(&format!("playlist:{pid}"));
+                let dup = have.is_some_and(|p| p.1.iter().any(|s| ids.contains(&s.id)));
+                if dup && self.modal.is_none() {
+                    let add = Some(Message::PlAdd(pid.clone(), ids));
+                    (self.menu, self.modal, self.held) = (None, Some((pid, 7)), add);
+                    return layer_focus(true, |_, n| n.min(2) - 1);
+                }
+                if self.modal.as_ref().is_some_and(|m| m.1 == 7) {
+                    (self.modal, self.held) = (None, None);
+                }
                 let songs: Vec<Song> = ids.iter().filter_map(|id| self.find_song(id)).collect();
                 let more = (songs.len() as u32, songs.iter().map(|s| s.duration).sum());
                 let fix = (songs.len() < ids.len()).then(|| Task::done(task(reload(&pid))));
@@ -2628,6 +2638,7 @@ impl App {
             small.push(art.unwrap_or(&a.artist_id));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             let empty = s.is_empty() && p.song_count == 0;
+            let empty = empty || (self.panel != 4 && self.pl_more.is_some());
             let s = self.songs_of(key).map_or(&s[..], |x| x.0);
             let q = self.pl_more.as_deref().unwrap_or("").trim();
             let hits = self.data::<Trio>(&format!("search:{q}"));
