@@ -337,7 +337,7 @@ pub struct App {
     expired: (Vec<String>, Option<Instant>),
     pub recording: Option<&'static str>,
     awake: (bool, Option<std::sync::mpsc::Sender<bool>>),
-    pub new_pl_desc: text_editor::Content,
+    pub new_pl_desc: Option<text_editor::Content>,
     pub shot: Option<String>,
     pub new_pl: String,
     pub new_pl_public: bool,
@@ -2004,7 +2004,11 @@ impl App {
                     .nth(i.into())
                     .expect("a login or playlist field") = v;
             }
-            Message::Desc(a) => self.new_pl_desc.perform(a),
+            Message::Desc(a) => self
+                .new_pl_desc
+                .as_mut()
+                .expect("an open editor")
+                .perform(a),
             Message::LSubmit if self.login.busy => {}
             Message::LSubmit => {
                 let l = &mut self.login;
@@ -2258,7 +2262,7 @@ impl App {
                 if kind == 1 {
                     (self.new_pl, self.new_pl_desc, self.new_pl_public) = (
                         p.name.clone(),
-                        text_editor::Content::with_text(&p.comment),
+                        Some(text_editor::Content::with_text(&p.comment)),
                         p.public,
                     );
                 }

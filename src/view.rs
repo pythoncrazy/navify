@@ -1470,7 +1470,8 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         return container(body).style(fill(TEXT, 8.0)).into();
     }
     let named = !app.new_pl.trim().is_empty();
-    let (name, desc) = (app.new_pl.clone(), app.new_pl_desc.text());
+    let editor = app.new_pl_desc.as_ref().expect("an open editor");
+    let (name, desc) = (app.new_pl.clone(), editor.text());
     let public = app.new_pl_public;
     let ok = named.then(|| Message::Edit(id.into(), name, desc, public));
     let input = |hint: &'static str, v: &str, n: u8| {
@@ -1484,7 +1485,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
     let error = (!named).then(|| txt("Enter a name.", 12.0).color(theme::ERR));
     let name = column![input("Add a name", &app.new_pl, 3)];
     let name = name.push(error).spacing(6);
-    let desc = text_editor(&app.new_pl_desc).id("layer");
+    let desc = text_editor(editor).id("layer");
     let desc = desc.placeholder("Add an optional description");
     let desc = desc
         .on_action(Message::Desc)
