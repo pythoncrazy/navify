@@ -848,7 +848,8 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     let f = app.lib_filter;
     let q = app.lib_find.as_deref().unwrap_or("").to_lowercase();
     let hit = |name: &str| q.is_empty() || name.to_lowercase().contains(&q);
-    let wait = app.pending.contains("home#0") || app.covers.wait && app.covers.empty();
+    let wait = app.pending.contains("home#0") && !app.cache.contains_key("home")
+        || app.covers.wait && app.covers.empty();
     let rows = app
         .data::<Lib>("lib")
         .filter(|_| !wait)
@@ -972,7 +973,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let t = theme::tint;
         let b = b.style(theme::btn([t(a), t(h), t(0.3)], [TEXT; 3], 4.0));
         let menu = Message::LibMenu(route.clone());
-        let m = mouse_area(b.on_press(Message::Nav(route))).on_right_press(menu);
+        let m = mouse_area(b.on_press(Message::Nav(route.clone()))).on_right_press(menu);
+        let m = m.on_enter(Message::Warm(route));
         hov(m, tag, Some("lib")).into()
     };
     let head: El = if mini {

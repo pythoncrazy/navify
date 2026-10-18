@@ -23,7 +23,7 @@ pub const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/nav
 
 pub type Home = [Vec<Album>; 4];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Lib {
     pub playlists: Vec<Playlist>,
     pub artists: Vec<Artist>,
@@ -45,6 +45,48 @@ macro_rules! pager {
             .or_else(|| $v.downcast_ref::<Page<Artist>>().and_then(|$p| $e))
             .or_else(|| $v.downcast_ref::<Page<Song>>().and_then(|$p| $e))
     };
+}
+
+macro_rules! stored {
+    ($key:expr, $m:ident) => {
+        match $key.split_once(':').map_or($key.as_str(), |p| p.0) {
+            "home" => $m!(Home),
+            "lib" => $m!(Lib),
+            "album" => $m!((Album, Vec<Song>)),
+            "playlist" => $m!((Playlist, Vec<Song>)),
+            "artist" => $m!((Artist, Vec<Album>)),
+            "top" => $m!(Vec<Song>),
+            "info" => $m!(Info),
+            _ => None,
+        }
+    };
+}
+
+fn data_file() -> std::path::PathBuf {
+    crate::api::cache_dir("").join("data.json")
+}
+
+fn load_data(server: &str) -> HashMap<String, (Instant, AnyData)> {
+    let file = std::fs::read(data_file()).ok();
+    let mut v: serde_json::Value = file
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let (now, ours) = (Instant::now(), v["server"] == server);
+    let Some(map) = v["data"].as_object_mut().filter(|_| ours) else {
+        return HashMap::new();
+    };
+    let all = std::mem::take(map).into_iter().filter_map(|(k, v)| {
+        macro_rules! de {
+            ($t:ty) => {
+                serde_json::from_value::<$t>(v)
+                    .ok()
+                    .map(|x| Arc::new(x) as AnyData)
+            };
+        }
+        let d = stored!(k, de)?;
+        Some((k, (now, d)))
+    });
+    all.collect()
 }
 
 #[derive(Clone, Debug)]
@@ -297,6 +339,7 @@ pub struct App {
     pub hi: usize,
     pub cache: HashMap<String, (Instant, AnyData)>,
     pub seeds: HashMap<String, AnyData>,
+    stale: HashSet<String>,
     pub pending: HashSet<String>,
     pub scrolls: HashMap<String, (f32, f32)>,
     pub lyric: bool,
@@ -401,7 +444,13 @@ impl App {
         });
         let history = vec![if route == "login" { "login" } else { "home" }.into()];
         let volume = cfg.settings.volume;
+        let cache = session
+            .as_ref()
+            .filter(|_| shot.is_none())
+            .map_or_else(HashMap::new, |s| load_data(&s.server.id));
         Self {
+            stale: cache.keys().cloned().collect(),
+            cache,
             session,
             cfg,
             route,
@@ -432,6 +481,7 @@ impl App {
         } else {
             app.show()
         };
+        app.covers.wait = app.covers.disk > 0 && !app.stale.is_empty();
         let prune = app.disk(Some(300 << 20));
         (app, Task::batch([prune, open, start]))
     }
@@ -853,7 +903,7 @@ impl App {
         let fresh = |(t, v): &(Instant, AnyData)| {
             t.elapsed() < STALE && (key.starts_with("banner:") || !v.is::<String>())
         };
-        if offset == 0 && self.cache.get(key).is_some_and(fresh) {
+        if offset == 0 && !self.stale.contains(key) && self.cache.get(key).is_some_and(fresh) {
             return Task::none();
         }
         match self.session.clone() {
@@ -913,6 +963,33 @@ impl App {
             c.save()
         };
         blocking("Could not save the settings. ", save)
+    }
+
+    fn save_data(&self) -> Task<Message> {
+        let Some(s) = &self.session else {
+            return Task::none();
+        };
+        let mut all: Vec<_> = (self.cache.iter())
+            .filter_map(|(k, (t, d))| {
+                macro_rules! ser {
+                    ($t:ty) => {
+                        d.downcast_ref::<$t>()
+                            .and_then(|x| serde_json::to_value(x).ok())
+                    };
+                }
+                let top = k != "home" && k != "lib";
+                Some(((top, std::cmp::Reverse(*t)), k.clone(), stored!(k, ser)?))
+            })
+            .collect();
+        all.sort_by_key(|a| a.0);
+        let data: serde_json::Map<_, _> = all.into_iter().take(40).map(|e| (e.1, e.2)).collect();
+        let body = serde_json::json!({"server": s.server.id, "data": data}).to_string();
+        blocking("Could not save the page cache. ", move || {
+            let (path, tmp) = (data_file(), data_file().with_extension("tmp"));
+            std::fs::create_dir_all(path.parent().expect("the cache has a directory"))?;
+            std::fs::write(&tmp, body)?;
+            std::fs::rename(tmp, path)
+        })
     }
 
     pub fn gain(&self, song: &Song) -> f32 {
@@ -1524,6 +1601,7 @@ impl App {
         (self.ctx, self.source, self.qmove) = Default::default();
         (self.starred, self.ratings, self.plays, self.recent) = Default::default();
         (self.cache, self.seeds, self.pending, self.scrolls) = Default::default();
+        self.stale.clear();
         (self.covers, self.history, self.hi, self.panel) = Default::default();
         (self.menu, self.modal, self.recording, self.hover) = Default::default();
         (self.sel, self.picked, self.pl_find, self.pl_more) = Default::default();
@@ -1655,6 +1733,7 @@ impl App {
             }
             Message::Loaded(key, off, Ok(v)) => {
                 self.pending.remove(&format!("{key}#{off}"));
+                self.stale.remove(&key);
                 let mb = key
                     .strip_prefix("artist:")
                     .and_then(|id| self.find_artist(id))
@@ -2139,7 +2218,7 @@ impl App {
             }
             Message::Close => {
                 let q = self.loaded.then(|| self.save_queue());
-                let save = Task::batch(q.into_iter().chain([self.persist()]));
+                let save = Task::batch(q.into_iter().chain([self.persist(), self.save_data()]));
                 return save.collect().then(|_| iced::exit());
             }
             Message::Window(false) if self.tray.is_none() || !self.cfg.settings.tray => {
@@ -2162,7 +2241,10 @@ impl App {
                     false => w::close(id),
                 };
                 let q = self.loaded.then(|| self.save_queue());
-                return Task::batch(q.into_iter().chain([self.persist(), close]));
+                return Task::batch(
+                    q.into_iter()
+                        .chain([self.persist(), self.save_data(), close]),
+                );
             }
             Message::Warm(r) => return self.request(&self.key_of(&r), 0),
             Message::PlayCtx(route, mode) => {
