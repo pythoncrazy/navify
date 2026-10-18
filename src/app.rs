@@ -2018,6 +2018,16 @@ impl App {
                 self.edit::<Lib>("lib", |l| l.playlists.retain(|p| p.id != id));
                 self.cache.remove(&r);
                 let back = Task::batch((self.route == r).then(|| self.nav("home".into())));
+                let (mut h, mut hi) = (Vec::new(), 0);
+                for (i, k) in std::mem::take(&mut self.history).into_iter().enumerate() {
+                    if k != r && h.last() != Some(&k) {
+                        h.push(k);
+                    }
+                    if i == self.hi {
+                        hi = h.len() - 1;
+                    }
+                }
+                (self.history, self.hi) = (h, hi);
                 let undo = reload(&id);
                 let del = |s: Session| async move { s.playlist_delete(&id).await };
                 return Task::batch([back, self.send(del, "Could not delete the playlist.", undo)]);
