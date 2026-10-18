@@ -236,7 +236,7 @@ fn heading<'a>(t: impl text::IntoFragment<'a>, all: Option<String>) -> El<'a> {
     let all = all.map(|r| {
         let disc = r.starts_with("discography:") && r.matches(':').count() == 1;
         let label = ["Show all", "See discography"][usize::from(disc)];
-        link_btn(bold(label, 14.0), SUB, Message::Nav(r))
+        theme::ulink(label, f32::INFINITY, 14.0, Bold, SUB, Message::Nav(r))
     });
     let r = row![bold(t, 24.0).width(Fill)].push(all).align_y(Center);
     container(r).padding([0.0, PAD]).into()
@@ -402,12 +402,9 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
                 .width(c.1)
                 .into(),
             _ => {
-                let album = ell(&s.album, c.1, 14.0, Normal);
-                let line = theme::width(&s.album, 14.0, Normal).min(c.1);
-                let album = link_btn(album, SUB, go("album", &s.album_id));
-                container(theme::underline(album, 0.0, line, 14.0))
-                    .width(c.1)
-                    .into()
+                let to = go("album", &s.album_id);
+                let album = theme::ulink(&s.album, c.1, 14.0, Normal, SUB, to);
+                container(album).width(c.1).into()
             }
         }
     });
@@ -635,8 +632,8 @@ fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
         fg(matches!(kind, Some(MenuKind::View))),
         menu(MenuKind::View),
     );
-    let name = ell(&a.name, app.main_w() - 2.0 * PAD - 280.0, 24.0, Bold);
-    let name = link_btn(name, TEXT, go("artist", id));
+    let w = app.main_w() - 2.0 * PAD - 280.0;
+    let name = theme::ulink(&a.name, w, 24.0, Bold, TEXT, go("artist", id));
     let r = row![name, Space::new().width(Fill), filter, order];
     r.spacing(16).align_y(Center).into()
 }
@@ -679,7 +676,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32) -> El<'a> {
     let count = Some(plural(al.song_count, "song"));
     let meta = [Some(kind(al).0.to_string()), year, count];
     let meta = meta.into_iter().flatten().collect::<Vec<_>>().join(DOT);
-    let name = ell(&al.name, app.main_w() - 3.0 * PAD - 168.0, 32.0, Bold);
+    let nw = app.main_w() - 3.0 * PAD - 168.0;
     let on = app.is_starred(&al.id, al.starred);
     let open = Message::Nav(key.clone());
     let art = link_btn(cover(app, &al.cover, 136.0, false), TEXT, open.clone());
@@ -698,7 +695,7 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32) -> El<'a> {
         container(menu).width(24)
     ];
     let acts = acts.spacing(16);
-    let name = link_btn(name, TEXT, open);
+    let name = theme::ulink(&al.name, nw, 32.0, Bold, TEXT, open);
     let info = column![name, sub(meta, 14.0), Space::new().height(Fill)];
     let info = info.push(acts.align_y(Center)).spacing(8).height(136);
     let info = info.padding(padding::bottom(8));
@@ -982,8 +979,11 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         let face = a.artists.first().map(|x| x.cover.as_str());
         let face = face.filter(|c| !c.is_empty()).unwrap_or(&a.artist_id);
         let links = names.iter().enumerate().map(|(n, (id, name))| {
+            let x = [0.0, theme::width(", ", 14.0, Bold)][usize::from(n > 0)];
+            let w = theme::width(name, 14.0, Bold);
             let name = format!("{}{name}", if n > 0 { ", " } else { "" });
-            link_btn(bold(name, 14.0), TEXT, go("artist", id)).into()
+            let b = link_btn(bold(name, 14.0), TEXT, go("artist", id));
+            theme::underline(b, x, w, 14.0)
         });
         let face = cover(app, face, 24.0, true);
         let lead = row![face, Row::with_children(links)].spacing(8);
@@ -2241,11 +2241,11 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let lead = s.artists.first();
     let artist = bold(lead.map_or(&s.artist, |a| &a.name), 16.0);
     let artist = btn(artist, go("artist", lead.map_or(&s.artist_id, |a| &a.id)));
-    let title = ell(&s.title, w - 40.0, 24.0, Bold);
     let radio = !s.url.is_empty();
-    let title = btn(title, album_of(s));
+    let title = theme::ulink(&s.title, w - 40.0, 24.0, Bold, TEXT, album_of(s));
     let next = app.queue.get(app.real_at(app.index + 1)).map(|n| {
-        let open = link_btn(bold("Open queue", 14.0), SUB, Message::Panel(2));
+        let m = Message::Panel(2);
+        let open = theme::ulink("Open queue", f32::INFINITY, 14.0, Bold, SUB, m);
         let head = row![bold("Next in queue", 16.0).width(Fill), open];
         card(column![
             head,
@@ -2486,7 +2486,8 @@ pub fn queue_panel(app: &App) -> El<'_> {
     let now = app.current_song();
     let now = now.map(|s| queue_row(app, s, Some(app.index), w));
     let now = now.map(|r| column![title("Now playing".into()), r]);
-    let clear = link_btn(bold("Clear queue", 14.0), SUB, task(App::q_clear));
+    let m = task(App::q_clear);
+    let clear = theme::ulink("Clear queue", f32::INFINITY, 14.0, Bold, SUB, m);
     let from = row![ell(from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
     let from = container(from).padding(Padding::new(8.0).top(16));
     let list = column![now, (!next.is_empty()).then_some(from)].extend(next);

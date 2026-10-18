@@ -1127,10 +1127,8 @@ fn player_bar(app: &App) -> El<'_> {
     let tw = (room - 112.0).min(200.0);
     let left = song.filter(|_| !app.full).map(|s| {
         let on = app.is_starred(&s.id, s.starred);
-        let title = theme::ell(&s.title, tw, 14.0, Normal);
         let radio = !s.url.is_empty();
-        let line = theme::width(&s.title, 14.0, Normal).min(tw);
-        let title = theme::underline(btn(title, album_of(s)), 0.0, line, 14.0);
+        let title = theme::ulink(&s.title, tw, 14.0, Normal, TEXT, album_of(s));
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));
