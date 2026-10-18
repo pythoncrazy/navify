@@ -1007,7 +1007,9 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         theme::chip_btn(name, f == n, m)
     });
     let chips = Row::with_children(chips).spacing(8);
-    let user = app.session.as_ref().map_or("", |s| s.server.user.as_str());
+    let count = app
+        .data::<crate::app::Lib>("lib")
+        .map_or(0, |l| l.liked as u32);
     let pins = PINS.iter().filter(|p| p.0 >> f & 1 == 1 && hit(p.3));
     let pins = pins.map(|&(_, c, green, t, r)| {
         let (bg, fg) = [(ELEVATED, SUB), (SONGS_BG, ACCENT)][usize::from(green)];
@@ -1015,7 +1017,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let pic = liked.then(|| liked_art(px));
         let pic = pic.unwrap_or_else(|| art(px, i(c, 0.0).color(fg), bg));
         let kind = match liked {
-            true => format!("Playlist{}{user}", pages::DOT).into(),
+            true => format!("Playlist{}{}", pages::DOT, pages::plural(count, "song")).into(),
             false => "Library".into(),
         };
         item(pic, t, kind, route)

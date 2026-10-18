@@ -346,6 +346,7 @@ async fn recorded_shortcut_replaces_the_old_binding() {
         playlists: vec![pl],
         artists: Vec::new(),
         albums: Vec::new(),
+        liked: 0,
     };
     app.cache
         .insert("lib".into(), (std::time::Instant::now(), Arc::new(lib)));

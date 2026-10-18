@@ -135,7 +135,7 @@ fn find_box<'a>(q: &str, hint: &'a str, id: &'static str, w: f32) -> El<'a> {
         .into()
 }
 
-fn plural(n: u32, word: &str) -> String {
+pub fn plural(n: u32, word: &str) -> String {
     let s = if n == 1 { "" } else { "s" };
     format!("{} {word}{s}", fmt_n(n as usize))
 }
