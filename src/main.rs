@@ -67,8 +67,13 @@ fn main() -> iced::Result {
         libc::mallopt(libc::M_ARENA_MAX, 1);
         libc::mallopt(libc::M_MMAP_THRESHOLD, 128 * 1024);
     }
+    let arg = std::env::args().nth(1);
+    if matches!(arg.as_deref(), Some("-V" | "--version")) {
+        println!("navify {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
-    if std::env::args().nth(1).as_deref() == Some("--install") {
+    if arg.as_deref() == Some("--install") {
         let r = linux::install().map_err(|e| eprintln!("Cannot install the desktop entry: {e}"));
         std::process::exit(r.is_err() as i32);
     }
