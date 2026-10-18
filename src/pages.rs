@@ -203,11 +203,13 @@ fn play_btn<'a>(app: &App, px: f32, ctx: &str) -> El<'a> {
     let on = app.ctx == ctx && app.current_song().is_some();
     let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(on && app.playing)];
     let b = theme::sq(theme::filled(g, px * 0.4).color(BG).center(), px);
-    let m = match on {
-        true => Message::Toggle,
-        false => Message::PlayCtx(ctx.into(), 0),
-    };
-    b.style(theme::accent).on_press(m).into()
+    let b = b.style(theme::accent);
+    match on {
+        true => b.on_press(Message::Toggle).into(),
+        false => mouse_area(b.on_press(Message::PlayCtx(ctx.into(), 0)))
+            .on_enter(Message::Warm(ctx.into()))
+            .into(),
+    }
 }
 
 fn play_over<'a>(app: &App, base: El<'a>, top: El<'a>, ctx: &str) -> El<'a> {
