@@ -150,6 +150,9 @@ fn bare(id: &str) -> &str {
     id.split_once('#').map_or(id, |x| x.0)
 }
 
+static SHOWN: std::sync::LazyLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
 pub(crate) fn later(secs: f32, m: Message) -> Task<Message> {
     Task::future(tokio::time::sleep(Duration::from_secs_f32(secs))).map(move |()| m.clone())
 }
@@ -1155,6 +1158,7 @@ impl App {
 
     pub fn covers_now(&mut self) -> Task<Message> {
         let ids = self.visible_covers();
+        *SHOWN.lock().expect("cover set") = ids.iter().map(|(k, _)| bare(k).into()).collect();
         self.want_covers(ids)
     }
 
@@ -1204,13 +1208,15 @@ impl App {
             if raw.is_empty() || have || bad || !self.covers.want.insert((bare(&id).into(), size)) {
                 continue;
             }
-            need.push((id, size));
+            let seen = SHOWN.lock().expect("cover set").contains(bare(&id));
+            need.push((id, size, seen));
         }
         if need.is_empty() {
             return Task::none();
         }
         type Batch = Vec<(String, u32, Result<Decoded, String>)>;
         static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
         type Known = Option<(std::path::PathBuf, HashMap<String, Color>)>;
         static KNOWN: std::sync::Mutex<Known> = std::sync::Mutex::new(None);
         let dec = |items: Vec<(String, u32, Result<bytes::Bytes, String>)>,
@@ -1271,6 +1277,7 @@ impl App {
                 a.covers.want.remove(&(bare(&id).into(), size));
                 match r {
                     Ok(d) => a.covers.insert(id, size, d),
+                    Err(e) if e.is_empty() => {}
                     Err(e) => {
                         a.covers.failed.insert(bare(&id).into());
                         err = Some(e);
@@ -1283,10 +1290,10 @@ impl App {
         let (colors, own, s2) = (self.covers.color.clone(), s.clone(), s.clone());
         let load = async move {
             let (mut hit, mut miss) = (Vec::new(), Vec::new());
-            for (k, sz) in need {
+            for (k, sz, seen) in need {
                 match tokio::fs::read(s.cover_file(&k, sz)).await {
                     Ok(b) if !b.is_empty() => hit.push((k, sz, Ok(b.into()))),
-                    _ => miss.push((k, sz)),
+                    _ => miss.push((k, sz, seen)),
                 }
             }
             (dec(hit, colors, &s).await, miss)
@@ -1304,14 +1311,18 @@ impl App {
                         (chunk.to_vec(), s.clone(), s.clone(), a.covers.color.clone());
                     let net = async move {
                         let mut dl = Vec::new();
-                        for (k, sz) in chunk {
+                        for (k, sz, seen) in chunk {
                             let s = s.clone();
                             dl.push(tokio::spawn(async move {
-                                (
-                                    k.clone(),
-                                    sz,
-                                    s.cover(&k, sz).await.map_err(|e| e.to_string()),
-                                )
+                                let _net =
+                                    NET.acquire().await.expect("the cover semaphore is open");
+                                let gone =
+                                    seen && !SHOWN.lock().expect("cover set").contains(bare(&k));
+                                let r = match gone {
+                                    true => Err(String::new()),
+                                    false => s.cover(&k, sz).await.map_err(|e| e.to_string()),
+                                };
+                                (k, sz, r)
                             }));
                         }
                         let mut got = Vec::new();
