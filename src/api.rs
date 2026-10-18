@@ -742,6 +742,9 @@ impl Session {
     }
 
     pub async fn lyrics(&self, id: &str) -> Result<Vec<Lyrics>> {
+        if !self.server.ext.iter().any(|e| e == "songLyrics") {
+            return Ok(Vec::new());
+        }
         let ptr = "/lyricsList/structuredLyrics";
         self.get("getLyricsBySongId", json!({"id": id}), ptr).await
     }

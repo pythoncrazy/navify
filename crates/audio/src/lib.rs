@@ -904,16 +904,18 @@ fn engine(rx: Receiver<Cmd>, tx: UnboundedSender<Event>, sh: Arc<Shared>, io: Io
     loop {
         let (mut play, mut seek) = (None, None);
         loop {
-            let cmd = match rx.try_recv() {
+            let mut cmd = match rx.try_recv() {
                 Ok(c) => c,
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             };
-            if matches!(cmd, Cmd::Seek(_)) {
-                marks
-                    .drain(..)
-                    .filter_map(|m| m.2)
-                    .for_each(|e| drop(tx.send(e)));
+            if let Cmd::Seek(s) = &mut cmd {
+                for e in marks.drain(..).filter_map(|m| m.2) {
+                    if matches!(e, Event::Started(_)) {
+                        *s = 0.0;
+                    }
+                    let _ = tx.send(e);
+                }
             }
             if !matches!(cmd, Cmd::Next(_) | Cmd::Gain(_) | Cmd::Device(_)) {
                 sh.flush.store(written, Relaxed);

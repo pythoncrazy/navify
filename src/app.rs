@@ -328,6 +328,7 @@ pub struct App {
     pub toast: Option<(u64, String)>,
     pub toast_seq: u64,
     pub save_seq: u64,
+    play_seq: u64,
     pub panel: u8,
     pub lib_filter: u8,
     pub lib_find: Option<String>,
@@ -993,6 +994,7 @@ impl App {
     fn start(&mut self, songs: Vec<Song>, src: String, i: usize, shuffled: bool) -> Task<Message> {
         let done = Task::batch(self.loaded.then(|| self.listen(false)));
         (self.queue, self.source, self.scrobbled) = (songs, src, true);
+        self.play_seq += 1;
         let (keep, had) = (self.kept(), !self.queue.is_empty());
         let i = self.queue.iter().take(i).filter(|s| keep(s)).count();
         self.queue.retain(|s| keep(s));
@@ -1144,7 +1146,7 @@ impl App {
         }
         let ok = |(songs, cur, pos): (Vec<Song>, String, u64)| {
             task(move |a| {
-                if !songs.is_empty() && !a.loaded {
+                if !songs.is_empty() && !a.loaded && a.queue.is_empty() {
                     a.position = pos as f32 / 1000.0;
                     a.index = songs.iter().position(|s| s.id == cur).unwrap_or(0);
                     (a.queue, a.shuffle) = (songs.clone(), None);
@@ -1526,8 +1528,8 @@ impl App {
         (self.menu, self.modal, self.recording, self.hover) = Default::default();
         (self.sel, self.picked, self.pl_find, self.pl_more) = Default::default();
         (self.lib_find, self.full) = Default::default();
-        (self.route, self.expired.0, self.save_seq) =
-            (String::new(), Vec::new(), self.save_seq + 1);
+        (self.route, self.expired, self.save_seq) =
+            (String::new(), Default::default(), self.save_seq + 1);
         h
     }
 
@@ -1644,11 +1646,11 @@ impl App {
                 if self.shot.is_some() {
                     eprintln!("LOAD-ERR {key} {e}");
                 }
-                let known = self.cache.contains_key(&key) || self.seeds.contains_key(&key);
-                if known || key != self.key_of(&self.route) {
+                if self.cache.contains_key(&key) || key != self.key_of(&self.route) {
                     let load = (key == "lib" && self.route == "home").then(|| self.disc_load());
                     return Task::batch([self.toast(&e)].into_iter().chain(load));
                 }
+                self.seeds.remove(&key);
                 self.cache.insert(key, (Instant::now(), Arc::new(e)));
             }
             Message::Loaded(key, off, Ok(v)) => {
@@ -2046,9 +2048,14 @@ impl App {
             Message::Radio(id) => {
                 self.menu = None;
                 let similar = |s: Session| async move { s.similar_songs(&id, 30).await };
-                let ok = |v: Vec<Song>| match v.is_empty() {
+                self.play_seq += 1;
+                let seq = self.play_seq;
+                let ok = move |v: Vec<Song>| match v.is_empty() {
                     true => say("No similar songs were found.".into()),
-                    false => Message::Play(v, 0, "Radio".into()),
+                    false => task(move |a| match a.play_seq == seq {
+                        true => a.update(Message::Play(v.clone(), 0, "Radio".into())),
+                        false => Task::none(),
+                    }),
                 };
                 return self.call(similar, "Could not start the radio.", ok);
             }
@@ -2162,12 +2169,15 @@ impl App {
                 self.menu = None;
                 let mode = Some(mode).filter(|&m| m > 0);
                 let mode = mode.unwrap_or(self.cfg.settings.play_mode);
-                let key = route.clone();
-                let play = move |a: &mut App, v, src| {
-                    if mode < 2 {
+                self.play_seq += u64::from(mode < 2);
+                let (key, seq) = (route.clone(), self.play_seq);
+                let play = move |a: &mut App, v, src| match mode < 2 {
+                    true if a.play_seq != seq => Task::none(),
+                    true => {
                         a.ctx.clone_from(&key);
+                        a.play_songs(v, src, mode)
                     }
-                    a.play_songs(v, src, mode)
+                    false => a.play_songs(v, src, mode),
                 };
                 return self.ctx_songs(route, "Nothing to play.", "Could not play.", play);
             }
@@ -2239,13 +2249,32 @@ impl App {
                 }
                 let n = n - list[..n].iter().filter(|s| s.is_dir).count();
                 let list: Vec<Song> = list.iter().filter(|s| !s.is_dir).cloned().collect();
-                match self.cfg.settings.play_mode {
-                    m @ (2 | 3) => return self.play_songs(vec![list[n].clone()], src, m),
-                    m => {
-                        self.ctx = key;
-                        return self.start(list, src, n, m == 1 || self.shuffle.is_some());
-                    }
+                let m = self.cfg.settings.play_mode;
+                if let 2 | 3 = m {
+                    return self.play_songs(vec![list[n].clone()], src, m);
                 }
+                if !self
+                    .data::<Page<Song>>(&key)
+                    .is_some_and(|p| p.0.len() < p.1)
+                {
+                    self.ctx = key;
+                    return self.start(list, src, n, m == 1 || self.shuffle.is_some());
+                }
+                self.play_seq += 1;
+                let (seq, k) = (self.play_seq, key.clone());
+                let play = move |a: &mut App, v: Vec<Song>, src: String| {
+                    if a.play_seq != seq {
+                        return Task::none();
+                    }
+                    let id = &list[n].id;
+                    let at = v.get(n).filter(|s| &s.id == id).map(|_| n);
+                    let at = at.or_else(|| v.iter().position(|s| &s.id == id));
+                    let (v, at) = at.map_or_else(|| (list.clone(), n), |at| (v, at));
+                    a.ctx.clone_from(&k);
+                    let sh = m == 1 || a.shuffle.is_some();
+                    a.start(v, src, at, sh)
+                };
+                return self.ctx_songs(key, "Nothing to play.", "Could not play.", play);
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
             Message::Arrow(_) if self.modal.is_some() => {}
@@ -2599,7 +2628,7 @@ impl App {
         }
         let load = |s: Session| async move {
             let (kind, id) = route.split_once(':').unwrap_or((&route, ""));
-            let all = |sort| s.songs(sort, 0, PAGE * 5);
+            let all = |sort| s.songs(sort, 0, PAGE * 50);
             let sort = if id.is_empty() { "name" } else { id };
             Ok::<_, anyhow::Error>(match kind {
                 "album" => s.album(id).await.map(|(a, v)| (v, a.name))?,
