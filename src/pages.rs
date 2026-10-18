@@ -279,11 +279,7 @@ fn card<'a>(
     let b = button(column![art, lines].spacing(8)).padding(12);
     let b = b.style(style).width(cw).height(cw + 52.0);
     let b: El = b.on_press(Message::Nav(route.clone())).into();
-    let b = if round {
-        b
-    } else {
-        play_over(app, b, play.into(), &route)
-    };
+    let b = play_over(app, b, play.into(), &route);
     let menu = task(move |a| {
         a.hover = Some(tag.clone());
         a.update(Message::Menu(Box::new(k.clone())))
@@ -407,7 +403,9 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
                 .into(),
             _ => {
                 let album = ell(&s.album, c.1, 14.0, Normal);
-                container(link_btn(album, SUB, go("album", &s.album_id)))
+                let line = theme::width(&s.album, 14.0, Normal).min(c.1);
+                let album = link_btn(album, SUB, go("album", &s.album_id));
+                container(theme::underline(album, 0.0, line, 14.0))
                     .width(c.1)
                     .into()
             }
@@ -486,10 +484,26 @@ fn vlist<'a>(app: &'a App, songs: &'a [Song], key: &'a str, c: Cols, y0: f32) ->
     let items = (lo..hi).map(|k| match rows.as_ref().map_or(Ok(k), |r| r[k]) {
         Ok(n) => track(app, &songs[n], n, key, c),
         Err(d) => {
-            let disc = i(i::ALBUM, 16.0).color(SUB).width(16).center();
+            let tag = format!("{key}#d{d}");
+            let hot = app.hover.as_ref() == Some(&tag);
+            let first = songs
+                .iter()
+                .position(|s| s.disc == d)
+                .expect("a disc track");
+            let play = btn(
+                theme::filled(theme::fill::PLAY, 16.0).center(),
+                Message::PlayAt(key.into(), first),
+            );
+            let disc: El = match hot {
+                true => play.width(16).into(),
+                false => i(i::ALBUM, 16.0).color(SUB).width(16).center().into(),
+            };
             let r = row![disc, bold(format!("Disc {d}"), 16.0).color(SUB)].spacing(16);
-            let r = r.padding([0, 16]).height(app.row_h());
-            r.align_y(Center).into()
+            let r = r.padding([0, 16]).height(app.row_h()).align_y(Center);
+            let r = container(r)
+                .width(Fill)
+                .style(theme::wash(f32::from(u8::from(hot)) * 0.1));
+            hov(mouse_area(r), tag, None).into()
         }
     });
     let col = gaps(lo, hi, total, app.row_h(), items);

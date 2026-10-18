@@ -707,12 +707,14 @@ pub fn artists_line<'a>(artists: &'a [Artist], size: f32, w: f32) -> El<'a> {
             0 => (&a.name).into(),
             _ => format!(", {}", a.name).into(),
         };
-        let used = (n + 1 < artists.len()).then(|| theme::width(&name, size, Normal));
+        let full = theme::width(&name, size, Normal);
+        let x = [0.0, theme::width(", ", size, Normal)][usize::from(n > 0)];
         let t = theme::ell(name, left, size, Normal);
-        left -= used.unwrap_or(0.0);
+        let line = full.min(left) - x;
+        left -= [0.0, full][usize::from(n + 1 < artists.len())];
         r = r.push(match a.id.is_empty() {
             true => El::from(t.color(SUB)),
-            false => theme::link_btn(t, SUB, go("artist", &a.id)).into(),
+            false => theme::underline(theme::link_btn(t, SUB, go("artist", &a.id)), x, line, size),
         });
     }
     r.into()
@@ -1127,7 +1129,8 @@ fn player_bar(app: &App) -> El<'_> {
         let on = app.is_starred(&s.id, s.starred);
         let title = theme::ell(&s.title, tw, 14.0, Normal);
         let radio = !s.url.is_empty();
-        let title = btn(title, album_of(s));
+        let line = theme::width(&s.title, 14.0, Normal).min(tw);
+        let title = theme::underline(btn(title, album_of(s)), 0.0, line, 14.0);
         let label = ["Add to Liked Songs", "Remove from Liked Songs"][usize::from(on)];
         let like = Message::Star(vec![s.id.clone()], !on);
         let art = btn(cover(app, &s.cover, 56.0, false), Message::Panel(1));

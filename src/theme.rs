@@ -226,6 +226,17 @@ pub fn link_btn<'a, M: Clone + 'a>(c: impl Into<Element<'a, M>>, fg: Color, m: M
     button(c).padding(0).style(link(fg)).on_press(m)
 }
 
+pub fn underline<'a, M: 'a>(
+    base: impl Into<Element<'a, M>>,
+    x: f32,
+    w: f32,
+    size: f32,
+) -> Element<'a, M> {
+    let line = container(iced::widget::Space::new().width(w).height(1)).style(fill(TEXT, 0.0));
+    let pad = iced::Padding::new(0.0).top((size * 1.12).round()).left(x);
+    iced::widget::hover(base, container(line).padding(pad))
+}
+
 pub fn pill_btn<'a, M: Clone + 'a>(label: impl Into<Element<'a, M>>, m: M) -> Btn<'a, M> {
     let style = |t: &Theme, s| {
         let edge = if s == Status::Active { FIELD } else { TEXT };
