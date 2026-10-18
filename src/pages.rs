@@ -911,26 +911,6 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
     let play = play_btn(app, 56.0, &app.route);
     let compact = app.cfg.settings.compact;
-    let tables = ["album", "playlist", "liked", "songs"];
-    let view = tables
-        .contains(&app.route.split(':').next().unwrap_or(""))
-        .then(|| {
-            let label = match app.route.starts_with("playlist:") {
-                true => ORDER[usize::from(app.pl_sort & 15)],
-                false => ["List", "Compact"][usize::from(compact)],
-            };
-            let c = row![
-                txt(label, 14.0),
-                i([i::LIST, i::COMPACT][usize::from(compact)], 16.0)
-            ];
-            let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::View));
-            let m = Message::Menu(Box::new(MenuKind::View));
-            link_btn(
-                c.spacing(8).align_y(Center),
-                [SUB, TEXT][usize::from(open)],
-                m,
-            )
-        });
     let empty = app.route == "profile"
         || app
             .data::<(Playlist, Vec<Song>)>(&app.route)
@@ -938,6 +918,24 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         || app
             .data::<(Vec<Song>, usize)>(&app.route)
             .is_some_and(|x| x.1 == 0);
+    let tables = ["album", "playlist", "liked", "songs"];
+    let view = (!empty && tables.contains(&app.route.split(':').next().unwrap_or(""))).then(|| {
+        let label = match app.route.starts_with("playlist:") {
+            true => ORDER[usize::from(app.pl_sort & 15)],
+            false => ["List", "Compact"][usize::from(compact)],
+        };
+        let c = row![
+            txt(label, 14.0),
+            i([i::LIST, i::COMPACT][usize::from(compact)], 16.0)
+        ];
+        let open = matches!(app.menu.as_ref().map(|m| &m.kind), Some(MenuKind::View));
+        let m = Message::Menu(Box::new(MenuKind::View));
+        link_btn(
+            c.spacing(8).align_y(Center),
+            [SUB, TEXT][usize::from(open)],
+            m,
+        )
+    });
     let bar = Row::new().push((!empty).then_some(play));
     let bar = bar.push((!empty).then_some(shuffle));
     let bar = bar.extend(p.extra).push(view).spacing(PAD);
