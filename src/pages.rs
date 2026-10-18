@@ -2068,7 +2068,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     let zoom = pick!(zooms, zoom);
     let banners_label =
         "Show artist banners from TheAudioDB (this sends artist names to TheAudioDB)";
-    let frame_label = "Use the system title bar on Wayland desktops that do not draw one";
+    let frame_label = "Use the X11 system title bar on Wayland desktops that do not draw one";
     let frame_label = format!("{frame_label} (restart to apply)");
     let tray_label = "Keep Navify in the system tray when you close the window";
     let none = [" (no system tray found)", ""][usize::from(app.tray.is_some())];
@@ -2155,7 +2155,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         line("Lyrics text size", size),
         line("Lyrics alignment", align),
     ];
-    rows.extend(cfg!(target_os = "linux").then(|| on!(frame_label, system_frame)));
+    rows.extend(cfg!(target_os = "linux").then(|| on!(frame_label, x11_frame)));
     rows.extend([
         on!(tray_label, tray),
         on!("Start minimized", start_min),
