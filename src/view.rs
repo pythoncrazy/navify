@@ -780,7 +780,8 @@ fn top_bar(app: &App) -> El<'_> {
         true => theme::filled(theme::fill::HOME, 24.0).color(TEXT),
         false => i(i::HOME, 24.0),
     };
-    let style = theme::input([ELEVATED, CHIP], [BG, TEXT], [0.0, 2.0], 500.0);
+    let idle = [ELEVATED, CHIP][usize::from(app.hover.as_deref() == Some("search"))];
+    let style = theme::input([idle, CHIP], [BG, TEXT], [0.0, 2.0], 500.0);
     let hint = "What do you want to play?";
     let search = text_input(hint, &app.search_q);
     let search = search.id("search").on_input(Message::Search);
@@ -822,6 +823,7 @@ fn top_bar(app: &App) -> El<'_> {
         search,
         container(keys).padding(padding::left(x)).center_y(48),
     );
+    let search = hov(mouse_area(search), "search".into(), None);
     let fwd = app.hi + 1 < app.history.len();
     let settings = Message::Nav("settings".into());
     let menu = Message::Menu(Box::new(MenuKind::User));

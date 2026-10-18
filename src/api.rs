@@ -548,16 +548,7 @@ impl Session {
     }
 
     pub fn cover_file(&self, id: &str, size: u32) -> PathBuf {
-        let id = match id.find("https://") {
-            Some(i) => &id[i..],
-            None => {
-                let wide = id.strip_prefix('b').and_then(|r| r.split_once(':'));
-                let wide = wide.filter(|(n, _)| n.parse::<f32>().is_ok());
-                ["w:", "o:"].iter().fold(wide.map_or(id, |w| w.1), |id, p| {
-                    id.strip_prefix(p).unwrap_or(id)
-                })
-            }
-        };
+        let id = cover_id(id);
         let name = format!("{}-{size}", id.replace([':', '/', '\\', '#'], "_"));
         cache_dir("covers").join(&self.server.id).join(name)
     }
@@ -571,16 +562,7 @@ impl Session {
         }
         static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
         let _net = NET.acquire().await.expect("the cover semaphore is open");
-        let id = match id.find("https://") {
-            Some(i) => &id[i..],
-            None => {
-                let wide = id.strip_prefix('b').and_then(|r| r.split_once(':'));
-                let wide = wide.filter(|(n, _)| n.parse::<f32>().is_ok());
-                ["w:", "o:"].iter().fold(wide.map_or(id, |w| w.1), |id, p| {
-                    id.strip_prefix(p).unwrap_or(id)
-                })
-            }
-        };
+        let id = cover_id(id);
         let url = match id.starts_with("https://") {
             true => id.to_string(),
             false => {
@@ -871,4 +853,16 @@ pub fn prune(dir: &Path, cap: u64) {
             total -= size;
         }
     }
+}
+
+fn cover_id(id: &str) -> &str {
+    if let Some(i) = id.find("https://") {
+        return &id[i..];
+    }
+    let wide = id.strip_prefix('b').and_then(|r| r.split_once(':'));
+    let wide = wide.filter(|(n, _)| n.parse::<f32>().is_ok());
+    let id = wide.map_or(id, |w| w.1);
+    ["w:", "o:"]
+        .iter()
+        .fold(id, |id, p| id.strip_prefix(p).unwrap_or(id))
 }
