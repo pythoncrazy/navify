@@ -87,9 +87,8 @@ pub fn list_y(app: &App) -> f32 {
 
 pub fn add_songs(app: &App) -> impl Iterator<Item = &Song> {
     let q = app.pl_more.as_deref().unwrap_or("").trim();
-    let hits = app
-        .data::<Trio>(&format!("search:{q}"))
-        .filter(|_| !q.is_empty());
+    let hits = app.data::<Trio>(&format!("search:{q}"));
+    let hits = hits.filter(|_| !q.is_empty());
     let recent = q.is_empty().then_some(&app.recent[..]);
     let all = hits.map(|t| &t.2[..]).or(recent).unwrap_or(&[]);
     all.iter().take(20)
@@ -124,9 +123,8 @@ fn find_box<'a>(q: &str, hint: &'a str, id: &'static str, w: f32) -> El<'a> {
         })
     });
     let t = t.on_submit(Message::Noop).icon(theme::glass(16.0, 8.0));
-    let t = t
-        .font(theme::fw(Normal))
-        .padding(Padding::new(8.0).left(12).right(28));
+    let t = t.font(theme::fw(Normal));
+    let t = t.padding(Padding::new(8.0).left(12).right(28));
     let close = task(|a| {
         a.pl_find = None;
         a.covers_now()
@@ -270,9 +268,8 @@ fn card<'a>(
     let img = cw - 24.0;
     let art = cover(app, cid, img, round);
     let play = container(play_btn(app, 48.0, &route)).align_right(cw);
-    let play = play
-        .align_bottom(12.0 + img)
-        .padding(padding::right(20).bottom(8));
+    let play = play.align_bottom(12.0 + img);
+    let play = play.padding(padding::right(20).bottom(8));
     let tag = format!("card:{:p}", title.as_ptr());
     let title = ell(title, img, 16.0, Normal);
     let lines = column![title, ell(sub, img, 14.0, Normal).color(SUB)].spacing(4);
@@ -617,9 +614,8 @@ fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
     let filter = link_btn(filter.align_y(Center), fg(open), menu(MenuKind::Disc));
     let view = [i::LIST, i::GRID][usize::from(app.cfg.settings.disc_grid)];
     let order = ["Release date", "Name"][usize::from(app.disc_name)];
-    let order = row![txt(order, 14.0), i(view, 16.0)]
-        .spacing(8)
-        .align_y(Center);
+    let order = row![txt(order, 14.0), i(view, 16.0)].spacing(8);
+    let order = order.align_y(Center);
     let order = link_btn(
         order,
         fg(matches!(kind, Some(MenuKind::View))),
@@ -634,9 +630,8 @@ fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
 fn discography(app: &App) -> Option<El<'_>> {
     let (id, f, a, albums) = disc_args(app)?;
     let head = container(disc_tools(app, a, id, f));
-    let head = head
-        .padding(Padding::new(PAD).top(68).bottom(0))
-        .height(grid_y(app));
+    let head = head.padding(Padding::new(PAD).top(68).bottom(0));
+    let head = head.height(grid_y(app));
     let rows = disc_rows(app, albums, f);
     if app.cfg.settings.disc_grid {
         let (cols, cw) = app.grid();
@@ -703,9 +698,8 @@ fn release<'a>(app: &'a App, al: &'a Album, y: f32) -> El<'a> {
         let t = track(app, &s[k], k, &key, c);
         container(t).padding([0.0, PAD]).into()
     });
-    let head = head
-        .padding(Padding::from([0.0, PAD]).left(PAD + 32.0))
-        .height(136);
+    let head = head.padding(Padding::from([0.0, PAD]).left(PAD + 32.0));
+    let head = head.height(136);
     let head = column![head, Space::new().height(34)];
     let list = gaps(lo, hi, n, app.row_h(), rows);
     let head = head.push(table_head(app, c, 16.0)).push(list);
@@ -823,9 +817,8 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
     let recent = h[0].iter();
     let recent = recent.map(|a| (&a.cover, &a.name, MenuKind::Album(Box::new(a.clone()))));
     let small = |c| cover(app, c, th, false);
-    let rest = pins
-        .chain(recent)
-        .map(|(c, n, k)| tile(small(c), n, c, Some(k)));
+    let rest = pins.chain(recent);
+    let rest = rest.map(|(c, n, k)| tile(small(c), n, c, Some(k)));
     let liked = tile(liked_art(th), "Liked Songs", "", None);
     let mut tiles = std::iter::once(liked).chain(rest).take(8);
     let rows = std::iter::from_fn(|| {
@@ -900,9 +893,8 @@ fn page<'a>(app: &App, p: Page<'a>, body: El<'a>) -> El<'a> {
         let name = click(title(app.main_w() - 3.0 * PAD - px).into());
         let info = column![kind, name, p.meta].spacing(8);
         let hero = row![click(p.art), info].spacing(PAD).align_y(iced::Bottom);
-        let hero = container(hero)
-            .padding(Padding::new(PAD).top(72.0))
-            .width(Fill);
+        let hero = container(hero).padding(Padding::new(PAD).top(72.0));
+        let hero = hero.width(Fill);
         back(&bg, 0.0, hero.height(hero_h(app)))
     };
     let shuffle = bar_btn(i::SHUFFLE, Message::PlayCtx(app.route.clone(), 1));
@@ -1102,9 +1094,8 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
 fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
     if !empty {
         let m = (app.panel != 4).then_some(Message::Panel(4));
-        let open = button(bold("Find more", 14.0))
-            .padding(0)
-            .style(theme::link(TEXT));
+        let open = button(bold("Find more", 14.0)).padding(0);
+        let open = open.style(theme::link(TEXT));
         return container(open.on_press_maybe(m))
             .padding([16.0, PAD])
             .into();
@@ -1114,9 +1105,8 @@ fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
     let style = theme::input([ELEVATED; 2], [ELEVATED; 2], [0.0; 2], 4.0);
     let field = find_input(q, "plmore").width(360).size(14).style(style);
     let q = q.trim();
-    let hits = app
-        .data::<Trio>(&format!("search:{q}"))
-        .filter(|_| !q.is_empty());
+    let hits = app.data::<Trio>(&format!("search:{q}"));
+    let hits = hits.filter(|_| !q.is_empty());
     let w = (app.main_w() - 2.0 * PAD - 200.0) / 2.0;
     let rows = hits.into_iter().flat_map(|t| t.2.iter().take(10)).map(|s| {
         let art = cover(app, &s.cover, 40.0, false);
@@ -1140,9 +1130,8 @@ fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
 
 pub fn more_by<'a>(app: &'a App, a: &Album) -> Vec<&'a Album> {
     let key = format!("artist:{}", a.artist_id);
-    let all = app
-        .data::<(Artist, Vec<Album>)>(&key)
-        .map_or(&[][..], |x| &x.1[..]);
+    let all = app.data::<(Artist, Vec<Album>)>(&key);
+    let all = all.map_or(&[][..], |x| &x.1[..]);
     let mut v = by_date(all.iter().filter(|x| x.id != a.id));
     v.truncate(app.grid().0);
     v
@@ -1157,9 +1146,8 @@ fn detail(app: &App) -> Option<El<'_>> {
     let liked = app.route == "liked";
     let tools = pl.filter(|_| !empty).map(|(p, _)| {
         let pill = |c, label, on: bool, m| {
-            let r = row![i(c, 16.0), bold(label, 14.0)]
-                .spacing(8)
-                .align_y(Center);
+            let r = row![i(c, 16.0), bold(label, 14.0)].spacing(8);
+            let r = r.align_y(Center);
             let bg = [
                 [theme::tint(0.1), theme::tint(0.2), theme::tint(0.2)],
                 [TEXT; 3],
@@ -1218,9 +1206,8 @@ fn detail(app: &App) -> Option<El<'_>> {
                     String::new()
                 }
             };
-            let more = more_by(app, a)
-                .into_iter()
-                .map(|x| album_card(app, x, year(x)));
+            let more = more_by(app, a).into_iter();
+            let more = more.map(|x| album_card(app, x, year(x)));
             let all = Some(format!("discography:{}", a.artist_id));
             let more = shelf(format!("More by {}", a.artist), all, more);
             column![
@@ -1260,9 +1247,8 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     };
     if lyric_line(app) == usize::MAX - 1 {
         let t = bold("Show the current line", 14.0);
-        let b = button(t)
-            .padding([10, 20])
-            .on_press(act(|a| a.lyric = true));
+        let b = button(t).padding([10, 20]);
+        let b = b.on_press(act(|a| a.lyric = true));
         let b = b.style(theme::btn([TEXT; 3], [BG; 3], 500.0));
         let b = container(b).center_x(Fill).align_bottom(Fill);
         return Some(b.padding(24).into());
@@ -1275,13 +1261,11 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
         let al = rows.iter().find(|r| r.0 + r.1 > off + 120.0).map(|r| r.2)?;
         let key = format!("album:{}", al.id);
         let title = ell(&al.name, app.main_w() - 120.0, 24.0, Bold);
-        let head = row![play_btn(app, 48.0, &key), title]
-            .spacing(8)
-            .align_y(Center);
+        let head = row![play_btn(app, 48.0, &key), title].spacing(8);
+        let head = head.align_y(Center);
         let head = bar(head.into(), theme::dark(head_color(app, &al.cover), 0.2));
-        let tools = container(disc_tools(app, a, id, f))
-            .padding([0.0, PAD])
-            .center_y(56);
+        let tools = container(disc_tools(app, a, id, f)).padding([0.0, PAD]);
+        let tools = tools.center_y(56);
         let tools = tools.width(Fill).style(fill(theme::PANEL, 0.0));
         let grid = app.cfg.settings.disc_grid;
         let head = (!grid).then_some(head);
@@ -1316,9 +1300,8 @@ pub fn sticky<'a>(app: &'a App) -> Option<El<'a>> {
     let play = some.then(|| play_btn(app, 48.0, &app.route));
     let head = Row::new().push(play).push(title).spacing(8).align_y(Center);
     let head = bar(head.into(), theme::dark(color, 0.2));
-    let cols = cols
-        .filter(|_| off > list_y(app) - HEAD - 64.0)
-        .map(|c| table_head(app, c, 0.0));
+    let cols = cols.filter(|_| off > list_y(app) - HEAD - 64.0);
+    let cols = cols.map(|c| table_head(app, c, 0.0));
     let cols = cols.map(|c| container(c).style(fill(ELEVATED, 0.0)));
     Some(column![head].push(cols).into())
 }
@@ -1458,12 +1441,10 @@ fn artist(app: &App) -> Option<El<'_>> {
         });
         let plays = (a.play_count > 0)
             .then(|| bold(format!("{} plays", fmt_n(a.play_count as usize)), 16.0));
-        let bio = container(txt(plain(&info.biography), 16.0))
-            .max_height(63.0)
-            .clip(true);
-        let text = container(column![plays, bio].spacing(8))
-            .padding(40)
-            .max_width(672);
+        let bio = container(txt(plain(&info.biography), 16.0)).max_height(63.0);
+        let bio = bio.clip(true);
+        let text = container(column![plays, bio].spacing(8)).padding(40);
+        let text = text.max_width(672);
         let text = container(text).width(w).height(516).align_bottom(516);
         let base = container(Space::new()).width(w).height(516);
         let base = base.style(fill(theme::MENU, 8.0));
@@ -1574,9 +1555,8 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
         return Some(container(col).center_x(Fill).padding(80).into());
     }
     let tab = app.search_tab;
-    let chips = ["All", "Songs", "Albums", "Artists", "Playlists"]
-        .into_iter()
-        .enumerate();
+    let chips = ["All", "Songs", "Albums", "Artists", "Playlists"].into_iter();
+    let chips = chips.enumerate();
     let chips = chips.map(|(n, l)| {
         let m = task(move |a| {
             a.search_tab = n;
@@ -1735,9 +1715,8 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 let m = if h.0 == 2 { m } else { m.on_press(nav) };
                 hov(m, hk, None).into()
             });
-            let col = column![top, Column::with_children(rows)]
-                .spacing(16)
-                .width(rw);
+            let col = column![top, Column::with_children(rows)].spacing(16);
+            let col = col.width(rw);
             container(col)
                 .padding(Padding::new(PAD).top(0).left(x0))
                 .into()
@@ -1813,9 +1792,8 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
         return column![head, fade(theme::shade(c, 0.4), 232.0, body)].into();
     }
     let head = column![bold(title, 32.0)].push(chips).spacing(16);
-    let head = container(head)
-        .padding(Padding::new(PAD).top(72).bottom(0))
-        .height(grid_y(app));
+    let head = container(head).padding(Padding::new(PAD).top(72).bottom(0));
+    let head = head.height(grid_y(app));
     column![head, artists.or(albums)].into()
 }
 
@@ -1832,12 +1810,10 @@ fn folders<'a>(app: &'a App) -> El<'a> {
         let b = button(row).padding([8, 16]).width(Fill).height(rh);
         b.style(theme::track(0.0)).on_press(m).into()
     };
-    let artists = app
-        .data::<Vec<Artist>>(&app.route)
-        .map_or(&[][..], |v| &v[..]);
-    let radio = app
-        .data::<Vec<Song>>(&app.route)
-        .map(|v| ("Radio stations", &v[..]));
+    let artists = app.data::<Vec<Artist>>(&app.route);
+    let artists = artists.map_or(&[][..], |v| &v[..]);
+    let radio = app.data::<Vec<Song>>(&app.route);
+    let radio = radio.map(|v| ("Radio stations", &v[..]));
     let dir_data = app.data::<(String, Vec<Song>)>(&app.route);
     let dir_data = dir_data.map(|(n, v)| (n.as_str(), &v[..])).or(radio);
     let (name, songs) = dir_data.unwrap_or(("Folders", &[][..]));
@@ -1863,9 +1839,8 @@ fn folders<'a>(app: &'a App) -> El<'a> {
     });
     let list = gaps(lo, hi, n, rh, items);
     let title = ell(name, app.main_w() - 2.0 * PAD, 32.0, Bold);
-    let title = container(title)
-        .padding(Padding::new(PAD).top(72))
-        .height(DIR_Y);
+    let title = container(title).padding(Padding::new(PAD).top(72));
+    let title = title.height(DIR_Y);
     column![title, container(list).padding(Padding::new(PAD).top(0))].into()
 }
 
@@ -2013,9 +1988,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
     fn line<'a>(label: impl Into<String>, c: impl Into<El<'a>>) -> (bool, String, El<'a>) {
         let label: String = label.into();
         let t = txt(label.clone(), 14.0).color(SUB).width(Fill).height(24);
-        let r = row![t.align_y(Center), c.into()]
-            .align_y(Center)
-            .padding([4, 0]);
+        let r = row![t.align_y(Center), c.into()].align_y(Center);
+        let r = r.padding([4, 0]);
         (false, label, r.into())
     }
     macro_rules! num {
@@ -2241,9 +2215,8 @@ fn settings<'a>(app: &'a App) -> El<'a> {
 pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let w = app.right_w() - 32.0;
     let Some(s) = app.current_song() else {
-        let go = button(bold("Search", 14.0))
-            .padding([7, 16])
-            .style(theme::accent);
+        let go = button(bold("Search", 14.0)).padding([7, 16]);
+        let go = go.style(theme::accent);
         let col = column![
             bold("Find something to play", 24.0),
             go.on_press(Message::Nav("search".into()))
@@ -2290,9 +2263,8 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
             });
             stack![img, shade]
         });
-        let bio = app
-            .data::<Info>(&format!("info:{id}"))
-            .map(|i| plain(&i.biography));
+        let bio = app.data::<Info>(&format!("info:{id}"));
+        let bio = bio.map(|i| plain(&i.biography));
         let bio = bio.filter(|b| !b.is_empty()).map(|b| {
             container(txt(b, 14.0).color(SUB))
                 .max_height(58.0)
@@ -2313,9 +2285,8 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
         let body = column![bold("Lyrics preview", 16.0)].extend(lines.map(Into::into));
         let body = container(body.spacing(8).padding(16).width(Fill));
         let bg = head_color(app, &s.cover);
-        let b = button(body)
-            .padding(0)
-            .style(theme::btn([bg; 3], [TEXT; 3], 8.0));
+        let b = button(body).padding(0);
+        let b = b.style(theme::btn([bg; 3], [TEXT; 3], 8.0));
         b.on_press(Message::Nav("lyrics".into()))
     });
     let art = cover(app, &s.cover, w, false);
@@ -2336,9 +2307,8 @@ pub fn recent(app: &App) -> impl Iterator<Item = &Song> {
 fn panel_head<'a>(title: impl Into<El<'a>>, n: u8) -> El<'a> {
     let title = container(title).width(Fill);
     let x = theme::sq(i(i::X, 20.0).center(), 32.0).style(theme::link(SUB));
-    let r = row![title, x.on_press(Message::Panel(n))]
-        .spacing(8)
-        .align_y(Center);
+    let r = row![title, x.on_press(Message::Panel(n))].spacing(8);
+    let r = r.align_y(Center);
     r.padding(Padding::new(8.0).top(16).left(16).right(16))
         .into()
 }
@@ -2361,9 +2331,8 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         }
         false => art,
     };
-    let x = n
-        .filter(|_| !cur)
-        .map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
+    let x = n.filter(|_| !cur);
+    let x = x.map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
     let fg = if cur { ACCENT } else { TEXT };
     let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);
     let menu = match s.url.is_empty() {
@@ -2377,12 +2346,10 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         on.then(|| l.style(fill(ACCENT, 1.0)))
     };
     let (up, down) = to.map_or((false, false), |(f, t)| (t < f, t > f));
-    let pad = Padding::new(8.0)
-        .top(8.0 - 2.0 * f32::from(up))
-        .bottom(8.0 - 2.0 * f32::from(down));
-    let r = container(r)
-        .padding(pad)
-        .style(theme::wash([0.0, 0.1][usize::from(hot)]));
+    let pad = Padding::new(8.0).top(8.0 - 2.0 * f32::from(up));
+    let pad = pad.bottom(8.0 - 2.0 * f32::from(down));
+    let r = container(r).padding(pad);
+    let r = r.style(theme::wash([0.0, 0.1][usize::from(hot)]));
     let r = column![line(up), r, line(down)];
     let r = hov(mouse_area(r).on_double_click(dbl), tag.clone(), None);
     let r = match movable {
@@ -2432,9 +2399,8 @@ pub fn add_panel(app: &App) -> El<'_> {
     };
     let q = app.pl_more.as_deref().unwrap_or("");
     let style = theme::input([ELEVATED; 2], [ELEVATED; 2], [0.0; 2], 500.0);
-    let field = find_input(q, "pladd")
-        .size(16)
-        .padding(Padding::new(12.0).left(16));
+    let field = find_input(q, "pladd").size(16);
+    let field = field.padding(Padding::new(12.0).left(16));
     let field = container(field.style(style)).padding([8, 16]);
     let label =
         (q.trim().is_empty() && !app.recent.is_empty()).then(|| sub("Recently played", 14.0));
@@ -2449,9 +2415,8 @@ pub fn add_panel(app: &App) -> El<'_> {
         let r = row![media(art, &s.title, &s.artist, w, TEXT), add].spacing(12);
         let tag = format!("add:{}", s.id);
         let a = f32::from(u8::from(app.hover.as_ref() == Some(&tag))) * 0.1;
-        let r = container(r.align_y(Center))
-            .padding(8)
-            .style(theme::wash(a));
+        let r = container(r.align_y(Center)).padding(8);
+        let r = r.style(theme::wash(a));
         container(hov(mouse_area(r), tag, None))
             .padding([0, 8])
             .into()
@@ -2468,9 +2433,8 @@ pub fn queue_panel(app: &App) -> El<'_> {
         let edge = edge.style(fill([CLEAR, ACCENT][usize::from(on)], 1.0));
         let b = column![bold(t, 14.0).wrapping(text::Wrapping::None), edge];
         let b = b.spacing(6).padding(padding::top(8)).width(Shrink);
-        let b = button(b)
-            .padding(0)
-            .style(theme::link([SUB, TEXT][usize::from(on)]));
+        let b = button(b).padding(0);
+        let b = b.style(theme::link([SUB, TEXT][usize::from(on)]));
         b.on_press(task(move |a| {
             a.recent_tab = t != "Queue";
             a.history()
@@ -2511,9 +2475,8 @@ pub fn queue_panel(app: &App) -> El<'_> {
         true => "Next in queue".into(),
         false => format!("Next from: {}", app.source),
     };
-    let now = app
-        .current_song()
-        .map(|s| queue_row(app, s, Some(app.index), w));
+    let now = app.current_song();
+    let now = now.map(|s| queue_row(app, s, Some(app.index), w));
     let now = now.map(|r| column![title("Now playing".into()), r]);
     let clear = link_btn(bold("Clear queue", 14.0), SUB, task(App::q_clear));
     let from = row![ell(from, w - 116.0, 16.0, Bold).width(Fill), clear].align_y(Center);
@@ -2607,9 +2570,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let msg = Message::PlNew(String::new(), Vec::new());
             let hover = [theme::CLEAR, theme::tint(0.1), theme::tint(0.1)];
             let b = button(r).padding(8).width(Fill);
-            let b = b
-                .style(theme::btn(hover, [TEXT; 3], 6.0))
-                .on_press(msg.clone());
+            let b = b.style(theme::btn(hover, [TEXT; 3], 6.0));
+            let b = b.on_press(msg.clone());
             return boxed(focusable(b, Some(msg), 6.0, Some("layer")), 367.0, 72.0, 4);
         }
         MenuKind::View if app.route.starts_with("discography:") => {
@@ -2807,9 +2769,9 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
                 let radio = Message::Radio(s.id.clone());
                 v.extend([None, it(i::RADIO, "Go to song radio", radio)]);
                 let links = [("artist", &s.artist_id), ("album", &s.album_id)];
-                let links = links
-                    .into_iter()
-                    .filter(|(k, id)| !id.is_empty() && app.route != format!("{k}:{id}"));
+                let links = links.into_iter();
+                let links =
+                    links.filter(|(k, id)| !id.is_empty() && app.route != format!("{k}:{id}"));
                 v.extend(links.map(|(k, id)| {
                     let c = if k == "artist" { i::USER } else { i::ALBUM };
                     it(c, &format!("Go to {k}"), go(k, id))

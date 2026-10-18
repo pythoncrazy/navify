@@ -70,9 +70,8 @@ struct Hold(std::process::Child);
 #[cfg(target_os = "macos")]
 fn hold() -> Result<Hold, String> {
     let pid = std::process::id().to_string();
-    let c = std::process::Command::new("caffeinate")
-        .args(["-i", "-w", &pid])
-        .spawn();
+    let c = std::process::Command::new("caffeinate").args(["-i", "-w", &pid]);
+    let c = c.spawn();
     c.map(Hold).map_err(|e| e.to_string())
 }
 
