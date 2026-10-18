@@ -124,6 +124,8 @@ pub struct Song {
     #[serde(rename = "discNumber")]
     pub disc: u32,
     pub duration: f32,
+    #[serde(alias = "sampleRate")]
+    pub sampling_rate: u32,
     pub play_count: u32,
     #[serde(alias = "rating")]
     pub user_rating: u8,
