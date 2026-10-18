@@ -40,7 +40,8 @@
 
 ## Keyboard shortcuts
 
-On macOS, use Cmd in place of Ctrl.
+On macOS, use Cmd in place of Ctrl. You can change the shortcuts in Settings.
+Ctrl+/ shows all of them.
 
 | Keys | Action |
 | --- | --- |
@@ -48,7 +49,11 @@ On macOS, use Cmd in place of Ctrl.
 | Ctrl+Left, Ctrl+Right | Previous or next song |
 | Shift+Left, Shift+Right | Go back or forward 5 seconds |
 | Ctrl+Up, Ctrl+Down | Volume up or down |
-| Ctrl+K or Ctrl+L | Search |
+| Ctrl+K | Search |
+| Ctrl+F | Find in the playlist or in Settings |
+| Ctrl+Alt+F | Find in Your Library |
+| Ctrl+A | Select all songs |
+| Ctrl+N | Make a playlist |
 | Ctrl+S | Shuffle on or off |
 | Ctrl+R | Repeat off, all, or one |
 | Alt+Left, Alt+Right | Go back or forward a page |
@@ -59,8 +64,10 @@ On macOS, use Cmd in place of Ctrl.
 | Alt+Shift+L | Collapse or expand the library |
 | Alt+Shift+B | Like the current song |
 | Ctrl+, | Settings |
+| Ctrl+/ | Keyboard shortcuts |
 | Ctrl+W | Close the window (Navify stays in the tray when the tray is on) |
 | Ctrl+Q | Quit |
+| Alt+Shift+F6 | Log out |
 
 ## Install
 
