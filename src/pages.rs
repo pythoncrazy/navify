@@ -2345,7 +2345,7 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
         }
         false => art,
     };
-    let x = n.filter(|_| !cur);
+    let x = n.filter(|_| hot && !cur);
     let x = x.map(|n| icon_btn(i::X, 14.0, Message::QDel(n)));
     let fg = if cur { ACCENT } else { TEXT };
     let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);
