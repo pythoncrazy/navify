@@ -369,7 +369,12 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let hk = format!("{key}#{n}");
     let hot = app.hover.as_deref() == Some(hk.as_str());
     let sel = app.sel.as_ref().is_some_and(|x| x.0 == key) && app.picked.contains(&n);
-    let cur = app.current_song().is_some_and(|x| x.id == s.id);
+    let copy = |v: &[Song], i: usize| v[..i].iter().filter(|x| x.id == s.id).count();
+    let cur = app.current_song().is_some_and(|x| x.id == s.id)
+        && (app.ctx != key
+            || app
+                .songs_of(key)
+                .is_none_or(|(v, _)| copy(v, n) == copy(&app.queue, app.real_at(app.index))));
     let starred = app.is_starred(&s.id, s.starred);
     let compact = app.row_h() < 56.0;
     let art = !key.starts_with("album:") && !compact;
