@@ -411,9 +411,8 @@ impl App {
         let mut app = Self::new();
         app.hidden = app.cfg.settings.start_min;
         let env = |k| std::env::var(k).ok();
-        let creds = env("NAVIFY_URL")
-            .zip(env("NAVIFY_USER"))
-            .zip(env("NAVIFY_PASS"));
+        let creds = env("NAVIFY_URL").zip(env("NAVIFY_USER"));
+        let creds = creds.zip(env("NAVIFY_PASS"));
         let open = Task::batch(app.shot.is_none().then(|| app.open()));
         let start = if app.session.is_none()
             && !app.shot.as_deref().is_some_and(|s| s.starts_with("login"))
@@ -712,9 +711,8 @@ impl App {
     ) -> Task<Message> {
         self.menu = None;
         let done = format!("{verb} {}.", self.playlist(&pid).map_or("", |p| &p.name));
-        let old = self
-            .playlist(&pid)
-            .map_or(String::new(), |p| p.cover.clone());
+        let old = self.playlist(&pid);
+        let old = old.map_or(String::new(), |p| p.cover.clone());
         let fresh = self.pl_fresh(pid.clone(), old, 3);
         let undo = reload(&pid);
         let f =
@@ -1108,9 +1106,8 @@ impl App {
         };
         let st = &self.cfg.settings;
         let pct = (song.duration * st.scrobble_pct / 100.0).min(240.0);
-        let at = [pct, st.scrobble_secs][usize::from(st.scrobble_by_time)]
-            .min(song.duration - st.crossfade_secs - 1.0)
-            .max(0.0);
+        let at = [pct, st.scrobble_secs][usize::from(st.scrobble_by_time)];
+        let at = at.min(song.duration - st.crossfade_secs - 1.0).max(0.0);
         let left = at - self.heard;
         let (id, base) = (song.id.clone(), song.play_count);
         if left <= 0.0 {
@@ -1512,9 +1509,8 @@ impl App {
             if moved && self.sel.as_ref().is_some_and(|s| s.0 == self.route) && *r == self.route {
                 (self.sel, self.picked) = (None, BTreeSet::new());
             }
-            let rows = self
-                .pl_view_of()
-                .filter(|_| self.route.starts_with("playlist:"));
+            let rows = self.pl_view_of();
+            let rows = rows.filter(|_| self.route.starts_with("playlist:"));
             let cov = (diff || *r == self.route) && self.route.starts_with("playlist:");
             self.pl_view = (self.route.clone(), stamp, rows);
             if cov {
@@ -1540,9 +1536,8 @@ impl App {
         if self.media.is_none() || same && self.os.2 {
             return t;
         }
-        let file = song
-            .zip(s)
-            .map(|(s, x)| x.cover_file(&s.cover, self.bucket(56.0)));
+        let file = song.zip(s);
+        let file = file.map(|(s, x)| x.cover_file(&s.cover, self.bucket(56.0)));
         let art = file.filter(|f| f.exists());
         if same && art.is_none() {
             return t;
@@ -1575,9 +1570,8 @@ impl App {
         let replaces = match &m {
             Message::Play(..) => true,
             Message::PlayAt(k, n) => {
-                let ok = self
-                    .songs_of(k)
-                    .is_none_or(|(l, _)| l.get(*n).is_some_and(|s| !s.is_dir));
+                let ok = self.songs_of(k);
+                let ok = ok.is_none_or(|(l, _)| l.get(*n).is_some_and(|s| !s.is_dir));
                 ok && st.play_mode < 2 && *k != self.ctx
             }
             Message::PlayCtx(k, 0) => st.play_mode < 2 && *k != self.ctx,
@@ -1632,9 +1626,8 @@ impl App {
                     a.music_brainz_id = m;
                 }
                 let banner = key.starts_with("artist:") && self.cfg.settings.banners;
-                let banner = banner
-                    .then(|| v.downcast_ref::<(Artist, Vec<Album>)>())
-                    .flatten();
+                let banner = banner.then(|| v.downcast_ref::<(Artist, Vec<Album>)>());
+                let banner = banner.flatten();
                 let banner = banner.map(|(a, _)| a.banner_key());
                 self.cache.insert(key.clone(), (Instant::now(), v));
                 let banner = Task::batch(banner.map(|k| self.request(&k, 0)));
@@ -2091,9 +2084,8 @@ impl App {
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
-                let mode = Some(mode)
-                    .filter(|&m| m > 0)
-                    .unwrap_or(self.cfg.settings.play_mode);
+                let mode = Some(mode).filter(|&m| m > 0);
+                let mode = mode.unwrap_or(self.cfg.settings.play_mode);
                 let key = route.clone();
                 let play = move |a: &mut App, v, src| {
                     if mode < 2 {
@@ -2518,9 +2510,8 @@ impl App {
         fail: &'static str,
         then: impl Fn(&mut App, Vec<Song>, String) -> Task<Message> + Clone + Send + Sync + 'static,
     ) -> Task<Message> {
-        let part = self
-            .data::<Page<Song>>(&route)
-            .is_some_and(|p| p.0.len() < p.1);
+        let part = self.data::<Page<Song>>(&route);
+        let part = part.is_some_and(|p| p.0.len() < p.1);
         if let Some((v, src)) = self
             .songs_of(&route)
             .filter(|(v, _)| !v.is_empty() && !part)
@@ -2598,9 +2589,8 @@ impl App {
             let empty = s.is_empty() && p.song_count == 0;
             let s = self.songs_of(key).map_or(&s[..], |x| x.0);
             let q = self.pl_more.as_deref().unwrap_or("").trim();
-            let hits = self
-                .data::<Trio>(&format!("search:{q}"))
-                .filter(|_| empty && !q.is_empty());
+            let hits = self.data::<Trio>(&format!("search:{q}"));
+            let hits = hits.filter(|_| empty && !q.is_empty());
             let hits = hits.iter().flat_map(|t| t.2.iter().take(10));
             small.extend(hits.map(|s| &s.cover));
             head.push(&p.cover);
@@ -2673,9 +2663,8 @@ impl App {
             .filter(|_| key == "search")
         {
             let gs = &gs[span(gs.len(), th + 24.0, gcols, 104.0)];
-            let art = gs
-                .iter()
-                .filter_map(|g| crate::pages::genre_cover(self, &g.name));
+            let art = gs.iter();
+            let art = art.filter_map(|g| crate::pages::genre_cover(self, &g.name));
             wide[2].extend(art);
         } else if let Some(h) = self.data::<Home>(key) {
             let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
@@ -2685,9 +2674,8 @@ impl App {
             let (per, _, th, gap) = crate::pages::home_tiles(self);
             let tiles = (1 + pls.len().min(3) + h[0].len()).min(8);
             let y0 = PAD + tiles.div_ceil(per) as f32 * (th + gap) - gap + 40.0;
-            let shelves = h
-                .iter()
-                .map(|l| l.iter().take(cols).map(|a| &a.cover).collect());
+            let shelves = h.iter();
+            let shelves = shelves.map(|l| l.iter().take(cols).map(|a| &a.cover).collect());
             let shelves = shelves.chain([pls.iter().take(cols).map(|p| &p.cover).collect()]);
             let shelves = shelves.filter(|l: &Vec<_>| !l.is_empty()).enumerate();
             for (n, l) in shelves {
@@ -2855,9 +2843,8 @@ fn keys(key: &Key, m: Modifiers, status: iced::event::Status) -> Option<Message>
 pub fn key_label(c: &str) -> String {
     let cmd = ["Ctrl+", "Cmd+"][usize::from(cfg!(target_os = "macos"))];
     let c = c.replace("C+", cmd).replace("ArrowLeft", "\u{2190}");
-    let c = c
-        .replace("ArrowUp", "\u{2191}")
-        .replace("ArrowRight", "\u{2192}");
+    let c = c.replace("ArrowUp", "\u{2191}");
+    let c = c.replace("ArrowRight", "\u{2192}");
     c.replace("ArrowDown", "\u{2193}")
 }
 
@@ -3028,9 +3015,8 @@ fn decode(raw: bytes::Bytes, k: &str, size: u32, color: Option<Color>) -> Result
         ];
         while boxes.len() < 16 {
             let vol = |b: &Vec<_>| (0..3).map(|i| u32::from(span(b, i)) + 1).product::<u32>();
-            let k = (0..boxes.len())
-                .max_by_key(|&k| vol(&boxes[k]))
-                .expect("a box");
+            let k = (0..boxes.len()).max_by_key(|&k| vol(&boxes[k]));
+            let k = k.expect("a box");
             let mut b = boxes.swap_remove(k);
             if b.len() < 2 {
                 boxes.push(b);

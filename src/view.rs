@@ -602,9 +602,8 @@ mod wrap {
                     e,
                     Event::Mouse(CursorMoved { .. } | iced::mouse::Event::ButtonPressed(_))
                 );
-            let pre = drag
-                .then(|| scan(w, c0, Some((0.0, 0.0)), None).0.map(|x| x.2))
-                .flatten();
+            let pre = drag.then(|| scan(w, c0, Some((0.0, 0.0)), None).0.map(|x| x.2));
+            let pre = pre.flatten();
             pass(w, c0, e, c, sh, false);
             if pre.is_some_and(|o| {
                 scan(w, c0, Some((0.0, 0.0)), None)
@@ -769,9 +768,8 @@ pub fn tip<'a>(
     at: tooltip::Position,
 ) -> El<'a> {
     let label = txt(label, 14.0).line_height(text::LineHeight::Absolute(20.0.into()));
-    let body = container(label)
-        .padding([4, 8])
-        .style(fill(theme::MENU, 4.0));
+    let body = container(label).padding([4, 8]);
+    let body = body.style(fill(theme::MENU, 4.0));
     let delay = std::time::Duration::from_millis(200);
     tooltip(c, body, at).gap(8).padding(0).delay(delay).into()
 }
@@ -822,9 +820,8 @@ fn top_bar(app: &App) -> El<'_> {
     let tail = row![x, bar, all].spacing(12).align_y(Center);
     let tail = container(tail).padding(padding::right(16));
     let tail = tail.align_right(474).center_y(48);
-    let search = stack![mouse_area(search).on_release(browse)]
-        .push(tail)
-        .clip(true);
+    let search = stack![mouse_area(search).on_release(browse)].push(tail);
+    let search = search.clip(true);
     let keys = (app.search_q.is_empty() && !app.binding("search").is_empty())
         .then(|| caps(&crate::app::key_label(app.binding("search")), 14.0, SUB));
     let x = 66.0 + theme::width(hint, 16.0, Normal);
@@ -842,9 +839,8 @@ fn top_bar(app: &App) -> El<'_> {
     let back = nav(i::LEFT, app.hi > 0, "Go back", Message::Back);
     let right = container(right.spacing(8).align_y(Center)).align_right(Fill);
     let left = row![back, nav(i::RIGHT, fwd, "Go forward", Message::Fwd)];
-    let home = button(container(home.center()).center(48))
-        .padding(0)
-        .style(theme::round(ELEVATED));
+    let home = button(container(home.center()).center(48)).padding(0);
+    let home = home.style(theme::round(ELEVATED));
     let home = tip(home.on_press(Message::Nav("home".into())), "Home", Bottom);
     let bar = row![left.spacing(8).width(Fill), home, search, right];
     let bar = bar.spacing(8).align_y(Center);
@@ -971,9 +967,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                 row![art, lines, live].spacing(12).align_y(Center).into()
             }
         };
-        let b = button(body)
-            .padding([8, 8, 4, 12][view as usize])
-            .width(Fill);
+        let b = button(body).padding([8, 8, 4, 12][view as usize]);
+        let b = b.width(Fill);
         let [a, h] = match (same(&app.route), app.menu_on(&route)) {
             (true, _) => [0.1, 0.22],
             (_, true) => [0.1, 0.1],
@@ -1001,9 +996,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         ];
         let plus = container(plus.spacing(8).align_y(Center)).center_y(36);
         let plus = button(plus).padding([0, 16]);
-        let plus = plus
-            .style(theme::btn([ELEVATED, CHIP, CHIP], [TEXT; 3], 500.0))
-            .on_press(Message::Menu(Box::new(MenuKind::Create)));
+        let plus = plus.style(theme::btn([ELEVATED, CHIP, CHIP], [TEXT; 3], 500.0));
+        let plus = plus.on_press(Message::Menu(Box::new(MenuKind::Create)));
         let plus = tip(plus, "Create a playlist", Bottom);
         let title = tip(title, "Collapse Your Library", Bottom);
         let r = row![title, Space::new().width(Fill), plus];
@@ -1076,9 +1070,8 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         None => tip(x, "Search in Your Library", Bottom),
         Some(v) => {
             let style = theme::input([CHIP, CHIP], [CHIP, CHIP], [0.0, 0.0], 4.0);
-            let t = text_input("Search in Your Library", v)
-                .id("libfind")
-                .size(14);
+            let t = text_input("Search in Your Library", v).id("libfind");
+            let t = t.size(14);
             let t = t.on_input(|v| {
                 task(move |a| {
                     a.lib_find = Some(v.clone());
@@ -1089,12 +1082,10 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
             let t = t.on_submit(Message::Noop).style(style);
             let t = t.font(theme::fw(Normal));
             let t = t.line_height(text::LineHeight::Absolute(18.0.into()));
-            let t = t
-                .padding(iced::Padding::new(7.0).left(32).right(28))
-                .width(Fill);
-            let close = container(icon_btn(i::X, 14.0, find))
-                .align_right(Fill)
-                .center_y(Fill);
+            let t = t.padding(iced::Padding::new(7.0).left(32).right(28));
+            let t = t.width(Fill);
+            let close = container(icon_btn(i::X, 14.0, find)).align_right(Fill);
+            let close = close.center_y(Fill);
             container(stack![t, x, close]).max_width(188).into()
         }
     };
@@ -1266,9 +1257,8 @@ fn player_bar(app: &App) -> El<'_> {
         },
     ];
     let right = container(right.align_y(Center)).align_right(FillPortion(3));
-    let left = container(left)
-        .padding(padding::left(8))
-        .width(FillPortion(3));
+    let left = container(left).padding(padding::left(8));
+    let left = left.width(FillPortion(3));
     let bar = row![left, container(center).center_x(FillPortion(4)), right];
     bar.align_y(Center).padding([0, 8]).height(72).into()
 }
@@ -1318,9 +1308,8 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let top = container(top).padding(iced::Padding::new(24.0).top(23).bottom(18));
         let list = container(list.style(theme::scroll)).padding(iced::Padding::new(24.0).top(22));
         let x = shut(theme::sq(i(i::X, 32.0).center(), 32.0).style(theme::link(SUB)));
-        let x = container(x)
-            .align_right(Fill)
-            .padding(iced::Padding::ZERO.top(16).right(17));
+        let x = container(x).align_right(Fill);
+        let x = x.padding(iced::Padding::ZERO.top(16).right(17));
         let body = stack![column![top, pages::rule(), list], x];
         let h = (app.view_size().1 - 218.0).max(300.0);
         let body = container(body).width(500).height(h);
@@ -1428,12 +1417,10 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
             Some(e) => Some(sub(e.clone(), 14.0)),
             None => v.is_none().then(|| sub("Loading the song details.", 14.0)),
         };
-        let list = iced::widget::Column::with_children(groups.collect::<Vec<El>>())
-            .push(note)
-            .spacing(32);
-        let list = scrollable(pane(list.padding([24, 24]).width(Fill)))
-            .height(Fill)
-            .style(theme::scroll);
+        let list = iced::widget::Column::with_children(groups.collect::<Vec<El>>()).push(note);
+        let list = list.spacing(32);
+        let list = scrollable(pane(list.padding([24, 24]).width(Fill))).height(Fill);
+        let list = list.style(theme::scroll);
         let title = v.and_then(|v| v["title"].as_str()).unwrap_or_default();
         let title = title.to_string();
         let head = row![bold("Song details", 24.0).width(Fill), close].align_y(Center);
