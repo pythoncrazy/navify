@@ -290,11 +290,8 @@ mod wrap {
                 }
             }
             let w = self.0.as_widget();
-            let c = if self.3 == 2 && t.state.downcast_ref::<Ring>().4 {
-                Cursor::Unavailable
-            } else {
-                c
-            };
+            let busy = self.3 == 2 && t.state.downcast_ref::<Ring>().4;
+            let c = [c, Cursor::Unavailable][usize::from(busy)];
             match l.bounds().intersection(v).filter(|_| self.3 == 2) {
                 Some(mut b) => {
                     b.height -= (v.y * 0.618).fract() * 0.01;
@@ -436,11 +433,7 @@ mod wrap {
                     _ => {}
                 }
             }
-            let c = if self.3 == 2 && ring.4 {
-                Cursor::Unavailable
-            } else {
-                c
-            };
+            let c = [c, Cursor::Unavailable][usize::from(self.3 == 2 && ring.4)];
             let root = self.3 <= 1 && self.1.is_none() && self.2.is_none() && self.5.0.is_empty();
             let mut pass = |w: &mut dyn Widget<Message, T, R>,
                             c0: &mut Tree,
@@ -581,10 +574,8 @@ mod wrap {
                     Some(due) => sh.request_redraw_at(due),
                     None => {
                         let dt = ring.2.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
-                        let step = match ring.1.abs() < 3.0 {
-                            true => ring.1,
-                            false => ring.1 * (1.0 - (-dt / 0.04).exp()),
-                        };
+                        let glide = ring.1 * (1.0 - (-dt / 0.04).exp());
+                        let step = [glide, ring.1][usize::from(ring.1.abs() < 3.0)];
                         (ring.1, ring.2) = (ring.1 - step, Some(*now));
                         let delta = ScrollDelta::Pixels { x: 0.0, y: step };
                         let wheel = Event::Mouse(WheelScrolled { delta });
@@ -717,10 +708,10 @@ pub fn artists_line<'a>(artists: &'a [Artist], size: f32, w: f32) -> El<'a> {
             _ => format!(", {}", a.name).into(),
         };
         let used = (n + 1 < artists.len()).then(|| theme::width(&name, size, Normal));
-        let t = theme::ell(name, left, size, Normal).color(SUB);
+        let t = theme::ell(name, left, size, Normal);
         left -= used.unwrap_or(0.0);
         r = r.push(match a.id.is_empty() {
-            true => El::from(t),
+            true => El::from(t.color(SUB)),
             false => theme::link_btn(t, SUB, go("artist", &a.id)).into(),
         });
     }
@@ -1556,24 +1547,12 @@ pub fn view(app: &App) -> El<'_> {
     let menu = app.menu.as_ref().map(|m| {
         let (ww, wh) = app.view_size();
         let (el, w, h) = pages::menu(app, m, 0);
-        let x = if m.x + w + 8.0 > ww {
-            m.x + m.dx - w
-        } else {
-            m.x
-        };
-        let y = if m.y + h + 8.0 > wh {
-            m.y - 2.0 * m.dy - h
-        } else {
-            m.y
-        };
+        let x = [m.x, m.x + m.dx - w][usize::from(m.x + w + 8.0 > ww)];
+        let y = [m.y, m.y - 2.0 * m.dy - h][usize::from(m.y + h + 8.0 > wh)];
         let (x, y) = (x.min(ww - w - 8.0).max(8.0), y.min(wh - h - 8.0).max(8.0));
         let child = (m.sub > 0).then(|| {
             let (el, sw, sh) = pages::menu(app, m, m.sub);
-            let sx = if x + w + sw + 4.0 > ww {
-                x - sw + 4.0
-            } else {
-                x + w - 4.0
-            };
+            let sx = [x + w - 4.0, x - sw + 4.0][usize::from(x + w + sw + 4.0 > ww)];
             let sy = y + ((m.sub_y - y - 4.0) / 40.0).floor() * 40.0;
             let sy = sy.min(wh - sh - 8.0).max(8.0);
             container(shield(el)).padding(padding::top(sy).left(sx.max(8.0)))

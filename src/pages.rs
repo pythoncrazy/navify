@@ -993,10 +993,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         let c = cols(app, true, false, songs.len().max(a.song_count as usize));
         let w = c.0 + c.1;
         let fr = (app.main_w() - 2.0 * PAD - 80.0 - c.3) / 7.0;
-        let c = match c.1 > 0.0 {
-            true => (4.0 * fr, w - 4.0 * fr, c.2, c.3),
-            false => c,
-        };
+        let c = [c, (4.0 * fr, w - 4.0 * fr, c.2, c.3)][usize::from(c.1 > 0.0)];
         return Some((p, songs, c));
     }
     if let Some((p, songs)) = app.data::<(Playlist, Vec<Song>)>(key) {
@@ -1800,11 +1797,8 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
 fn folders<'a>(app: &'a App) -> El<'a> {
     let (w, rh) = (app.main_w() - 2.0 * PAD - 80.0, app.row_h());
     let dir = |c: char, name: &'a str, url: &'a str, m: Message| -> El<'a> {
-        let fg = if !url.is_empty() && app.current_song().is_some_and(|s| s.url == url) {
-            ACCENT
-        } else {
-            TEXT
-        };
+        let on = !url.is_empty() && app.current_song().is_some_and(|s| s.url == url);
+        let fg = [TEXT, ACCENT][usize::from(on)];
         let ic = container(i(c, 20.0).color(SUB).center()).center(rh - 16.0);
         let row = media(ic.style(fill(ELEVATED, 4.0)).into(), name, url, w, fg);
         let b = button(row).padding([8, 16]).width(Fill).height(rh);
