@@ -33,7 +33,7 @@ pub struct Session {
     http: reqwest::Client,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Rg {
     #[serde(alias = "rgTrackGain")]
@@ -53,7 +53,7 @@ pub struct Genre {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Artist {
     pub id: String,
@@ -70,7 +70,11 @@ pub struct Artist {
 
 fn round<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let s = String::deserialize(d)?;
-    Ok(if s.is_empty() { s } else { format!("o:{s}") })
+    Ok(if s.is_empty() || s.starts_with("o:") {
+        s
+    } else {
+        format!("o:{s}")
+    })
 }
 
 impl Artist {
@@ -82,7 +86,7 @@ impl Artist {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Album {
     pub id: String,
@@ -108,7 +112,7 @@ pub struct Album {
     pub album_artists: Vec<Artist>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Song {
     pub id: String,
@@ -142,7 +146,7 @@ pub struct Song {
     pub rg: Rg,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Playlist {
     pub id: String,
@@ -156,7 +160,7 @@ pub struct Playlist {
     pub cover: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Info {
     pub biography: String,

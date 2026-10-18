@@ -286,7 +286,8 @@ fn card<'a>(
         a.hover = Some(tag.clone());
         a.update(Message::Menu(Box::new(k.clone())))
     });
-    mouse_area(b).on_right_press(menu).into()
+    let warm = Message::Warm(route);
+    mouse_area(b).on_right_press(menu).on_enter(warm).into()
 }
 
 fn album_card<'a>(app: &'a App, a: &'a Album, sub: String) -> El<'a> {
@@ -731,7 +732,8 @@ fn state<'a>(app: &'a App, key: &str) -> Option<El<'a>> {
         let col = container(col.spacing(16).align_x(Center));
         return Some(col.center_x(Fill).padding(80).into());
     }
-    let hold = app.covers.wait || (key == "home" && app.pending.contains("lib#0"));
+    let lib = app.pending.contains("lib#0") && !app.cache.contains_key("lib");
+    let hold = app.covers.wait || (key == "home" && lib);
     if (app.cache.contains_key(key) && !hold) || (app.route == key && app.seeds.contains_key(key)) {
         return None;
     }
@@ -828,6 +830,7 @@ fn home<'a>(app: &'a App) -> Option<El<'a>> {
         let play = play.padding([0, 8]);
         let menu = k.map_or(Message::Noop, |k| Message::Menu(Box::new(k)));
         let m = mouse_area(play_over(app, b.into(), play.into(), &route)).on_right_press(menu);
+        let m = m.on_enter(Message::Warm(route));
         hov(m, format!("tile:{cid}"), None).into()
     };
     let pins = pls.iter().take(3);
