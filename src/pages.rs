@@ -1103,7 +1103,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
 }
 
 fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
-    if !empty {
+    if !empty && (app.panel == 4 || app.pl_more.is_none()) {
         let m = (app.panel != 4).then_some(Message::Panel(4));
         let open = button(bold("Find more", 14.0)).padding(0);
         let open = open.style(theme::link(TEXT));
@@ -1112,7 +1112,10 @@ fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
             .into();
     }
     let q = app.pl_more.as_deref().unwrap_or("");
-    let head = bold("Find songs for your playlist", 24.0);
+    let x = theme::sq(i(i::X, 24.0).center(), 32.0).style(theme::link(SUB));
+    let x = (!empty).then(|| x.on_press(act(|a| a.pl_more = None)));
+    let head = bold("Find songs for your playlist", 24.0).width(Fill);
+    let head = row![head, x].align_y(Center);
     let style = theme::input([ELEVATED; 2], [ELEVATED; 2], [0.0; 2], 4.0);
     let field = find_input(q, "plmore").width(360).size(14).style(style);
     let q = q.trim();
@@ -1130,9 +1133,10 @@ fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
             Space::new().width(Fill),
             add
         ];
-        container(r.spacing(12).align_y(Center))
-            .padding([4.0, 0.0])
-            .into()
+        let tag = format!("add:{}", s.id);
+        let a = f32::from(u8::from(app.hover.as_ref() == Some(&tag))) * 0.1;
+        let r = container(r.spacing(12).align_y(Center)).padding([4, 8]);
+        hov(mouse_area(r.style(theme::wash(a))), tag, None).into()
     });
     let col = column![head, field.padding([10, 12])].spacing(16);
     let col = col.push(Column::with_children(rows));

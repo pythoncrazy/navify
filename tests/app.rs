@@ -200,6 +200,10 @@ async fn playlist_search_and_sort_keep_the_server_order() {
         .collect();
     let pl: navify::api::Playlist = parse(json!({"id": "p1", "name": "P"})).expect("playlist");
     let _ = app.update(Message::Loaded(key.clone(), 0, Ok(Arc::new((pl, songs)))));
+    let _ = app.update(Message::PlAdd("p1".into(), vec!["a".into()]));
+    assert!(app.modal.as_ref().is_some_and(|m| m.1 == 7) && app.held.is_some());
+    let _ = app.update(Message::MenuClose);
+    assert!(app.modal.is_none() && app.held.is_none());
     let _ = app.update(act(|a| a.pl_sort = 1));
     let _ = app.update(Message::PlayAt(key.clone(), 0));
     let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
