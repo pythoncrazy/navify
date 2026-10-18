@@ -50,7 +50,7 @@ macro_rules! pager {
 #[derive(Clone, Debug)]
 pub enum MenuKind {
     Song(Vec<Song>),
-    SongIn(Vec<Song>, Vec<usize>),
+    SongIn(Vec<Song>, &'static str, Message),
     Album(Box<Album>),
     Artist(Artist),
     Playlist(Playlist),
@@ -1867,7 +1867,7 @@ impl App {
                 return Task::batch([self.save_later(), self.toast("Added to queue")]);
             }
             Message::QDel(i) => {
-                self.qmove = None;
+                (self.qmove, self.menu) = (None, None);
                 let ri = self.real_at(i);
                 if ri < self.queue.len() && i != self.index {
                     self.queue.remove(ri);
@@ -2193,10 +2193,9 @@ impl App {
                 let row = |&i: &usize| list.get(i).is_some_and(|s| !s.is_dir);
                 let idx: Vec<usize> = self.picked.iter().copied().filter(row).collect();
                 let songs = idx.iter().map(|&i| list[i].clone()).collect();
+                let rm = || Message::PlRemove(idx.iter().map(|&i| self.orig(&key, i)).collect());
                 let kind = match self.mine_pl(&key) {
-                    true => {
-                        MenuKind::SongIn(songs, idx.iter().map(|&i| self.orig(&key, i)).collect())
-                    }
+                    true => MenuKind::SongIn(songs, "Remove from this playlist", rm()),
                     false => MenuKind::Song(songs),
                 };
                 return self.update(Message::Menu(Box::new(kind)));
