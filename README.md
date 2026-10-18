@@ -133,6 +133,7 @@ xattr -dr com.apple.quarantine /Applications/Navify.app
    ```
 
 5. On Linux, run `navify --install` one time to add the menu entry and the icons.
+   `navify --version` shows the version.
 
 Use `cargo run` for fast development builds, and `cargo run --release` to run the release build.
 The release profile uses full LTO and one codegen unit, so a release build takes some minutes.
