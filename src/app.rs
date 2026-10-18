@@ -28,6 +28,7 @@ pub struct Lib {
     pub playlists: Vec<Playlist>,
     pub artists: Vec<Artist>,
     pub albums: Vec<Album>,
+    pub liked: usize,
 }
 
 type Page<T> = (Vec<T>, usize);
@@ -795,8 +796,12 @@ impl App {
 
     fn star(&mut self, ids: &[String], on: bool) {
         for id in ids {
-            self.starred.insert(id.clone(), on);
+            let was = self.starred.insert(id.clone(), on);
             if let Some(mut s) = self.find_song(id) {
+                let had = usize::from(was.unwrap_or(s.starred));
+                self.edit::<Lib>("lib", |l| {
+                    l.liked = (l.liked + on as usize).saturating_sub(had)
+                });
                 s.starred = on;
                 self.edit::<Page<Song>>("liked", |(items, total)| {
                     let had = items.iter().any(|x| x.id == s.id);
@@ -3176,12 +3181,13 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 Arc::new([r.0, a.0, f.0, x.0]) as AnyData
             }
             "lib" => {
-                let (playlists, (artists, albums, _)) =
+                let (playlists, (artists, albums, songs)) =
                     tokio::try_join!(s.playlists(), s.starred())?;
                 Arc::new(Lib {
                     playlists,
                     artists,
                     albums,
+                    liked: songs.len(),
                 })
             }
             "album" => Arc::new(s.album(arg).await?),
