@@ -202,6 +202,7 @@ pub enum Message {
     Edit(String, String, String, bool),
     Modal(String, u8),
     PlayCtx(String, u8),
+    Warm(String),
     RowMenu(String, usize),
     SelectAll,
     DeleteSel,
@@ -2135,6 +2136,7 @@ impl App {
                 let q = self.loaded.then(|| self.save_queue());
                 return Task::batch(q.into_iter().chain([self.persist(), close]));
             }
+            Message::Warm(r) => return self.request(&self.key_of(&r), 0),
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
                 let mode = Some(mode).filter(|&m| m > 0);
