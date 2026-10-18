@@ -1203,27 +1203,59 @@ impl App {
         }
         type Batch = Vec<(String, u32, Result<Decoded, String>)>;
         static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        type Known = Option<(std::path::PathBuf, HashMap<String, Color>)>;
+        static KNOWN: std::sync::Mutex<Known> = std::sync::Mutex::new(None);
         let dec = |items: Vec<(String, u32, Result<bytes::Bytes, String>)>,
-                   mut colors: HashMap<String, Color>| async move {
-            if items.is_empty() {
-                return Vec::new();
-            }
-            let _one = ONE.acquire().await.expect("the decode semaphore is open");
-            tokio::task::spawn_blocking(move || {
-                items
-                    .into_iter()
-                    .map(|(k, sz, b)| {
-                        let c = colors.get(bare(&k)).copied();
-                        let r = b.and_then(|b| decode(b, &k, sz, c));
+                   mut colors: HashMap<String, Color>,
+                   s: &Session| {
+            let (file, s) = (s.cover_file("", 0).with_file_name("colors"), s.clone());
+            async move {
+                if items.is_empty() {
+                    return Vec::new();
+                }
+                let _one = ONE.acquire().await.expect("the decode semaphore is open");
+                tokio::task::spawn_blocking(move || {
+                    let mut known = KNOWN.lock().expect("color lock");
+                    if known.as_ref().is_none_or(|k| k.0 != file) {
+                        let text = std::fs::read_to_string(&file).unwrap_or_default();
+                        if text.len() > 1 << 20 {
+                            let _ = std::fs::remove_file(&file);
+                        }
+                        let rgb = |l: &str| {
+                            let (k, c) = l.rsplit_once(' ')?;
+                            let [_, r, g, b] = u32::from_str_radix(c, 16).ok()?.to_be_bytes();
+                            Some((k.to_string(), Color::from_rgb8(r, g, b)))
+                        };
+                        *known = Some((file.clone(), text.lines().filter_map(rgb).collect()));
+                    }
+                    let known = &mut known.as_mut().expect("loaded colors").1;
+                    let mut add = String::new();
+                    let out = items.into_iter().map(|(k, sz, b)| {
+                        let c = colors.get(bare(&k)).or(known.get(&k)).copied();
+                        let r = b.and_then(|b| decode(b, &k, sz, c, &s.cover_file(&k, sz)));
                         if let Ok((c, _, _)) = &r {
                             colors.insert(bare(&k).into(), *c);
+                            if known.insert(k.clone(), *c).is_none() {
+                                let [r, g, b, _] = c.into_rgba8();
+                                add += &format!("{k} {r:02x}{g:02x}{b:02x}\n");
+                            }
                         }
                         (k, sz, r)
-                    })
-                    .collect::<Batch>()
-            })
-            .await
-            .expect("decode task")
+                    });
+                    let out = out.collect::<Batch>();
+                    if !add.is_empty() {
+                        use std::io::Write;
+                        let f = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&file);
+                        let _ = f.and_then(|mut f| f.write_all(add.as_bytes()));
+                    }
+                    out
+                })
+                .await
+                .expect("decode task")
+            }
         };
         let apply = |a: &mut App, out: Batch| {
             let mut err = None;
@@ -1249,7 +1281,7 @@ impl App {
                     _ => miss.push((k, sz)),
                 }
             }
-            (dec(hit, colors).await, miss)
+            (dec(hit, colors, &s).await, miss)
         };
         Task::perform(load, move |(out, miss)| {
             let s = s2.clone();
@@ -1278,7 +1310,7 @@ impl App {
                         for h in dl {
                             got.push(h.await.expect("cover task"));
                         }
-                        dec(got, colors).await
+                        dec(got, colors, &s).await
                     };
                     tasks.push(Task::perform(net, move |res| {
                         let res = res.clone();
@@ -2947,7 +2979,13 @@ pub const KEYS: [KeyAction; 27] = [
     ("queue", "Queue", "Alt+Shift+Q", || Message::Panel(2)),
 ];
 
-fn decode(raw: bytes::Bytes, k: &str, size: u32, color: Option<Color>) -> Result<Decoded, String> {
+fn decode(
+    raw: bytes::Bytes,
+    k: &str,
+    size: u32,
+    color: Option<Color>,
+    file: &std::path::Path,
+) -> Result<Decoded, String> {
     use {::image::ImageReader, ::image::imageops::FilterType, std::hash::BuildHasher};
     let wide = k.strip_prefix('b').and_then(|r| r.split_once(':'));
     let wide = wide.and_then(|(n, _)| n.parse::<f32>().ok());
@@ -2971,7 +3009,29 @@ fn decode(raw: bytes::Bytes, k: &str, size: u32, color: Option<Color>) -> Result
     static BIG: std::sync::Mutex<Vec<(u64, Decoded)>> = std::sync::Mutex::new(Vec::new());
     let hash = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
     let key = hash.hash_one((&raw[..], size, round, aspect.to_bits()));
+    let save = |d: &Decoded| {
+        let image::Handle::Rgba {
+            width,
+            height,
+            pixels,
+            ..
+        } = &d.1
+        else {
+            return;
+        };
+        let img = ::image::RgbaImage::from_raw(*width, *height, pixels.to_vec());
+        let (mut png, tmp) = (std::io::Cursor::new(Vec::new()), file.with_extension("tmp"));
+        let img = img.expect("the pixels fit the size");
+        if img.write_to(&mut png, ::image::ImageFormat::Png).is_ok()
+            && std::fs::write(&tmp, png.get_ref()).is_ok()
+        {
+            let _ = std::fs::rename(&tmp, file);
+        }
+    };
     if let Some((_, d)) = BIG.lock().expect("cover lock").iter().find(|e| e.0 == key) {
+        if !round {
+            save(d);
+        }
         return Ok(d.clone());
     }
     let mut img = ::image::load_from_memory(&raw).map_err(|e| e.to_string())?;
@@ -3092,6 +3152,9 @@ fn decode(raw: bytes::Bytes, k: &str, size: u32, color: Option<Color>) -> Result
         image::Handle::from_rgba(w, h, img.into_raw()),
         (w * h * 4) as usize,
     );
+    if big && aspect == 0.0 && !round {
+        save(&d);
+    }
     if big && aspect == 0.0 && size <= 300 {
         let mut all = BIG.lock().expect("cover lock");
         all.truncate(3);
