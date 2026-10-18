@@ -107,7 +107,7 @@ To add the menu entry and the icons to `~/.local/share`, run the AppImage with `
 
 The program needs ALSA and D-Bus. Navify uses Wayland or X11.
 On desktops that do not draw title bars for Wayland windows, such as GNOME,
-Navify draws its own title bar. A setting makes Navify use X11 to get the system title bar.
+Navify uses X11 to get the system title bar. You can change this in the settings.
 
 The tray icon needs a StatusNotifierItem host. KDE, XFCE, Cinnamon, and waybar have one.
 On GNOME, install the AppIndicator extension.
