@@ -152,3 +152,6 @@ symphonia-codec-vorbis.opt-level = 3
 symphonia-core.opt-level = 3
 tiny-skia.opt-level = 3
 tiny-skia-path.opt-level = 3
+
+[patch.crates-io]
+iced_tiny_skia = { path = "patches/iced_tiny_skia" }
