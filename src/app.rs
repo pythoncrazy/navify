@@ -17,6 +17,7 @@ use crate::config::{self, Config};
 
 pub const PAGE: usize = 100;
 const STALE: Duration = Duration::from_secs(300);
+const KEEP: usize = 64;
 const COVER_CAP: usize = 8 * 1024 * 1024;
 const SIZES: [u32; 4] = [128, 192, 300, 640];
 pub const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/navify.png");
@@ -1540,8 +1541,16 @@ impl App {
                 || about.as_ref() == Some(k)
                 || b.as_ref() == Some(k)
         };
-        self.cache
-            .retain(|k, (t, _)| t.elapsed() < STALE || keep(k));
+        let old = self
+            .cache
+            .iter()
+            .filter(|(k, (t, _))| t.elapsed() >= STALE && !keep(k));
+        let mut old: Vec<(Instant, String)> = old.map(|(k, (t, _))| (*t, k.clone())).collect();
+        old.sort_unstable();
+        let n = self.cache.len().saturating_sub(KEEP).min(old.len());
+        old[..n]
+            .iter()
+            .for_each(|(_, k)| drop(self.cache.remove(k)));
         let keys = parts.iter().chain(&b).map(String::as_str);
         let keys = [key.as_str(), "lib"].into_iter().chain(keys);
         let mut tasks: Vec<_> = keys.map(|k| self.request(k, 0)).collect();
@@ -1566,8 +1575,7 @@ impl App {
 
     fn seed(&self, key: &str) -> Option<AnyData> {
         let (kind, id) = key.split_once(':')?;
-        let fresh = |(t, v): &(Instant, AnyData)| t.elapsed() < STALE && !v.is::<String>();
-        if self.cache.get(key).is_some_and(fresh) {
+        if self.cache.get(key).is_some_and(|(_, v)| !v.is::<String>()) {
             return None;
         }
         Some(match kind {
@@ -1764,11 +1772,16 @@ impl App {
                     .map(|a| a.music_brainz_id.clone())
                     .filter(|m| !m.is_empty());
                 let seeded = self.seeds.remove(&key).is_some();
-                let old = self.cache.get(&key).map(|c| &c.1).filter(|_| off > 0);
+                let old = self.cache.get(&key).map(|c| &c.1);
                 let join = |old: &AnyData| {
-                    pager!(v, b => old.downcast_ref::<Page<_>>().filter(|a| a.0.len() == off).map(|a| {
-                        Arc::new(([&a.0[..], &b.0[..]].concat(), b.1)) as AnyData
-                    }))
+                    pager!(v, b => old.downcast_ref::<Page<_>>().and_then(|a| match off {
+                        0 => {
+                            let r = [&b.0[..], &a.0[b.0.len().min(a.0.len())..]].concat();
+                            let same = r.iter().zip(&a.0).all(|(x, y)| x.id == y.id);
+                            (same && a.1 == b.1 && a.0.len() > b.0.len()).then_some(r)
+                        }
+                        _ => (a.0.len() == off).then(|| [&a.0[..], &b.0[..]].concat()),
+                    }).map(|r| Arc::new((r, b.1)) as AnyData))
                 };
                 let mut v = match old.and_then(join) {
                     None if off == 0 => v,
@@ -2270,7 +2283,11 @@ impl App {
                         .chain([self.persist(), self.save_data(), close]),
                 );
             }
-            Message::Warm(r) => return self.request(&self.key_of(&r), 0),
+            Message::Warm(r) => {
+                let top = r.strip_prefix("artist:").map(|id| format!("top:{id}"));
+                let keys: Vec<_> = std::iter::once(self.key_of(&r)).chain(top).collect();
+                return Task::batch(keys.iter().map(|k| self.request(k, 0)).collect::<Vec<_>>());
+            }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
                 let mode = Some(mode).filter(|&m| m > 0);

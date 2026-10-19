@@ -914,10 +914,10 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let on = app.current_song().is_some() && !app.ctx.is_empty() && same(&app.ctx);
         let fg = if on { ACCENT } else { TEXT };
         let tag = format!("lib:{route}");
-        let top: El = match route.as_str() {
-            "folders" | "radio" => Space::new().into(),
-            _ if app.hover.as_deref() != Some(tag.as_str()) => Space::new().into(),
-            _ => {
+        let top: Option<El> = match route.as_str() {
+            "folders" | "radio" => None,
+            _ if app.hover.as_deref() != Some(tag.as_str()) => None,
+            _ => Some({
                 let live = on && app.playing;
                 let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(live)];
                 let m = match live {
@@ -933,9 +933,12 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
                     }
                     false => shade(g, [4.0, 24.0][usize::from(route.starts_with("artist:"))], m),
                 }
-            }
+            }),
         };
-        let art: El = stack![art, top].into();
+        let art: El = match top {
+            Some(top) => stack![art, top].into(),
+            None => art,
+        };
         let live = (on && app.playing).then(|| i(i::VOL2, 16.0).color(ACCENT));
         let pinned = route == "liked" || app.cfg.settings.pins.contains(&route);
         let line = |w: f32, sub: Cow<'a, str>| {
