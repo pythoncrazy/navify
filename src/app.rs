@@ -1257,7 +1257,7 @@ impl App {
                     a.index = songs.iter().position(|s| s.id == cur).unwrap_or(0);
                     (a.queue, a.shuffle) = (songs.clone(), None);
                 }
-                a.covers_now()
+                Task::batch([a.covers_now(), a.about()])
             })
         };
         let fail = "Could not restore the play queue.";
@@ -1538,12 +1538,12 @@ impl App {
         let parts = id.map(|id| ["top", "info", "appears"].map(|k| format!("{k}:{id}")));
         let parts = parts.as_ref().map_or(&[][..], |p| &p[..]);
         let about = self.lead_artist().map(|id| format!("info:{id}"));
+        let lyr = self.current_song().map(|s| format!("lyrics:{}", s.id));
         let keep = |k: &String| {
             *k == key
                 || k == "lib"
                 || parts.contains(k)
-                || about.as_ref() == Some(k)
-                || b.as_ref() == Some(k)
+                || [&about, &b, &lyr].iter().any(|x| x.as_ref() == Some(k))
         };
         let old = self
             .cache
