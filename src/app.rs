@@ -88,9 +88,13 @@ fn prune(v: &mut serde_json::Value) {
 }
 
 fn load_data(server: &str) -> HashMap<String, (Instant, AnyData)> {
-    let file = std::fs::File::open(data_file()).ok();
+    let mut raw = Vec::new();
+    let file = std::fs::read(data_file()).ok();
+    let file = file.filter(|z| {
+        std::io::Read::read_to_end(&mut flate2::read::DeflateDecoder::new(&z[..]), &mut raw).is_ok()
+    });
     let mut v: serde_json::Value = file
-        .and_then(|f| serde_json::from_reader(flate2::read::DeflateDecoder::new(f)).ok())
+        .and_then(|_| serde_json::from_slice(&raw).ok())
         .unwrap_or_default();
     let (now, ours) = (Instant::now(), v["server"] == server);
     let Some(map) = v["data"].as_object_mut().filter(|_| ours) else {
@@ -1010,8 +1014,8 @@ impl App {
             prune(&mut body);
             let (path, tmp) = (data_file(), data_file().with_extension("tmp"));
             std::fs::create_dir_all(path.parent().expect("the cache has a directory"))?;
-            let mut z = DeflateEncoder::new(Vec::new(), Compression::best());
-            serde_json::to_writer(&mut z, &body)?;
+            let mut z = DeflateEncoder::new(Vec::new(), Compression::default());
+            std::io::Write::write_all(&mut z, &serde_json::to_vec(&body)?)?;
             std::fs::write(&tmp, z.finish()?)?;
             Ok::<_, anyhow::Error>(std::fs::rename(tmp, path)?)
         })
@@ -3189,7 +3193,6 @@ fn decode(
     let png = raw.starts_with(b"\x89PNG");
     if aspect == 0.0
         && !round
-        && !png
         && let Some(c) = color
         && let Some((w, h)) = ImageReader::new(std::io::Cursor::new(&raw))
             .with_guessed_format()
