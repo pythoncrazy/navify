@@ -23,7 +23,8 @@ pub const ICON: &[u8] = include_bytes!("../assets/icons/hicolor/256x256/apps/nav
 
 pub type Home = [Vec<Album>; 4];
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Lib {
     pub playlists: Vec<Playlist>,
     pub artists: Vec<Artist>,
@@ -63,13 +64,32 @@ macro_rules! stored {
 }
 
 fn data_file() -> std::path::PathBuf {
-    crate::api::cache_dir("").join("data.json")
+    crate::api::cache_dir("").join("data")
+}
+
+fn prune(v: &mut serde_json::Value) {
+    use serde_json::Value::{Array, Bool, Null, Number, Object, String};
+    match v {
+        Object(m) => m.retain(|k, x| {
+            prune(x);
+            match x {
+                Null | Bool(false) => false,
+                Number(n) => n.as_f64() != Some(0.0) || k.ends_with("Gain") || k.ends_with("Peak"),
+                String(s) => !s.is_empty(),
+                Array(a) => !a.is_empty(),
+                Object(o) => !o.is_empty(),
+                _ => true,
+            }
+        }),
+        Array(a) => a.iter_mut().for_each(prune),
+        _ => {}
+    }
 }
 
 fn load_data(server: &str) -> HashMap<String, (Instant, AnyData)> {
-    let file = std::fs::read(data_file()).ok();
+    let file = std::fs::File::open(data_file()).ok();
     let mut v: serde_json::Value = file
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .and_then(|f| serde_json::from_reader(flate2::read::DeflateDecoder::new(f)).ok())
         .unwrap_or_default();
     let (now, ours) = (Instant::now(), v["server"] == server);
     let Some(map) = v["data"].as_object_mut().filter(|_| ours) else {
@@ -983,12 +1003,16 @@ impl App {
             .collect();
         all.sort_by_key(|a| a.0);
         let data: serde_json::Map<_, _> = all.into_iter().take(40).map(|e| (e.1, e.2)).collect();
-        let body = serde_json::json!({"server": s.server.id, "data": data}).to_string();
+        let mut body = serde_json::json!({"server": s.server.id, "data": data});
         blocking("Could not save the page cache. ", move || {
+            use flate2::{Compression, write::DeflateEncoder};
+            prune(&mut body);
             let (path, tmp) = (data_file(), data_file().with_extension("tmp"));
             std::fs::create_dir_all(path.parent().expect("the cache has a directory"))?;
-            std::fs::write(&tmp, body)?;
-            std::fs::rename(tmp, path)
+            let mut z = DeflateEncoder::new(Vec::new(), Compression::best());
+            serde_json::to_writer(&mut z, &body)?;
+            std::fs::write(&tmp, z.finish()?)?;
+            Ok::<_, anyhow::Error>(std::fs::rename(tmp, path)?)
         })
     }
 
@@ -3145,8 +3169,10 @@ fn decode(
         k.starts_with("o:"),
     );
     let aspect = wide.map_or(5.0 / 3.0 * f32::from(k.starts_with("w:")), |n| n / 10.0);
+    let png = raw.starts_with(b"\x89PNG");
     if aspect == 0.0
         && !round
+        && !png
         && let Some(c) = color
         && let Some((w, h)) = ImageReader::new(std::io::Cursor::new(&raw))
             .with_guessed_format()
@@ -3160,28 +3186,31 @@ fn decode(
     static BIG: std::sync::Mutex<Vec<(u64, Decoded)>> = std::sync::Mutex::new(Vec::new());
     let hash = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
     let key = hash.hash_one((&raw[..], size, round, aspect.to_bits()));
-    let save = |d: &Decoded| {
-        let image::Handle::Rgba {
-            width,
-            height,
-            pixels,
-            ..
-        } = &d.1
-        else {
-            return;
-        };
-        let img = ::image::RgbaImage::from_raw(*width, *height, pixels.to_vec());
-        let (mut png, tmp) = (std::io::Cursor::new(Vec::new()), file.with_extension("tmp"));
-        let img = img.expect("the pixels fit the size");
-        if img.write_to(&mut png, ::image::ImageFormat::Png).is_ok()
-            && std::fs::write(&tmp, png.get_ref()).is_ok()
-        {
-            let _ = std::fs::rename(&tmp, file);
+    let save = |img: &::image::RgbaImage, big: bool| {
+        use ::image::{RgbImage, buffer::ConvertBuffer, codecs::jpeg::JpegEncoder};
+        let (mut out, tmp) = (std::io::Cursor::new(Vec::new()), file.with_extension("tmp"));
+        match img.pixels().all(|p| p[3] == 255) {
+            true => ConvertBuffer::<RgbImage>::convert(img)
+                .write_with_encoder(JpegEncoder::new_with_quality(&mut out, 90))
+                .ok()?,
+            false if big => img.write_to(&mut out, ::image::ImageFormat::Png).ok()?,
+            false => return None,
         }
+        std::fs::write(&tmp, out.get_ref()).ok()?;
+        std::fs::rename(&tmp, file).ok()?;
+        Some(bytes::Bytes::from(out.into_inner()))
     };
     if let Some((_, d)) = BIG.lock().expect("cover lock").iter().find(|e| e.0 == key) {
-        if !round {
-            save(d);
+        if !round
+            && let image::Handle::Rgba {
+                width,
+                height,
+                pixels,
+                ..
+            } = &d.1
+        {
+            let img = ::image::RgbaImage::from_raw(*width, *height, pixels.to_vec());
+            save(&img.expect("the pixels fit the size"), true);
         }
         return Ok(d.clone());
     }
@@ -3289,9 +3318,16 @@ fn decode(
             })
     });
     if aspect == 0.0 && !big && !round {
+        let raw = png
+            .then(|| save(&img.into_rgba8(), false))
+            .flatten()
+            .unwrap_or(raw);
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
     let mut img = img.into_rgba8();
+    if big && aspect == 0.0 && !round {
+        save(&img, true);
+    }
     let (w, h) = img.dimensions();
     let r = w.min(h) as f32 / 2.0;
     for (x, y, p) in img.enumerate_pixels_mut().filter(|_| round) {
@@ -3303,9 +3339,6 @@ fn decode(
         image::Handle::from_rgba(w, h, img.into_raw()),
         (w * h * 4) as usize,
     );
-    if big && aspect == 0.0 && !round {
-        save(&d);
-    }
     if big && aspect == 0.0 && size <= 300 {
         let mut all = BIG.lock().expect("cover lock");
         all.truncate(3);

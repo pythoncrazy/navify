@@ -2307,6 +2307,7 @@ dependencies = [
  "dbus",
  "dbus-crossroads",
  "dbus-secret-service-keyring-store",
+ "flate2",
  "iced",
  "iced_test",
  "image",
