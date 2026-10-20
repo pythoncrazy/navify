@@ -406,12 +406,10 @@ impl Session {
         });
         let ping: Value = s.get("ping", (), "").await?;
         let ext = async {
-            if ping["openSubsonic"] != true {
-                return Ok(Vec::new());
+            match ping["openSubsonic"] == true {
+                true => s.extensions().await,
+                false => Ok(Vec::new()),
             }
-            let ptr = "/openSubsonicExtensions";
-            s.get::<Vec<Value>>("getOpenSubsonicExtensions", (), ptr)
-                .await
         };
         let native = async {
             if ping["type"] != "navidrome" {
@@ -430,8 +428,7 @@ impl Session {
             Ok(body)
         };
         let (ext, body) = tokio::try_join!(ext, native)?;
-        let names = ext.iter().filter_map(|e| e["name"].as_str());
-        s.server.ext = names.map(str::to_string).collect();
+        s.server.ext = ext;
         if body.is_null() {
             return Ok(s);
         }
@@ -743,6 +740,14 @@ impl Session {
 
     pub async fn genres(&self) -> Result<Vec<Genre>> {
         self.get("getGenres", (), "/genres/genre").await
+    }
+
+    pub async fn extensions(&self) -> Result<Vec<String>> {
+        let ext: Vec<Value> = self
+            .get("getOpenSubsonicExtensions", (), "/openSubsonicExtensions")
+            .await?;
+        let names = ext.iter().filter_map(|e| e["name"].as_str());
+        Ok(names.map(str::to_string).collect())
     }
 
     pub async fn lyrics(&self, id: &str) -> Result<Vec<Lyrics>> {
