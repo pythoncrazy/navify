@@ -502,7 +502,28 @@ impl App {
             login(u, n, p)
         } else if app.session.is_some() || app.route != "login" {
             let r = std::mem::take(&mut app.route);
-            Task::batch([app.nav(r), app.restore()])
+            let ext = app.session.clone().filter(|_| app.shot.is_none()).map(|s| {
+                let me = s.clone();
+                Task::perform(async move { s.extensions().await }, move |r| {
+                    let Ok(ext) = r else { return Message::Noop };
+                    ours(
+                        &me,
+                        task(move |a| {
+                            let cur = a.session.as_mut().expect("a session");
+                            if cur.server.ext == ext {
+                                return Task::none();
+                            }
+                            cur.server.ext = ext.clone();
+                            let id = cur.server.id.clone();
+                            let saved = a.cfg.servers.iter_mut().filter(|v| v.id == id);
+                            saved.for_each(|v| v.ext = ext.clone());
+                            a.cache.retain(|k, _| !k.starts_with("lyrics:"));
+                            Task::batch([a.persist(), a.about()])
+                        }),
+                    )
+                })
+            });
+            Task::batch([app.nav(r), app.restore()].into_iter().chain(ext))
         } else {
             app.show()
         };
