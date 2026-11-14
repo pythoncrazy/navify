@@ -478,3 +478,17 @@ async fn failed_unstar_puts_the_song_back() {
     assert_eq!(liked(&app), Some(1));
     assert!(app.is_starred("a", false));
 }
+
+#[tokio::test]
+async fn play_from_a_part_of_a_list_starts_at_once() {
+    let mut app = app();
+    let part: AnyData = Arc::new((
+        items::<Vec<Song>>((0..100).map(|i| i.to_string())),
+        250usize,
+    ));
+    let _ = app.update(Message::Nav("songs".into()));
+    let _ = app.update(Message::Loaded("songs".into(), 0, Ok(part)));
+    let _ = app.update(Message::PlayAt("songs".into(), 5));
+    assert_eq!(app.current_song().map(|s| s.id.as_str()), Some("5"));
+    assert!(app.playing && app.queue.len() == 100 && app.ctx == "songs");
+}

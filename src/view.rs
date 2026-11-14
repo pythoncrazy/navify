@@ -1192,7 +1192,7 @@ fn player_bar(app: &App) -> El<'_> {
     let glyph = theme::filled([theme::fill::PLAY, theme::fill::PAUSE][playing], 16.0);
     let bg = song.map_or(TEXT.scale_alpha(0.3), |_| TEXT);
     let play = theme::sq(glyph.color(BG).center(), 32.0).style(theme::solid([bg; 3], BG));
-    let play = play.on_press(Message::Toggle);
+    let play = mouse_area(play.on_press(Message::Toggle)).on_enter(act(App::wake));
     let play = tip(play, ["Play", "Pause"][playing], Top);
     let (ic, fi) = (|c| i(c, 16.0), |c| theme::filled(c, 19.0));
     let dim = song.is_none().then_some(SUB.scale_alpha(0.3));

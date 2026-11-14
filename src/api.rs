@@ -130,6 +130,8 @@ pub struct Song {
     pub duration: f32,
     #[serde(alias = "sampleRate")]
     pub sampling_rate: u32,
+    pub bit_rate: u32,
+    pub suffix: String,
     pub play_count: u32,
     #[serde(alias = "rating")]
     pub user_rating: u8,
@@ -549,7 +551,8 @@ impl Session {
             return (song.url.clone(), true);
         }
         let q = json!({"id": song.id, "format": format, "maxBitRate": (br > 0).then_some(br)});
-        let transcoded = br > 0 || format.is_some_and(|f| f != "raw");
+        let same = format.is_none_or(|f| f == "raw" || f == song.suffix);
+        let transcoded = !same || (br > 0 && (song.bit_rate == 0 || br < song.bit_rate));
         (self.url("stream", &q), transcoded)
     }
 
