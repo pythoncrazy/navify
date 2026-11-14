@@ -24,6 +24,13 @@ async fn read_suite(s: &Session) -> Result<()> {
         s.albums(k, &[], 0, 5).await.context(k)?;
         s.songs(k, 0, 5).await.context(k)?;
     }
+    if s.server.native {
+        let (a, b) = (
+            s.albums("random", &[], 0, 6).await?.0,
+            s.albums("random", &[], 6, 6).await?.0,
+        );
+        assert!(a.len() + b.len() == 12 && a.iter().all(|x| b.iter().all(|y| x.id != y.id)));
+    }
     let genre = s.albums("newest", &[("genre", "No Genre")], 0, 5).await?;
     assert!(genre.0.is_empty());
     for a in &page {

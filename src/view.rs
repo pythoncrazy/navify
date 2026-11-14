@@ -474,6 +474,7 @@ mod wrap {
                 ring.5 = usize::MAX;
             }
             if self.4 >= usize::MAX - 1 && root {
+                ring.2 = ring.2.filter(|_| ring.6.is_none());
                 (ring.5, ring.6) = (self.4, None);
             } else if self.4 < usize::MAX - 1
                 && let Event::Window(RedrawRequested(now)) = e
@@ -492,6 +493,7 @@ mod wrap {
                             ring.6 = Some(y);
                         }
                         false => {
+                            ring.2 = ring.2.filter(|_| ring.6.is_none());
                             ring.6 = None;
                             scan(w, c0, None, Some(y));
                         }
@@ -501,12 +503,17 @@ mod wrap {
                     match ring.2.map(|t| t + frame).filter(|d| d > now) {
                         Some(due) => sh.request_redraw_at(due),
                         None => {
-                            let off = scan(w, c0, Some((0.0, 0.0)), None).0.map_or(y, |x| x.2);
+                            let at = scan(w, c0, Some((0.0, 0.0)), None).0;
+                            let y = at.map_or(y, |x| y.min((x.1.height - x.0.height).max(0.0)));
+                            let off = at.map_or(y, |x| x.2);
                             let dt = ring.2.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
                             let rem = y - off;
                             let next = match rem.abs() < 1.0 {
                                 true => {
-                                    ring.6 = None;
+                                    (ring.2, ring.6) = (None, None);
+                                    if ring.1 != 0.0 {
+                                        sh.request_redraw();
+                                    }
                                     y
                                 }
                                 false => {
@@ -526,6 +533,7 @@ mod wrap {
                     .0
                     .is_some_and(|x| c.is_over(x.0))
             {
+                ring.2 = ring.2.filter(|_| ring.6.is_none());
                 (ring.5, ring.6) = (usize::MAX - 1, None);
                 sh.publish(super::act(|a| a.lyric = false));
             }
@@ -601,6 +609,7 @@ mod wrap {
                     .0
                     .is_some_and(|x| (x.2 - o).abs() > 0.5)
             }) {
+                ring.2 = ring.2.filter(|_| ring.6.is_none());
                 (ring.5, ring.6) = (usize::MAX - 1, None);
                 sh.publish(super::act(|a| a.lyric = false));
             }
@@ -1158,15 +1167,17 @@ fn player_bar(app: &App) -> El<'_> {
         let total = total.style(theme::link(SUB));
         let total = total.on_press(set(|s, b| s.remaining = b, !rest));
         let seek = slider(0.0..=dur, pos, |v| {
-            task(
-                move |a| match crate::app::DOWN.load(std::sync::atomic::Ordering::Relaxed) {
+            task(move |a| {
+                match a.seek_preview.is_some()
+                    || crate::app::DOWN.load(std::sync::atomic::Ordering::Relaxed)
+                {
                     true => {
                         a.seek_preview = Some(v);
                         iced::Task::none()
                     }
                     false => a.update(Message::Seek(v)),
-                },
-            )
+                }
+            })
         });
         let seek = seek
             .step(0.01f32)

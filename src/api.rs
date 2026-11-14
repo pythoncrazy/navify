@@ -1,5 +1,6 @@
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -285,6 +286,29 @@ fn normalize(v: &mut Value) {
     }
 }
 
+struct Rows<T>(PhantomData<T>);
+
+impl<'de, T: Data> serde::de::Visitor<'de> for Rows<T> {
+    type Value = Vec<T>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a list")
+    }
+
+    fn visit_unit<E>(self) -> Result<Vec<T>, E> {
+        Ok(Vec::new())
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+        let mut rows = Vec::new();
+        while let Some(mut v) = seq.next_element::<Value>()? {
+            normalize(&mut v);
+            rows.push(serde_json::from_value(v).map_err(serde::de::Error::custom)?);
+        }
+        Ok(rows)
+    }
+}
+
 pub fn parse<T: Data>(mut v: Value) -> Result<T> {
     normalize(&mut v);
     let e = |e| anyhow!("The server returned an unexpected response: {e}");
@@ -322,6 +346,25 @@ fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
     let order = if asc { "ASC" } else { "DESC" };
     let mut q =
         json!({"_sort": sort_row(sort)[col], "_order": order, "_start": off, "_end": off + n});
+    if sort == "random" {
+        static SEEDS: Mutex<Vec<((usize, usize), u64)>> = Mutex::new(Vec::new());
+        let (mut seeds, new) = (
+            SEEDS.lock().expect("seed lock"),
+            RandomState::new().hash_one(0),
+        );
+        let seed = match seeds.iter_mut().find(|s| s.0 == (col, n)) {
+            Some(s) if off > 0 => s.1,
+            Some(s) => {
+                s.1 = new;
+                new
+            }
+            None => {
+                seeds.push(((col, n), new));
+                new
+            }
+        };
+        q["seed"] = seed.to_string().into();
+    }
     let only = match (sort, col) {
         ("starred", _) => "starred",
         ("rating", _) => "has_rating",
@@ -487,7 +530,7 @@ impl Session {
         parse(v.pointer_mut(ptr).map(Value::take).unwrap_or_default())
     }
 
-    async fn nd<T: Data>(&self, path: &str, q: impl Into<Value>) -> Result<(T, usize)> {
+    async fn nd<T: Data>(&self, path: &str, q: impl Into<Value>) -> Result<(Vec<T>, usize)> {
         let (url, mut q) = (format!("{}/api/{path}", self.server.url), q.into());
         if matches!(path, "album" | "song" | "artist") {
             q["missing"] = false.into();
@@ -509,8 +552,19 @@ impl Session {
         }
         let http = format!("The server returned HTTP {status}.");
         ensure!(res.status().is_success(), http);
-        let v = res.json().await.map_err(|_| anyhow!(INVALID))?;
-        Ok((parse(v)?, total.unwrap_or_default()))
+        let body = res.bytes().await.map_err(net_err)?;
+        let mut de = serde_json::Deserializer::from_slice(&body);
+        let rows = serde::Deserializer::deserialize_any(&mut de, Rows(PhantomData));
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        if body.len() > 1 << 20 {
+            unsafe extern "C" {
+                safe fn malloc_trim(pad: usize) -> i32;
+            }
+            drop(body);
+            malloc_trim(0);
+        }
+        let e = |e| anyhow!("The server returned an unexpected response: {e}");
+        Ok((rows.map_err(e)?, total.unwrap_or_default()))
     }
 
     async fn act(&self, method: &str, q: impl Into<Value>) -> Result<()> {
@@ -728,10 +782,8 @@ impl Session {
             return Ok(Default::default());
         }
         let q = json!({"_sort": "play_count", "_order": "DESC", "_start": 0, "_end": 10});
-        let (a, s) = tokio::try_join!(
-            self.nd::<Vec<Artist>>("artist", q),
-            self.songs("frequent", 0, 4)
-        )?;
+        let (a, s) =
+            tokio::try_join!(self.nd::<Artist>("artist", q), self.songs("frequent", 0, 4))?;
         Ok((a.0.into_iter().filter(|a| a.play_count > 0).collect(), s.0))
     }
 
