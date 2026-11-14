@@ -420,6 +420,8 @@ pub struct App {
     pub picked: BTreeSet<usize>,
     anchor: usize,
     pub hover: Option<String>,
+    aim: Option<String>,
+    warmed: Option<String>,
     pub popular_all: bool,
     pub search_tab: usize,
     pub disc_chip: u8,
@@ -462,8 +464,8 @@ impl App {
             let (p, mut rx) = navify_audio::Player::new(h.clone(), Session::client());
             p.set_device(&cfg.settings.device);
             h.spawn(async move {
-                while let Some(e) = rx.recv().await {
-                    let _ = CH.0.send(task(move |a| a.audio(e.clone())));
+                while let Some((n, e)) = rx.recv().await {
+                    let _ = CH.0.send(task(move |a| a.audio(n, e.clone())));
                 }
             });
             p
@@ -476,7 +478,6 @@ impl App {
             .map_or_else(HashMap::new, |s| load_data(&s.server.id));
         Self {
             stale: cache.keys().cloned().collect(),
-            dirty: HashMap::new(),
             cache,
             session,
             cfg,
@@ -1719,10 +1720,45 @@ impl App {
         }
     }
 
+    pub fn wake(&mut self) {
+        let rate = self.current_song().map_or(0, |s| self.track(s).rate);
+        let t = Track {
+            rate: [rate, 48_000][usize::from(rate == 0)],
+            ..Track::default()
+        };
+        self.player.iter().for_each(|p| p.warm(t.clone()));
+    }
+
+    fn warm(&mut self) {
+        let row = self.hover.as_deref().and_then(|h| h.rsplit_once('#'));
+        let row = row.and_then(|(k, n)| Some((k, n.parse::<usize>().ok()?)));
+        let first = || {
+            let key = self.key_of(self.aim.as_deref().filter(|_| self.shuffle.is_none())?);
+            self.songs_of(&key)?.0.first()
+        };
+        let song = match row {
+            Some((k, n)) => self.songs_of(k).and_then(|v| v.0.get(n)),
+            None => first(),
+        };
+        let tag = if row.is_some() {
+            &self.hover
+        } else {
+            &self.aim
+        };
+        let song = song.filter(|s| s.url.is_empty() && self.warmed != *tag);
+        let Some((tag, t)) = song.map(|s| (tag.clone(), self.track(s))) else {
+            return;
+        };
+        self.aim = self.aim.take().filter(|_| row.is_none());
+        self.warmed = tag;
+        self.player.iter().for_each(|p| p.warm(t.clone()));
+    }
+
     pub fn update(&mut self, m: Message) -> Task<Message> {
         use souvlaki::MediaPlayback as P;
         let seek = matches!(m, Message::Seek(_));
         let mut t = self.handle(m);
+        self.warm();
         let data = self.cache.get(&self.route);
         let data = data.map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
         let (r, (f, s, d), _) = &self.pl_view;
@@ -2365,6 +2401,7 @@ impl App {
                 );
             }
             Message::Warm(r) => {
+                self.aim = Some(r.clone());
                 let top = r.strip_prefix("artist:").map(|id| format!("top:{id}"));
                 let keys: Vec<_> = std::iter::once(self.key_of(&r)).chain(top).collect();
                 return Task::batch(keys.iter().map(|k| self.request(k, 0)).collect::<Vec<_>>());
@@ -2373,6 +2410,15 @@ impl App {
                 self.menu = None;
                 let mode = Some(mode).filter(|&m| m > 0);
                 let mode = mode.unwrap_or(self.cfg.settings.play_mode);
+                let part = self.data::<Page<Song>>(&route);
+                let part = part.is_some_and(|p| p.0.len() < p.1 && !p.0.is_empty());
+                if let Some((v, src)) = self.songs_of(&route)
+                    && part
+                    && mode == 0
+                    && self.shuffle.is_none()
+                {
+                    return self.play_part(route, v.to_vec(), src, 0, false);
+                }
                 self.play_seq += u64::from(mode < 2);
                 let (key, seq) = (route.clone(), self.play_seq);
                 let play = move |a: &mut App, v, src| match mode < 2 {
@@ -2464,21 +2510,7 @@ impl App {
                     self.ctx = key;
                     return self.start(list, src, n, m == 1 || self.shuffle.is_some());
                 }
-                self.play_seq += 1;
-                let (seq, k) = (self.play_seq, key.clone());
-                let play = move |a: &mut App, v: Vec<Song>, src: String| {
-                    if a.play_seq != seq {
-                        return Task::none();
-                    }
-                    let id = &list[n].id;
-                    let at = v.get(n).filter(|s| &s.id == id).map(|_| n);
-                    let at = at.or_else(|| v.iter().position(|s| &s.id == id));
-                    let (v, at) = at.map_or_else(|| (list.clone(), n), |at| (v, at));
-                    a.ctx.clone_from(&k);
-                    let sh = m == 1 || a.shuffle.is_some();
-                    a.start(v, src, at, sh)
-                };
-                return self.ctx_songs(key, "Nothing to play.", "Could not play.", play);
+                return self.play_part(key, list, src, n, m == 1 || self.shuffle.is_some());
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
             Message::Arrow(_) if self.modal.is_some() => {}
@@ -2791,7 +2823,10 @@ impl App {
         self.update(m)
     }
 
-    fn audio(&mut self, e: navify_audio::Event) -> Task<Message> {
+    fn audio(&mut self, n: u64, e: navify_audio::Event) -> Task<Message> {
+        if self.player.as_ref().is_some_and(|p| p.plays() != n) {
+            return Task::none();
+        }
         match e {
             navify_audio::Event::Started(id) => {
                 let done = self.listen(false);
@@ -2854,6 +2889,35 @@ impl App {
             }
         };
         self.call(load, fail, ok)
+    }
+
+    fn play_part(
+        &mut self,
+        key: String,
+        part: Vec<Song>,
+        src: String,
+        n: usize,
+        sh: bool,
+    ) -> Task<Message> {
+        self.ctx.clone_from(&key);
+        let now = self.start(part, src, n, sh);
+        let seq = self.play_seq;
+        let rest = move |a: &mut App, v: Vec<Song>, _| {
+            let (keep, cur) = (a.kept(), a.current_song().map(|s| s.id.clone()));
+            let v: Vec<Song> = v.into_iter().filter(|s| keep(s)).collect();
+            let at = v.iter().position(|s| Some(&s.id) == cur.as_ref());
+            let Some(at) = at.filter(|_| a.play_seq == seq) else {
+                return Task::none();
+            };
+            (a.queue, a.index) = (v, at);
+            if a.shuffle.is_some() {
+                (a.shuffle, a.index) = (Some(shuffle(0..a.queue.len(), at)), 0);
+            }
+            a.queue_next_refresh();
+            a.save_later()
+        };
+        let rest = self.ctx_songs(key, "Nothing to play.", "Could not play.", rest);
+        Task::batch([now, rest])
     }
 
     fn play_songs(&mut self, songs: Vec<Song>, src: String, mode: u8) -> Task<Message> {
