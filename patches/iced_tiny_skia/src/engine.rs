@@ -144,62 +144,83 @@ impl Engine {
             }
         }
 
-        pixels.fill_path(
-            &path,
-            &tiny_skia::Paint {
-                shader: match background {
-                    Background::Color(color) => {
-                        tiny_skia::Shader::SolidColor(into_color(*color))
-                    }
-                    Background::Gradient(Gradient::Linear(linear)) => {
-                        let (start, end) =
-                            linear.angle.to_distance(&quad.bounds);
-
-                        let stops: Vec<tiny_skia::GradientStop> = linear
-                            .stops
-                            .into_iter()
-                            .flatten()
-                            .map(|stop| {
-                                tiny_skia::GradientStop::new(
-                                    stop.offset,
-                                    tiny_skia::Color::from_rgba(
-                                        stop.color.b,
-                                        stop.color.g,
-                                        stop.color.r,
-                                        stop.color.a,
-                                    )
-                                    .expect("Create color"),
-                                )
-                            })
-                            .collect();
-
-                        tiny_skia::LinearGradient::new(
-                            tiny_skia::Point {
-                                x: start.x,
-                                y: start.y,
-                            },
-                            tiny_skia::Point { x: end.x, y: end.y },
-                            if stops.is_empty() {
-                                vec![tiny_skia::GradientStop::new(
-                                    0.0,
-                                    tiny_skia::Color::BLACK,
-                                )]
-                            } else {
-                                stops
-                            },
-                            tiny_skia::SpreadMode::Pad,
-                            tiny_skia::Transform::identity(),
-                        )
-                        .expect("Create linear gradient")
-                    }
+        let flat = fill_border_radius == [0.0; 4];
+        if let (Background::Color(color), true) = (background, flat)
+            && let Some(rect) = tiny_skia::Rect::from_xywh(
+                physical_bounds.x,
+                physical_bounds.y,
+                physical_bounds.width,
+                physical_bounds.height,
+            )
+        {
+            pixels.fill_rect(
+                rect,
+                &tiny_skia::Paint {
+                    shader: tiny_skia::Shader::SolidColor(into_color(*color)),
+                    anti_alias: true,
+                    ..tiny_skia::Paint::default()
                 },
-                anti_alias: true,
-                ..tiny_skia::Paint::default()
-            },
-            tiny_skia::FillRule::EvenOdd,
-            transform,
-            clip_mask,
-        );
+                tiny_skia::Transform::identity(),
+                clip_mask,
+            );
+        } else {
+            pixels.fill_path(
+                &path,
+                &tiny_skia::Paint {
+                    shader: match background {
+                        Background::Color(color) => {
+                            tiny_skia::Shader::SolidColor(into_color(*color))
+                        }
+                        Background::Gradient(Gradient::Linear(linear)) => {
+                            let (start, end) =
+                                linear.angle.to_distance(&quad.bounds);
+
+                            let stops: Vec<tiny_skia::GradientStop> = linear
+                                .stops
+                                .into_iter()
+                                .flatten()
+                                .map(|stop| {
+                                    tiny_skia::GradientStop::new(
+                                        stop.offset,
+                                        tiny_skia::Color::from_rgba(
+                                            stop.color.b,
+                                            stop.color.g,
+                                            stop.color.r,
+                                            stop.color.a,
+                                        )
+                                        .expect("Create color"),
+                                    )
+                                })
+                                .collect();
+
+                            tiny_skia::LinearGradient::new(
+                                tiny_skia::Point {
+                                    x: start.x,
+                                    y: start.y,
+                                },
+                                tiny_skia::Point { x: end.x, y: end.y },
+                                if stops.is_empty() {
+                                    vec![tiny_skia::GradientStop::new(
+                                        0.0,
+                                        tiny_skia::Color::BLACK,
+                                    )]
+                                } else {
+                                    stops
+                                },
+                                tiny_skia::SpreadMode::Pad,
+                                tiny_skia::Transform::identity(),
+                            )
+                            .expect("Create linear gradient")
+                        }
+                    },
+                    anti_alias: true,
+                    ..tiny_skia::Paint::default()
+                },
+                tiny_skia::FillRule::EvenOdd,
+                transform,
+                clip_mask,
+            );
+        }
 
         if border_width > 0.0 {
             // Border path is offset by half the border width
@@ -837,7 +858,10 @@ thread_local! {
     pub static MASK: std::cell::Cell<Option<Rectangle>> = const { std::cell::Cell::new(None) };
 }
 
-fn clip(clip_mask: &mut tiny_skia::Mask, bounds: Rectangle) -> &tiny_skia::Mask {
+fn clip(
+    clip_mask: &mut tiny_skia::Mask,
+    bounds: Rectangle,
+) -> &tiny_skia::Mask {
     adjust_clip_mask(clip_mask, bounds);
     clip_mask
 }
