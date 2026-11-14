@@ -90,6 +90,23 @@ fn render_gives_exact_length_and_gain() {
             "no range, seek {seek}: {got:.4} s"
         );
     }
+    let (io, mut t) = setup("Four", None);
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let (up, at) = (t[0].url.clone(), l.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for mut c in l.incoming().map(|c| c.expect("accept")) {
+            let _ = c.read(&mut [0; 4096]).expect("read");
+            let body = reqwest::blocking::get(&up).and_then(|r| r.bytes());
+            let body = body.expect("get").repeat(2);
+            let head = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+            let _ = c.write_all(head).and_then(|_| c.write_all(&body));
+        }
+    });
+    (t[0].url, t[0].transcoded, t[0].duration) = (format!("http://{at}/live"), true, 0.0);
+    let pcm = render(io, t, RATE, 0.0, 0.0).expect("render a chained stream");
+    let got = pcm.len() as f32 / 2.0 / RATE as f32;
+    assert!((got - 4.0).abs() <= 0.05, "chained stream: {got:.4} s");
     let (io, t) = setup("One", None);
     let peak = |gain| {
         let mut t = t.clone();

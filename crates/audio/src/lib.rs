@@ -396,6 +396,85 @@ impl MediaSource for Http {
 }
 
 type Decode = Box<dyn FnMut(Option<&Packet>, &mut Vec<f32>) -> Result<(), SymError> + Send>;
+type Codec = (u32, TimeBase, Option<u64>, f64, u16, Decode);
+
+fn codec(demux: &dyn FormatReader) -> Res<Codec> {
+    let t = demux.default_track(TrackType::Audio);
+    let a = t.and_then(|t| Some((t, t.codec_params.as_ref()?.audio()?)));
+    let (t, p) = a.ok_or("The stream has no audio.")?;
+    let (tid, tb, frames, p) = (t.id, t.time_base, t.num_frames, p.clone());
+    let head: Vec<u8> = p.extra_data.clone().unwrap_or_default().into();
+    let sr = p.sample_rate.ok_or("unknown sample rate")?;
+    let params = Some(p).filter(|p| p.codec != CODEC_ID_OPUS);
+    let tb = tb.or(TimeBase::try_from_recip(sr)).ok_or("no time base")?;
+    let opus = params.is_none();
+    if opus && (head.len() < 19 || head[9] > 2) {
+        Err("The Opus stream has more than two channels or a bad header.")?
+    }
+    let le = |i: usize| u16::from_le_bytes([head[i], head[i + 1]]);
+    let pre = if opus { le(10) } else { 0 };
+    let dec: Decode = match params {
+        None => {
+            let gain = 10f32.powf(le(16) as i16 as f32 / 5120.0);
+            let (mut d, mut buf) = (OpusDecoder::new(48_000, 2)?, vec![0f32; 5760 * 2]);
+            Box::new(move |p, out| {
+                let e = |_| SymError::DecodeError("opus");
+                let Some(p) = p else {
+                    d = OpusDecoder::new(48_000, 2).map_err(e)?;
+                    return Ok(());
+                };
+                let n = d.decode(&p.data, 5760, &mut buf).map_err(e)?;
+                let e = n.saturating_sub(p.trim_end.get() as usize);
+                let s = (p.trim_start.get() as usize).min(e);
+                out.extend(buf[s * 2..e * 2].iter().map(|s| s * gain));
+                Ok(())
+            })
+        }
+        Some(p) => {
+            let mut d =
+                symphonia::default::get_codecs().make_audio_decoder(&p, &Default::default())?;
+            let (mut buf, mut w) = (Vec::<f32>::new(), Vec::<[f32; 2]>::new());
+            Box::new(move |p, out| {
+                let Some(p) = p else {
+                    d.reset();
+                    return Ok(());
+                };
+                let b = d.decode(p)?;
+                let ch = b.spec().channels().count().max(1);
+                if w.len() != ch {
+                    const L: u64 = 1 | 1 << 4 | 1 << 6 | 1 << 9 | 1 << 12 | 1 << 15;
+                    const R: u64 = 2 | 1 << 5 | 1 << 7 | 1 << 10 | 1 << 14 | 1 << 17;
+                    const C: u64 = 1 << 2 | 1 << 8 | 1 << 11 | 1 << 13 | 1 << 16;
+                    let side = |b: u64| {
+                        let k = if b & 3 != 0 { 1.0 } else { FRAC_1_SQRT_2 };
+                        let l = b & (L | 1 << 19 | 1 << 22 | 1 << 24) != 0;
+                        let r = b & (R | 1 << 20 | 1 << 23 | 1 << 25) != 0;
+                        let c = b & (C | 1 << 21) != 0;
+                        [k * f32::from(l || c), k * f32::from(r || c)]
+                    };
+                    w = match b.spec().channels() {
+                        Channels::Positioned(p) if ch > 2 => {
+                            p.iter().map(|q| side(q.bits())).collect()
+                        }
+                        _ => (0..ch)
+                            .map(|i| [f32::from(ch == 1 || i == 0), f32::from(ch == 1 || i == 1)])
+                            .collect(),
+                    };
+                    let sum = |j: usize| w.iter().map(|x| x[j]).sum::<f32>();
+                    let n = 1.0 / sum(0).max(sum(1)).max(1.0);
+                    w.iter_mut().for_each(|x| *x = x.map(|v| v * n));
+                }
+                b.copy_to_vec_interleaved(&mut buf);
+                out.extend(buf.chunks_exact(ch).flat_map(|f| {
+                    let mix = |j: usize| f.iter().zip(&w).map(|(s, x)| s * x[j]).sum::<f32>();
+                    [mix(0), mix(1)]
+                }));
+                Ok(())
+            })
+        }
+    };
+    Ok((tid, tb, frames, sr as f64, pre, dec))
+}
 
 struct Source {
     track: Track,
@@ -468,87 +547,11 @@ impl Source {
             let mss = MediaSourceStream::new(src, Default::default());
             let probe = symphonia::default::get_probe();
             let demux = probe.probe(&Hint::new(), mss, Default::default(), Default::default())?;
-            let t = demux.default_track(TrackType::Audio);
-            let a = t.and_then(|t| Some((t, t.codec_params.as_ref()?.audio()?)));
-            let (t, p) = a.ok_or("The stream has no audio.")?;
-            let (tid, tb, frames, p) = (t.id, t.time_base, t.num_frames, p.clone());
-            let head: Vec<u8> = p.extra_data.clone().unwrap_or_default().into();
-            let sr = p.sample_rate.ok_or("unknown sample rate")?;
-            let params = Some(p).filter(|p| p.codec != CODEC_ID_OPUS);
-            let tb = tb.or(TimeBase::try_from_recip(sr)).ok_or("no time base")?;
+            let (tid, tb, frames, sr, pre, dec) = codec(&*demux)?;
             let base = [0.0, offset.trunc() as f64][usize::from(track.transcoded)];
-            let opus = params.is_none();
-            if opus && (head.len() < 19 || head[9] > 2) {
-                Err("The Opus stream has more than two channels or a bad header.")?
-            }
-            let le = |i: usize| u16::from_le_bytes([head[i], head[i + 1]]);
-            let (pre, sr) = (if opus { le(10) } else { 0 }, sr as f64);
             let dur = frames.map_or(track.duration as f64, |n| {
                 base + n.saturating_sub(pre.into()) as f64 / sr
             });
-            let dec: Decode = match params {
-                None => {
-                    let gain = 10f32.powf(le(16) as i16 as f32 / 5120.0);
-                    let (mut d, mut buf) = (OpusDecoder::new(48_000, 2)?, vec![0f32; 5760 * 2]);
-                    Box::new(move |p, out| {
-                        let e = |_| SymError::DecodeError("opus");
-                        let Some(p) = p else {
-                            d = OpusDecoder::new(48_000, 2).map_err(e)?;
-                            return Ok(());
-                        };
-                        let n = d.decode(&p.data, 5760, &mut buf).map_err(e)?;
-                        let e = n.saturating_sub(p.trim_end.get() as usize);
-                        let s = (p.trim_start.get() as usize).min(e);
-                        out.extend(buf[s * 2..e * 2].iter().map(|s| s * gain));
-                        Ok(())
-                    })
-                }
-                Some(p) => {
-                    let mut d = symphonia::default::get_codecs()
-                        .make_audio_decoder(&p, &Default::default())?;
-                    let (mut buf, mut w) = (Vec::<f32>::new(), Vec::<[f32; 2]>::new());
-                    Box::new(move |p, out| {
-                        let Some(p) = p else {
-                            d.reset();
-                            return Ok(());
-                        };
-                        let b = d.decode(p)?;
-                        let ch = b.spec().channels().count().max(1);
-                        if w.len() != ch {
-                            const L: u64 = 1 | 1 << 4 | 1 << 6 | 1 << 9 | 1 << 12 | 1 << 15;
-                            const R: u64 = 2 | 1 << 5 | 1 << 7 | 1 << 10 | 1 << 14 | 1 << 17;
-                            const C: u64 = 1 << 2 | 1 << 8 | 1 << 11 | 1 << 13 | 1 << 16;
-                            let side = |b: u64| {
-                                let k = if b & 3 != 0 { 1.0 } else { FRAC_1_SQRT_2 };
-                                let l = b & (L | 1 << 19 | 1 << 22 | 1 << 24) != 0;
-                                let r = b & (R | 1 << 20 | 1 << 23 | 1 << 25) != 0;
-                                let c = b & (C | 1 << 21) != 0;
-                                [k * f32::from(l || c), k * f32::from(r || c)]
-                            };
-                            w = match b.spec().channels() {
-                                Channels::Positioned(p) if ch > 2 => {
-                                    p.iter().map(|q| side(q.bits())).collect()
-                                }
-                                _ => (0..ch)
-                                    .map(|i| {
-                                        [f32::from(ch == 1 || i == 0), f32::from(ch == 1 || i == 1)]
-                                    })
-                                    .collect(),
-                            };
-                            let sum = |j: usize| w.iter().map(|x| x[j]).sum::<f32>();
-                            let n = 1.0 / sum(0).max(sum(1)).max(1.0);
-                            w.iter_mut().for_each(|x| *x = x.map(|v| v * n));
-                        }
-                        b.copy_to_vec_interleaved(&mut buf);
-                        out.extend(buf.chunks_exact(ch).flat_map(|f| {
-                            let mix =
-                                |j: usize| f.iter().zip(&w).map(|(s, x)| s * x[j]).sum::<f32>();
-                            [mix(0), mix(1)]
-                        }));
-                        Ok(())
-                    })
-                }
-            };
             let mut s = Source {
                 orate: if rate == 0 { sr as u32 } else { rate },
                 track,
@@ -662,6 +665,14 @@ impl Source {
                 while !self.eof && self.pcm.len() < need {
                     let p = match self.demux.next_packet() {
                         Err(SymError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => None,
+                        Err(SymError::ResetRequired) => {
+                            let (tid, tb, _, sr, pre, dec) = codec(&*self.demux)?;
+                            if sr != self.rate {
+                                Err("The stream changed its sample rate.")?
+                            }
+                            (self.tid, self.tb, self.dec, self.skip) = (tid, tb, dec, pre.into());
+                            continue;
+                        }
                         r => r?,
                     };
                     let Some(p) = p else {
