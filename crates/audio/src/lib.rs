@@ -247,8 +247,9 @@ impl Net {
     }
 
     fn full(&self) {
-        self.st().ahead = AHEAD;
-        self.2.notify_one();
+        if std::mem::replace(&mut self.st().ahead, AHEAD) != AHEAD {
+            self.2.notify_one();
+        }
     }
 }
 
