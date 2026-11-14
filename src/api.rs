@@ -322,6 +322,25 @@ fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
     let order = if asc { "ASC" } else { "DESC" };
     let mut q =
         json!({"_sort": sort_row(sort)[col], "_order": order, "_start": off, "_end": off + n});
+    if sort == "random" {
+        static SEEDS: Mutex<Vec<((usize, usize), u64)>> = Mutex::new(Vec::new());
+        let (mut seeds, new) = (
+            SEEDS.lock().expect("seed lock"),
+            RandomState::new().hash_one(0),
+        );
+        let seed = match seeds.iter_mut().find(|s| s.0 == (col, n)) {
+            Some(s) if off > 0 => s.1,
+            Some(s) => {
+                s.1 = new;
+                new
+            }
+            None => {
+                seeds.push(((col, n), new));
+                new
+            }
+        };
+        q["seed"] = seed.to_string().into();
+    }
     let only = match (sort, col) {
         ("starred", _) => "starred",
         ("rating", _) => "has_rating",
