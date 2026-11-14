@@ -449,6 +449,16 @@ async fn station_loads_no_lyrics() {
 async fn failed_unstar_puts_the_song_back() {
     use iced_test::futures::futures::StreamExt;
     let mut app = app();
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}", srv.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        for c in srv.incoming() {
+            let head = b"HTTP/1.1 500 Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            let _ = std::io::Write::write_all(&mut c.expect("connection"), head);
+        }
+    });
+    let server = serde_json::from_value(json!({"url": url})).expect("server");
+    app.session = Some(navify::api::Session::new(server));
     let liked: (Vec<Song>, usize) = (parse(json!([{"id": "a", "starred": true}])).unwrap(), 1);
     let _ = app.update(Message::Loaded("liked".into(), 0, Ok(Arc::new(liked))));
     let t = app.update(Message::Star(vec!["a".into()], false));
@@ -456,13 +466,15 @@ async fn failed_unstar_puts_the_song_back() {
     assert_eq!(liked(&app), Some(0));
     let mut s = iced_test::runtime::task::into_stream(t).expect("a request");
     let undo = async {
-        while let Some(a) = s.next().await {
+        while liked(&app) == Some(0)
+            && let Some(a) = s.next().await
+        {
             if let iced_test::runtime::Action::Output(m) = a {
                 let _ = app.update(m);
             }
         }
     };
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), undo).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(20), undo).await;
     assert_eq!(liked(&app), Some(1));
     assert!(app.is_starred("a", false));
 }
