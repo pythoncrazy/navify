@@ -444,3 +444,25 @@ async fn station_loads_no_lyrics() {
     assert_eq!(app.key_of("lyrics"), "lib");
     assert!(!app.pending.iter().any(|k| k.starts_with("lyrics:")));
 }
+
+#[tokio::test]
+async fn failed_unstar_puts_the_song_back() {
+    use iced_test::futures::futures::StreamExt;
+    let mut app = app();
+    let liked: (Vec<Song>, usize) = (parse(json!([{"id": "a", "starred": true}])).unwrap(), 1);
+    let _ = app.update(Message::Loaded("liked".into(), 0, Ok(Arc::new(liked))));
+    let t = app.update(Message::Star(vec!["a".into()], false));
+    let liked = |app: &App| app.data::<(Vec<Song>, usize)>("liked").map(|l| l.0.len());
+    assert_eq!(liked(&app), Some(0));
+    let mut s = iced_test::runtime::task::into_stream(t).expect("a request");
+    let undo = async {
+        while let Some(a) = s.next().await {
+            if let iced_test::runtime::Action::Output(m) = a {
+                let _ = app.update(m);
+            }
+        }
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), undo).await;
+    assert_eq!(liked(&app), Some(1));
+    assert!(app.is_starred("a", false));
+}

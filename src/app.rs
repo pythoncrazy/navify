@@ -365,6 +365,7 @@ pub struct App {
     pub cache: HashMap<String, (Instant, AnyData)>,
     pub seeds: HashMap<String, AnyData>,
     stale: HashSet<String>,
+    dirty: HashMap<String, bool>,
     pub pending: HashSet<String>,
     pub scrolls: HashMap<String, (f32, f32)>,
     pub lyric: bool,
@@ -475,6 +476,7 @@ impl App {
             .map_or_else(HashMap::new, |s| load_data(&s.server.id));
         Self {
             stale: cache.keys().cloned().collect(),
+            dirty: HashMap::new(),
             cache,
             session,
             cfg,
@@ -817,11 +819,31 @@ impl App {
         let old = self.playlist(&pid);
         let old = old.map_or(String::new(), |p| p.cover.clone());
         let fresh = self.pl_fresh(pid.clone(), old, 3);
-        let undo = reload(&pid);
-        let f =
-            |s: Session| async move { s.playlist_update(&pid, None, None, None, &add, &rm).await };
+        let (undo, key) = (reload(&pid), format!("playlist:{pid}"));
+        if self.pending.contains(&format!("{key}#0")) {
+            self.dirty.insert(key.clone(), false);
+        }
+        let f = |s: Session| {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            static TURN: LazyLock<tokio::sync::watch::Sender<u64>> =
+                LazyLock::new(|| tokio::sync::watch::channel(0).0);
+            let n = NEXT.fetch_add(1, Relaxed);
+            async move {
+                let _ = TURN.subscribe().wait_for(|&t| t == n).await;
+                let r = s.playlist_update(&pid, None, None, None, &add, &rm).await;
+                TURN.send_replace(n + 1);
+                r
+            }
+        };
+        let sent = act(move |a| {
+            a.dirty
+                .iter_mut()
+                .filter(|d| *d.0 == key)
+                .for_each(|d| *d.1 = true)
+        });
         Task::batch([
             self.send(f, "Could not change the playlist.", undo)
+                .chain(Task::done(sent))
                 .chain(fresh),
             self.toast(&done),
         ])
@@ -1034,7 +1056,9 @@ impl App {
         blocking("Could not save the page cache. ", move || {
             use flate2::{Compression, write::DeflateEncoder};
             prune(&mut body);
-            let (path, tmp) = (data_file(), data_file().with_extension("tmp"));
+            static N: AtomicU32 = AtomicU32::new(0);
+            let tmp = format!("tmp{}", N.fetch_add(1, Relaxed));
+            let (path, tmp) = (data_file(), data_file().with_extension(tmp));
             std::fs::create_dir_all(path.parent().expect("the cache has a directory"))?;
             let mut z = DeflateEncoder::new(Vec::new(), Compression::default());
             std::io::Write::write_all(&mut z, &serde_json::to_vec(&body)?)?;
@@ -1379,7 +1403,10 @@ impl App {
                     let known = &mut known.as_mut().expect("loaded colors").1;
                     let mut add = String::new();
                     let out = items.into_iter().map(|(k, sz, b)| {
-                        let c = colors.get(bare(&k)).or(known.get(&k)).copied();
+                        let c = known
+                            .get(&k)
+                            .copied()
+                            .or_else(|| colors.get(bare(&k)).filter(|_| !k.contains('#')).copied());
                         let r = b.and_then(|b| decode(b, &k, sz, c, &s.cover_file(&k, sz)));
                         if let Ok((c, _, _)) = &r {
                             colors.insert(bare(&k).into(), *c);
@@ -1542,6 +1569,7 @@ impl App {
         let route = self.history[self.hi].clone();
         (self.route, self.pl_find, self.pl_more) = (route.clone(), None, None);
         self.covers.wait = false;
+        self.covers.failed.clear();
         self.panel = [self.panel, 0][usize::from(self.panel == 4)];
         (self.menu, self.sel, self.picked) = (None, None, BTreeSet::new());
         let keep = |h: &String| h.starts_with("lib") || h == "queue" || h == "search";
@@ -1664,6 +1692,7 @@ impl App {
         (self.starred, self.ratings, self.plays, self.recent) = Default::default();
         (self.cache, self.seeds, self.pending, self.scrolls) = Default::default();
         self.stale.clear();
+        self.dirty.clear();
         (self.covers, self.history, self.hi, self.panel) = Default::default();
         (self.menu, self.modal, self.recording, self.hover) = Default::default();
         (self.sel, self.picked, self.pl_find, self.pl_more) = Default::default();
@@ -1798,6 +1827,10 @@ impl App {
             Message::Loaded(key, off, Ok(v)) => {
                 self.pending.remove(&format!("{key}#{off}"));
                 self.stale.remove(&key);
+                if let Some(sent) = self.dirty.remove(&key).filter(|_| off == 0) {
+                    self.stale.extend(sent.then(|| key.clone()));
+                    return Task::batch(sent.then(|| self.request(&key, 0)));
+                }
                 let mb = key
                     .strip_prefix("artist:")
                     .and_then(|id| self.find_artist(id))
@@ -1972,10 +2005,22 @@ impl App {
                 };
                 let back = ids.iter().filter(|id| was(id) != Some(on)).cloned();
                 let back: Vec<String> = back.collect();
+                let kind = |id: &&String| match self.find_song(id) {
+                    Some(_) => 0,
+                    None if self.find_album(id).is_some() => 1,
+                    None => 2 * usize::from(self.find_artist(id).is_some()),
+                };
+                let of = |k| ids.iter().filter(|id| kind(id) == k).cloned().collect();
+                let kinds: [Vec<String>; 3] = [0, 1, 2].map(of);
+                let keep = ["liked", "lib"].map(|k| (k, self.cache.get(k).cloned()));
                 self.star(&ids, on);
-                let star = |s: Session| async move { s.star(&ids, on).await };
+                let star = |s: Session| async move { s.star(&kinds, on).await };
                 let star = self.send(star, "Could not update Your Library.", move |a| {
-                    a.star(&back, !on);
+                    a.starred.extend(back.iter().map(|id| (id.clone(), !on)));
+                    let keep = keep
+                        .iter()
+                        .filter_map(|(k, v)| Some((k.to_string(), v.clone()?)));
+                    a.cache.extend(keep);
                     Task::none()
                 });
                 return Task::batch([self.covers_now(), star]);
@@ -1986,6 +2031,9 @@ impl App {
                 let back = id.clone();
                 let rate = |s: Session| async move { s.rate(&id, n).await };
                 return self.send(rate, "Could not set the rating.", move |a| {
+                    if a.ratings.get(&back) != Some(&n) {
+                        return Task::none();
+                    }
                     match old {
                         Some(v) => a.ratings.insert(back.clone(), v),
                         None => a.ratings.remove(&back),

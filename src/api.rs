@@ -792,9 +792,10 @@ impl Session {
         self.act("scrobble", q).await
     }
 
-    pub async fn star(&self, ids: &[String], on: bool) -> Result<()> {
+    pub async fn star(&self, [songs, albums, artists]: &[Vec<String>; 3], on: bool) -> Result<()> {
         let method = if on { "star" } else { "unstar" };
-        self.act(method, json!({"id": ids})).await
+        let q = json!({"id": songs, "albumId": albums, "artistId": artists});
+        self.act(method, q).await
     }
 
     pub async fn rate(&self, id: &str, n: u8) -> Result<()> {
