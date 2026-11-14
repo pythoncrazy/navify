@@ -72,14 +72,20 @@ enum Cmd {
 }
 
 pub fn devices() -> Result<Vec<(String, String)>, String> {
+    let mut seen = std::collections::HashMap::new();
     cpal::default_host()
         .output_devices()
         .map_err(|e| e.to_string())?
         .map(|d| {
-            Ok((
-                d.id().map_err(|e| e.to_string())?.to_string(),
-                d.to_string(),
-            ))
+            let (id, name) = (d.id().map_err(|e| e.to_string())?, d.to_string());
+            let n = seen.entry(name.clone()).or_insert(0);
+            *n += 1;
+            let name = if *n > 1 {
+                format!("{name} ({n})")
+            } else {
+                name
+            };
+            Ok((id.to_string(), name))
         })
         .collect()
 }

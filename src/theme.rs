@@ -160,9 +160,17 @@ fn glyphs(s: &str, size: f32, w: Weight) -> Rc<[(f32, usize)]> {
             let fs = fs.raw();
             let mut b = ct::Buffer::new(fs, ct::Metrics::new(size, size * 1.3));
             b.set_text(fs, s, &to_attributes(fw(w)), ct::Shaping::Advanced, None);
-            let end = |g: &ct::LayoutGlyph| (g.x + g.w, g.end);
-            let runs = b.layout_runs().flat_map(|r| r.glyphs.iter().map(end));
-            runs.collect()
+            let end = |g: &ct::LayoutGlyph| (g.end, g.w);
+            let mut g: Vec<_> = b
+                .layout_runs()
+                .flat_map(|r| r.glyphs.iter().map(end))
+                .collect();
+            g.sort_by_key(|g| g.0);
+            let sum = |x: &mut f32, (end, w): (usize, f32)| {
+                *x += w;
+                Some((*x, end))
+            };
+            g.into_iter().scan(0.0, sum).collect()
         };
         m.entry(h.finish()).or_insert_with(shape).clone()
     })

@@ -2373,7 +2373,9 @@ impl App {
             Message::Close => {
                 let q = self.loaded.then(|| self.save_queue());
                 let save = Task::batch(q.into_iter().chain([self.persist(), self.save_data()]));
-                return save.collect().then(|_| iced::exit());
+                self.player.iter().for_each(|p| p.set_paused(true));
+                let late = later(3.0, Message::Noop).then(|_| iced::exit());
+                return Task::batch([save.collect().then(|_| iced::exit()), late]);
             }
             Message::Window(false) if self.tray.is_none() || !self.cfg.settings.tray => {
                 let min = self.win.map(|id| iced::window::minimize(id, true));
@@ -3126,8 +3128,9 @@ impl App {
                 Event::Window(W::Unfocused) => Some(task(|_| {
                     let min = |m: Option<bool>| {
                         task(move |a| {
-                            a.hidden = m == Some(true);
-                            let tray = a.hidden && a.cfg.settings.min_tray && a.tray.is_some();
+                            let min = m == Some(true);
+                            a.hidden |= min;
+                            let tray = min && a.cfg.settings.min_tray && a.tray.is_some();
                             Task::batch(tray.then(|| a.update(Message::Window(false))))
                         })
                     };
