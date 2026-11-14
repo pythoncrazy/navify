@@ -69,14 +69,10 @@ pub fn focusable<'a>(
     id: Option<&'static str>,
 ) -> El<'a> {
     let id = id.map(iced::advanced::widget::Id::from);
-    Element::new(wrap::Wrap(
-        c.into(),
-        Some((msg, radius, id)),
-        None,
-        0,
-        usize::MAX,
-        (Vec::new(), 0.0),
-    ))
+    Element::new(wrap::Wrap {
+        1: Some((msg, radius, id)),
+        ..wrap::Wrap::new(c.into(), 0)
+    })
 }
 
 pub fn live<'a>(
@@ -85,36 +81,22 @@ pub fn live<'a>(
     build: impl Fn(f32) -> El<'a> + 'a,
 ) -> El<'a> {
     let p = clock();
-    Element::new(wrap::Wrap(
-        build(p),
-        None,
-        Some((clock, Box::new(build), run, p)),
-        0,
-        usize::MAX,
-        (Vec::new(), 0.0),
-    ))
+    let c = build(p);
+    Element::new(wrap::Wrap {
+        2: Some((clock, Box::new(build), run, p)),
+        ..wrap::Wrap::new(c, 0)
+    })
 }
 
 pub fn smooth(c: El<'_>, on: bool, lyr: usize) -> El<'_> {
-    Element::new(wrap::Wrap(
-        c,
-        None,
-        None,
-        usize::from(on),
-        lyr,
-        (Vec::new(), 0.0),
-    ))
+    Element::new(wrap::Wrap {
+        4: lyr,
+        ..wrap::Wrap::new(c, usize::from(on))
+    })
 }
 
 pub fn pane<'a>(c: impl Into<El<'a>>) -> El<'a> {
-    Element::new(wrap::Wrap(
-        c.into(),
-        None,
-        None,
-        2,
-        usize::MAX,
-        (Vec::new(), 0.0),
-    ))
+    Element::new(wrap::Wrap::new(c.into(), 2))
 }
 
 pub fn hov<'a>(
@@ -129,7 +111,7 @@ pub fn hov<'a>(
         }))
 }
 
-pub fn album_of(s: &crate::api::Song) -> Message {
+pub fn album_of(s: &Song) -> Message {
     match s.url.is_empty() {
         true => go("album", &s.album_id),
         false => Message::Nav("radio".into()),
@@ -143,25 +125,14 @@ pub fn shade<'a>(g: char, r: f32, m: Message) -> El<'a> {
 }
 
 pub fn vgap<'a>(c: impl Into<El<'a>>, lo: usize) -> El<'a> {
-    Element::new(wrap::Wrap(
-        c.into(),
-        None,
-        None,
-        3 + lo,
-        usize::MAX,
-        (Vec::new(), 0.0),
-    ))
+    Element::new(wrap::Wrap::new(c.into(), 3 + lo))
 }
 
 pub fn back<'a>(stops: &[(f32, Color)], h: f32, c: impl Into<El<'a>>) -> El<'a> {
-    Element::new(wrap::Wrap(
-        c.into(),
-        None,
-        None,
-        0,
-        usize::MAX,
-        (stops.to_vec(), h),
-    ))
+    Element::new(wrap::Wrap {
+        5: (stops.to_vec(), h),
+        ..wrap::Wrap::new(c.into(), 0)
+    })
 }
 
 pub fn bands<'a>(stops: &[(f32, Color)]) -> El<'a> {
@@ -196,6 +167,11 @@ mod wrap {
         pub usize,
         pub (Vec<(f32, Color)>, f32),
     );
+    impl<'a> Wrap<'a> {
+        pub fn new(c: El<'a>, mode: usize) -> Self {
+            Wrap(c, None, None, mode, usize::MAX, (Vec::new(), 0.0))
+        }
+    }
     #[derive(Default)]
     struct Ring(
         bool,
@@ -265,7 +241,7 @@ mod wrap {
                 let at = |f: f32| {
                     let s = &self.5.0;
                     let i = s.iter().position(|s| s.0 >= f).unwrap_or(s.len() - 1);
-                    let (a, z) = (self.5.0[i.saturating_sub(1)], self.5.0[i]);
+                    let (a, z) = (s[i.saturating_sub(1)], s[i]);
                     let k = ((f - a.0) / (z.0 - a.0)).clamp(0.0, 1.0);
                     let m = |x: f32, y: f32| x + (y - x) * if k.is_nan() { 1.0 } else { k };
                     let (a, z) = (a.1, z.1);
@@ -374,22 +350,11 @@ mod wrap {
                 sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
             }
             use std::sync::atomic::Ordering::Relaxed;
-            struct Back(Option<u64>);
-            impl Drop for Back {
-                fn drop(&mut self) {
-                    self.0
-                        .iter()
-                        .for_each(|&o| crate::app::SHIFT.store(o, Relaxed));
-                }
-            }
-            let shift = (l.bounds().x - v.x, l.bounds().y - v.y);
-            let shift = (shift.0.to_bits() as u64) << 32 | shift.1.to_bits() as u64;
-            let _back = Back((self.3 == 2).then(|| crate::app::SHIFT.swap(shift, Relaxed)));
+            let bits = |x: f32, y: f32| (x.to_bits() as u64) << 32 | y.to_bits() as u64;
             match (e, &self.1, &self.2) {
                 _ if self.3 >= 2 => {}
                 (Event::Mouse(CursorMoved { position: p }), None, None) => {
-                    let bits = (p.x.to_bits() as u64) << 32 | p.y.to_bits() as u64;
-                    crate::app::CURSOR.store(bits, Relaxed);
+                    crate::app::CURSOR.store(bits(p.x, p.y), Relaxed);
                 }
                 (
                     Event::Mouse(
@@ -614,7 +579,12 @@ mod wrap {
                 );
             let pre = drag.then(|| scan(w, c0, Some((0.0, 0.0)), None).0.map(|x| x.2));
             let pre = pre.flatten();
+            let shift = bits(l.bounds().x - v.x, l.bounds().y - v.y);
+            let old = (self.3 == 2).then(|| crate::app::SHIFT.swap(shift, Relaxed));
             pass(w, c0, e, c, sh, false);
+            if let Some(o) = old {
+                crate::app::SHIFT.store(o, Relaxed);
+            }
             if pre.is_some_and(|o| {
                 scan(w, c0, Some((0.0, 0.0)), None)
                     .0
@@ -1033,9 +1003,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         theme::chip_btn(name, f == n, m)
     });
     let chips = Row::with_children(chips).spacing(8);
-    let count = app
-        .data::<crate::app::Lib>("lib")
-        .map_or(0, |l| l.liked as u32);
+    let count = app.data::<Lib>("lib").map_or(0, |l| l.liked as u32);
     let pins = PINS.iter().filter(|p| p.0 >> f & 1 == 1 && hit(p.3));
     let pins = pins.map(|&(_, c, green, t, r)| {
         let (bg, fg) = [(ELEVATED, SUB), (SONGS_BG, ACCENT)][usize::from(green)];
@@ -1087,8 +1055,7 @@ fn lib_panel<'a>(app: &'a App) -> El<'a> {
         let focus = open.then(|| iced::widget::operation::focus("libfind"));
         iced::Task::batch([a.covers_now()].into_iter().chain(focus))
     });
-    let x = theme::sq(i(i::SEARCH, 20.0).center(), 32.0).style(theme::link(SUB));
-    let x = x.on_press(find.clone());
+    let x = tool_btn(i::SEARCH, false, find.clone());
     let field: El = match &app.lib_find {
         None => tip(x, "Search in Your Library", Bottom),
         Some(v) => {
@@ -1255,8 +1222,8 @@ fn player_bar(app: &App) -> El<'_> {
     let mute = if app.muted { "Unmute" } else { "Mute" };
     let np = Message::Panel(1);
     let hot = app.hover.as_deref() == Some("queue");
-    let q = [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(app.panel == 2)];
     let (p2, p3) = (app.panel == 2, app.panel == 3);
+    let q = [[SUB, TEXT][usize::from(hot)], ACCENT][usize::from(p2)];
     let queue = side(queue_icon(14.5, q), p2, "Queue", Message::Panel(2));
     let panels = row![
         song.map(|_| side(ic(i::PR), app.panel == 1, "Now playing view", np)),
@@ -1299,7 +1266,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let m = Some(Message::MenuClose);
         focusable(b.on_press(Message::MenuClose), m, 16.0, Some("layer"))
     };
-    let close = shut(theme::sq(i(i::X, 20.0).center(), 32.0).style(theme::link(SUB)));
+    let close = shut(tool_btn(i::X, false, Message::MenuClose));
     let style = fill(theme::MENU, 8.0);
     if kind == 3 {
         let caps = |id: &str| {
@@ -1447,7 +1414,6 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         let list = scrollable(pane(list.padding([24, 24]).width(Fill))).height(Fill);
         let list = list.style(theme::scroll);
         let title = v.and_then(|v| v["title"].as_str()).unwrap_or_default();
-        let title = title.to_string();
         let head = row![bold("Song details", 24.0).width(Fill), close].align_y(Center);
         let head = column![
             head,
@@ -1458,7 +1424,7 @@ fn modal<'a>(app: &'a App, id: &str, kind: u8) -> El<'a> {
         return body.style(fill(theme::PANEL, 8.0)).into();
     }
     if [2, 4, 7].contains(&kind) {
-        let name = pl.map_or("", |p| p.name.as_str()).to_string();
+        let name = pl.map_or("", |p| p.name.as_str());
         let b = theme::fw(iced::font::Weight::Bold);
         let red = [color!(0xe91429), color!(0xd81326), color!(0xa60e1d)];
         let green = [ACCENT, color!(0x3be477), color!(0x1abc54)];
@@ -1631,6 +1597,8 @@ pub fn view(app: &App) -> El<'_> {
         let t = container(t).center_x(Fill).align_bottom(Fill);
         t.padding(padding::bottom(104))
     });
+    let over = [modal, menu].into_iter().flatten().map(El::from);
+    let over = over.chain(toast.map(El::from));
     if app.full {
         let s = app.current_song();
         let top = s.and_then(|s| app.covers.color(&s.cover));
@@ -1647,9 +1615,7 @@ pub fn view(app: &App) -> El<'_> {
         let body = column![body.padding(48).height(Fill), player_bar(app)];
         let bg = [(0.0, top.unwrap_or(ELEVATED)), (1.0, BG)];
         let body = back(&bg, 0.0, body);
-        let top = [modal, menu].into_iter().flatten().map(El::from);
-        let top = top.chain(toast.map(El::from));
-        return stack![body].extend(top).into();
+        return stack![body].extend(over).into();
     }
     let mut scroll = scrollable(pane(pages::route(app))).id(SCROLL);
     if !matches!(app.route.as_str(), "lyrics" | "settings") {
@@ -1712,7 +1678,5 @@ pub fn view(app: &App) -> El<'_> {
     let caps = row![gap(), caps(app.lib_w()), gap(), caps(app.main_w())].push(right);
     let pad = |h| Space::new().height(h);
     let caps = column![pad(64), caps.height(Fill), pad(88)];
-    let top = [modal, menu].into_iter().flatten().map(El::from);
-    let top = top.chain(toast.map(El::from));
-    stack![base, caps].extend(top).into()
+    stack![base, caps].extend(over).into()
 }
