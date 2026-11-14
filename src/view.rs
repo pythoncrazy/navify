@@ -374,6 +374,17 @@ mod wrap {
                 sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
             }
             use std::sync::atomic::Ordering::Relaxed;
+            struct Back(Option<u64>);
+            impl Drop for Back {
+                fn drop(&mut self) {
+                    self.0
+                        .iter()
+                        .for_each(|&o| crate::app::SHIFT.store(o, Relaxed));
+                }
+            }
+            let shift = (l.bounds().x - v.x, l.bounds().y - v.y);
+            let shift = (shift.0.to_bits() as u64) << 32 | shift.1.to_bits() as u64;
+            let _back = Back((self.3 == 2).then(|| crate::app::SHIFT.swap(shift, Relaxed)));
             match (e, &self.1, &self.2) {
                 _ if self.3 >= 2 => {}
                 (Event::Mouse(CursorMoved { position: p }), None, None) => {
@@ -619,7 +630,8 @@ mod wrap {
             let press = matches!(e, Event::Mouse(iced::mouse::Event::ButtonPressed(_)));
             let hit = press && c.is_over(l.bounds()) || go && ring.0;
             if hit {
-                let d = c.position().map_or(iced::Vector::ZERO, |p| {
+                let (sx, sy) = crate::app::point(crate::app::SHIFT.load(Relaxed));
+                let d = c.position().map_or(iced::Vector::new(sx, sy), |p| {
                     let (x, y) = crate::app::cursor();
                     iced::Vector::new(x - p.x, y - p.y)
                 });

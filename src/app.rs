@@ -421,6 +421,7 @@ pub struct App {
     anchor: usize,
     pub hover: Option<String>,
     aim: Option<String>,
+    heard_stop: Option<iced::task::Handle>,
     warmed: Option<String>,
     pub popular_all: bool,
     pub search_tab: usize,
@@ -1294,7 +1295,10 @@ impl App {
         let n = self.listen_seq;
         let heard =
             task(move |a| Task::batch((n == a.listen_seq).then(|| a.listen(a.since.is_some()))));
-        Task::batch(on.then(|| later(left, heard)))
+        let wait = on.then(|| later(left, heard).abortable());
+        let (wait, stop) = wait.map_or((None, None), |(t, h)| (Some(t), Some(h.abort_on_drop())));
+        self.heard_stop = stop;
+        Task::batch(wait)
     }
 
     fn restore(&self) -> Task<Message> {
@@ -2705,6 +2709,11 @@ impl App {
                 return Task::none();
             }
         };
+        let mut s = s;
+        let same = |x: &&crate::api::Server| (&x.url, &x.user) == (&s.server.url, &s.server.user);
+        if let Some(old) = self.cfg.servers.iter().find(same) {
+            s.server.id.clone_from(&old.id);
+        }
         let (id, pass) = (s.server.id.clone(), self.login.pass.clone());
         let key = id.clone();
         let kept = match self.login.remember {
@@ -2849,8 +2858,9 @@ impl App {
             navify_audio::Event::Started(id) => {
                 let done = self.listen(false);
                 let next = self.next_index(false);
-                let n =
-                    next.filter(|&n| self.queue.get(self.real_at(n)).is_some_and(|s| s.id == id));
+                let at = |n: &usize| self.queue.get(self.real_at(*n)).is_some_and(|s| s.id == id);
+                let rest = (self.index + 1..self.queue.len()).chain(0..self.index);
+                let n = next.filter(at).or_else(|| rest.clone().find(at));
                 self.index = n.unwrap_or(self.index);
                 let began = Task::batch(n.map(|_| self.began()));
                 Task::batch([done, began, self.listen(self.playing)])
@@ -3663,12 +3673,16 @@ pub static DOWN: AtomicBool = AtomicBool::new(false);
 pub static CURSOR: AtomicU64 = AtomicU64::new(0);
 
 pub fn cursor() -> (f32, f32) {
-    let bits = CURSOR.load(Relaxed);
+    point(CURSOR.load(Relaxed))
+}
+
+pub fn point(bits: u64) -> (f32, f32) {
     (
         f32::from_bits((bits >> 32) as u32),
         f32::from_bits(bits as u32),
     )
 }
+pub static SHIFT: AtomicU64 = AtomicU64::new(0);
 pub static MODS: AtomicU32 = AtomicU32::new(0);
 pub static ANCHOR: Mutex<iced::Rectangle> = Mutex::new(iced::Rectangle {
     x: 0.0,
