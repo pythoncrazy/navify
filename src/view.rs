@@ -349,8 +349,8 @@ mod wrap {
                 let wait = p.floor() + 1.15 - p;
                 sh.request_redraw_at(*now + std::time::Duration::from_secs_f32(wait));
             }
+            use crate::app::bits;
             use std::sync::atomic::Ordering::Relaxed;
-            let bits = |x: f32, y: f32| (x.to_bits() as u64) << 32 | y.to_bits() as u64;
             match (e, &self.1, &self.2) {
                 _ if self.3 >= 2 => {}
                 (Event::Mouse(CursorMoved { position: p }), None, None) => {
@@ -1182,7 +1182,7 @@ fn player_bar(app: &App) -> El<'_> {
     let glyph = theme::filled([theme::fill::PLAY, theme::fill::PAUSE][playing], 16.0);
     let bg = song.map_or(TEXT.scale_alpha(0.3), |_| TEXT);
     let play = theme::sq(glyph.color(BG).center(), 32.0).style(theme::solid([bg; 3], BG));
-    let play = mouse_area(play.on_press(Message::Toggle)).on_enter(act(App::wake));
+    let play = mouse_area(play.on_press(Message::Toggle)).on_enter(act(|a| a.ready(true)));
     let play = tip(play, ["Play", "Pause"][playing], Top);
     let (ic, fi) = (|c| i(c, 16.0), |c| theme::filled(c, 19.0));
     let dim = song.is_none().then_some(SUB.scale_alpha(0.3));

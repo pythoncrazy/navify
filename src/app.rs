@@ -556,8 +556,7 @@ impl App {
                     }
                 }
                 "menu" if !songs.is_empty() => {
-                    let at = (480f32.to_bits() as u64) << 32 | 300f32.to_bits() as u64;
-                    CURSOR.store(at, Relaxed);
+                    CURSOR.store(bits(480.0, 300.0), Relaxed);
                     let kind = Box::new(MenuKind::Song(songs[..1].to_vec()));
                     task = self.update(Message::Menu(kind));
                 }
@@ -1702,11 +1701,7 @@ impl App {
         }
     }
 
-    pub fn wake(&mut self) {
-        self.ready(true);
-    }
-
-    fn ready(&mut self, device: bool) {
+    pub(crate) fn ready(&mut self, device: bool) {
         let t = self
             .current_song()
             .map(|s| (self.track(s), s.url.is_empty() && !self.loaded));
@@ -3636,6 +3631,10 @@ pub static CURSOR: AtomicU64 = AtomicU64::new(0);
 
 pub fn cursor() -> (f32, f32) {
     point(CURSOR.load(Relaxed))
+}
+
+pub fn bits(x: f32, y: f32) -> u64 {
+    (x.to_bits() as u64) << 32 | y.to_bits() as u64
 }
 
 pub fn point(bits: u64) -> (f32, f32) {
