@@ -1873,7 +1873,9 @@ fn lyrics(app: &App) -> El<'_> {
         return container(t).center_x(Fill).padding(80).into();
     };
     let key = format!("lyrics:{}", song.id);
-    if let Some(s) = state(app, &key) {
+    if song.url.is_empty()
+        && let Some(s) = state(app, &key)
+    {
         return s;
     }
     let bg = fill(head_color(app, &song.cover), 0.0);
