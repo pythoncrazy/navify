@@ -220,11 +220,19 @@ fn draw(
                         .map(|c| c.a() as f32 / 255.0)
                         .unwrap_or(1.0);
 
+                let x = physical_glyph.x + placement.left;
+                let y = physical_glyph.y - placement.top
+                    + (run.line_y * transformation.scale_factor()).round()
+                        as i32;
+
+                if clip_mask.is_none() {
+                    blit(pixels, x, y, pixmap, opacity);
+                    continue;
+                }
+
                 pixels.draw_pixmap(
-                    physical_glyph.x + placement.left,
-                    physical_glyph.y - placement.top
-                        + (run.line_y * transformation.scale_factor()).round()
-                            as i32,
+                    x,
+                    y,
                     pixmap,
                     &tiny_skia::PixmapPaint {
                         opacity,
@@ -357,6 +365,39 @@ impl GlyphCache {
             self.trim_count = 0;
         } else {
             self.trim_count += 1;
+        }
+    }
+}
+
+pub(crate) fn blit(
+    pixels: &mut tiny_skia::PixmapMut<'_>,
+    x: i32,
+    y: i32,
+    glyph: tiny_skia::PixmapRef<'_>,
+    opacity: f32,
+) {
+    let (w, h) = (pixels.width() as i32, pixels.height() as i32);
+    let (gw, gh) = (glyph.width() as i32, glyph.height() as i32);
+    let (x0, x1) = (x.max(0), (x + gw).min(w));
+    let (y0, y1) = (y.max(0), (y + gh).min(h));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let scale = (opacity.clamp(0.0, 1.0) * 256.0).round() as u32;
+    let n = (x1 - x0) as usize * 4;
+    let (src, dst) = (glyph.data(), pixels.data_mut());
+    for row in y0..y1 {
+        let s = ((row - y) * gw + x0 - x) as usize * 4;
+        let d = (row * w + x0) as usize * 4;
+        let pairs = src[s..s + n]
+            .chunks_exact(4)
+            .zip(dst[d..d + n].chunks_exact_mut(4));
+        for (s, d) in pairs {
+            let keep = 255 - ((u32::from(s[3]) * scale) >> 8);
+            for (s, d) in s.iter().zip(d) {
+                let over = (u32::from(*d) * keep + 255) >> 8;
+                *d = (((u32::from(*s) * scale) >> 8) + over).min(255) as u8;
+            }
         }
     }
 }

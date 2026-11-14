@@ -78,6 +78,8 @@ fn main() -> iced::Result {
         std::process::exit(r.is_err() as i32);
     }
     unsafe { std::env::set_var("TOKIO_WORKER_THREADS", "2") };
+    std::thread::spawn(navify::api::Session::client);
+    std::thread::spawn(iced::advanced::graphics::text::font_system);
     #[cfg(target_os = "linux")]
     if linux::x11() {
         unsafe { std::env::remove_var("WAYLAND_DISPLAY") };

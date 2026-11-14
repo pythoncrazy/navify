@@ -50,9 +50,98 @@ impl Pipeline {
     ) {
         let mut cache = self.cache.borrow_mut();
 
-        let Ok(image) = cache.allocate(handle) else {
+        if cache.allocate(handle).is_err() {
             return;
-        };
+        }
+
+        let entry = cache
+            .entries
+            .get_mut(&handle.id())
+            .and_then(Option::as_mut)
+            .expect("Image should be allocated");
+
+        let image = tiny_skia::PixmapRef::from_bytes(
+            bytemuck::cast_slice(&entry.pixels),
+            entry.width,
+            entry.height,
+        )
+        .expect("Build pixmap from image bytes");
+
+        // An upright, opaque image with no clip mask is scaled one time
+        // and then copied to whole pixels.
+        let width = (bounds.width * transform.sx).round();
+        let height = (bounds.height * transform.sy).round();
+
+        if !transform.has_skew()
+            && clip_mask.is_none()
+            && opacity >= 1.0
+            && filter_method == raster::FilterMethod::Linear
+            && width >= 1.0
+            && height >= 1.0
+        {
+            let x = (bounds.x * transform.sx + transform.tx).round() as i32;
+            let y = (bounds.y * transform.sy + transform.ty).round() as i32;
+            let (width, height) = (width as u32, height as u32);
+
+            if (width, height) == (entry.width, entry.height) {
+                return crate::text::blit(pixels, x, y, image, 1.0);
+            }
+
+            let found = entry
+                .scaled
+                .iter()
+                .position(|s| (s.width(), s.height()) == (width, height));
+
+            let found = found.or_else(|| {
+                // Halve the image while it is two times too large, so
+                // each target pixel gets the mean of its source pixels.
+                let resize =
+                    |from: tiny_skia::PixmapRef<'_>, w: u32, h: u32| {
+                        let mut to = tiny_skia::Pixmap::new(w, h)?;
+
+                        to.draw_pixmap(
+                            0,
+                            0,
+                            from,
+                            &tiny_skia::PixmapPaint {
+                                quality: tiny_skia::FilterQuality::Bilinear,
+                                ..Default::default()
+                            },
+                            tiny_skia::Transform::from_scale(
+                                w as f32 / from.width() as f32,
+                                h as f32 / from.height() as f32,
+                            ),
+                            None,
+                        );
+
+                        Some(to)
+                    };
+                let mut half: Option<tiny_skia::Pixmap> = None;
+
+                loop {
+                    let from = half.as_ref().map_or(image, |h| h.as_ref());
+                    let (w, h) = (from.width() / 2, from.height() / 2);
+
+                    if w < width * 2 || h < height * 2 {
+                        break;
+                    }
+
+                    half = Some(resize(from, w, h)?);
+                }
+
+                let from = half.as_ref().map_or(image, |h| h.as_ref());
+                let scaled = resize(from, width, height)?;
+
+                entry.scaled.truncate(2);
+                entry.scaled.insert(0, scaled);
+
+                Some(0)
+            });
+
+            if let Some(scaled) = found.and_then(|i| entry.scaled.get(i)) {
+                return crate::text::blit(pixels, x, y, scaled.as_ref(), 1.0);
+            }
+        }
 
         let width_scale = bounds.width / image.width() as f32;
         let height_scale = bounds.height / image.height() as f32;
@@ -125,6 +214,7 @@ impl Cache {
                 width: image.width(),
                 height: image.height(),
                 pixels: buffer,
+                scaled: Vec::new(),
             }));
         }
 
@@ -157,4 +247,5 @@ struct Entry {
     width: u32,
     height: u32,
     pixels: Vec<u32>,
+    scaled: Vec<tiny_skia::Pixmap>,
 }
