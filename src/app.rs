@@ -2394,6 +2394,7 @@ impl App {
                 let q = self.loaded.then(|| self.save_queue());
                 let save = Task::batch(q.into_iter().chain([self.persist(), self.save_data()]));
                 self.player.iter().for_each(|p| p.set_paused(true));
+                std::mem::forget(self.media.take());
                 let late = later(3.0, Message::Noop).then(|_| iced::exit());
                 return Task::batch([save.collect().then(|_| iced::exit()), late]);
             }
