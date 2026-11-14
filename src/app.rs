@@ -423,6 +423,8 @@ pub struct App {
     aim: Option<String>,
     heard_stop: Option<iced::task::Handle>,
     warmed: Option<String>,
+    warm_at: u64,
+    warm_stop: Option<iced::task::Handle>,
     pub popular_all: bool,
     pub search_tab: usize,
     pub disc_chip: u8,
@@ -1749,7 +1751,7 @@ impl App {
             .for_each(|p| p.warm(t.clone(), self.position));
     }
 
-    fn warm(&mut self) {
+    fn warm(&mut self) -> Option<Task<Message>> {
         let row = self.hover.as_deref().and_then(|h| h.rsplit_once('#'));
         let row = row.and_then(|(k, n)| Some((k, n.parse::<usize>().ok()?)));
         let first = || {
@@ -1766,19 +1768,31 @@ impl App {
             &self.aim
         };
         let song = song.filter(|s| s.url.is_empty() && self.warmed != *tag);
-        let Some((tag, t)) = song.map(|s| (tag.clone(), self.track(s))) else {
-            return;
-        };
+        let (tag, t) = song.map(|s| (tag.clone(), self.track(s)))?;
         self.aim = self.aim.take().filter(|_| row.is_none());
-        self.warmed = tag;
-        self.player.iter().for_each(|p| p.warm(t.clone(), 0.0));
+        self.warmed.clone_from(&tag);
+        let at = CURSOR.load(Relaxed);
+        let send = move |a: &mut App| {
+            let p = a.player.as_ref().filter(|_| a.warmed == tag);
+            p.into_iter().for_each(|p| p.warm(t.clone(), 0.0));
+        };
+        if std::mem::replace(&mut self.warm_at, at) != at {
+            self.warm_stop = None;
+            send(self);
+            return None;
+        }
+        let (wait, stop) = later(0.3, act(send)).abortable();
+        self.warm_stop = Some(stop.abort_on_drop());
+        Some(wait)
     }
 
     pub fn update(&mut self, m: Message) -> Task<Message> {
         use souvlaki::MediaPlayback as P;
         let seek = matches!(m, Message::Seek(_));
         let mut t = self.handle(m);
-        self.warm();
+        if let Some(w) = self.warm() {
+            t = Task::batch([t, w]);
+        }
         let data = self.cache.get(&self.route);
         let data = data.map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
         let (r, (f, s, d), _) = &self.pl_view;
