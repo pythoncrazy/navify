@@ -98,6 +98,20 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
             (2015, vec!["L".into()], vec!["ep".into()])
         );
     }
+    for (d, day, text) in [
+        (
+            json!({"year": 2015, "month": 3, "day": 9}),
+            "2015-03-09",
+            "March 9, 2015",
+        ),
+        (json!({"year": 2015, "month": 3}), "2015-03", "March 2015"),
+        (json!({"year": 2015}), "2015", ""),
+        (json!({}), "", ""),
+    ] {
+        let a: Album = api::parse(json!({"id": "al1", "releaseDate": d}))?;
+        assert_eq!(a.release_date, day);
+        assert_eq!(navify::pages::date(&a.release_date, true), text);
+    }
     Ok(())
 }
 
