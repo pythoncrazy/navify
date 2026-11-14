@@ -452,6 +452,12 @@ impl Session {
             salt,
             ..Server::default()
         });
+        let probe = s.http.get(s.url("ping", &Value::Null)).send().await;
+        let mut end = probe.map_err(net_err)?.url().clone();
+        end.set_query(None);
+        if let Some(base) = end.as_str().strip_suffix("/rest/ping") {
+            s.server.url = base.into();
+        }
         let ping: Value = s.get("ping", (), "").await?;
         let ext = async {
             match ping["openSubsonic"] == true {

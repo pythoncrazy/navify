@@ -232,3 +232,36 @@ async fn live_reads_are_read_only() -> Result<()> {
     assert!(songs.iter().any(|x| x.rg.track_gain.is_some()));
     Ok(())
 }
+
+#[tokio::test]
+async fn login_keeps_the_address_after_a_redirect() {
+    use std::io::{BufRead, BufReader, Write};
+    let serve = |reply: fn(&str, &str) -> String, to: String| {
+        let srv = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("http://{}", srv.local_addr().expect("address"));
+        std::thread::spawn(move || {
+            for mut c in srv.incoming().map(|c| c.expect("connection")) {
+                let mut lines = BufReader::new(&c).lines().map_while(Result::ok);
+                let first = lines.next().unwrap_or_default();
+                lines.take_while(|l| !l.is_empty()).for_each(drop);
+                let path = first.split(' ').nth(1).unwrap_or_default();
+                let _ = c.write_all(reply(&to, path).as_bytes());
+            }
+        });
+        url
+    };
+    let ok = |_: &str, _: &str| {
+        let b = r#"{"subsonic-response": {"status": "ok"}}"#;
+        let n = b.len();
+        format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {n}\r\n\r\n{b}")
+    };
+    let moved = |to: &str, path: &str| {
+        format!(
+            "HTTP/1.1 307 Moved\r\nConnection: close\r\nLocation: {to}{path}\r\nContent-Length: 0\r\n\r\n"
+        )
+    };
+    let new = serve(ok, String::new());
+    let old = serve(moved, new.clone());
+    let s = Session::login(&old, "u", "p").await.expect("login");
+    assert_eq!(s.server.url, new);
+}
