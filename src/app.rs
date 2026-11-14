@@ -1142,7 +1142,11 @@ impl App {
         self.qmove = None;
         let done = Task::batch(self.loaded.then(|| self.listen(false)));
         (self.index, self.playing) = (i.min(self.queue.len() - 1), true);
-        let t = self.track(&self.queue[self.real_at(self.index)]);
+        let song = &self.queue[self.real_at(self.index)];
+        let (t, at) = (
+            self.track(song),
+            [0.0, at][usize::from(song.url.is_empty())],
+        );
         self.player.iter().for_each(|p| p.play(t.clone(), at));
         let began = self.began();
         self.position = at;
@@ -1523,8 +1527,8 @@ impl App {
             (None, _) if matches!(route, "settings" | "login" | "search" | "genres") => {
                 "genres".into()
             }
-            (None, Some(s)) if route == "lyrics" => format!("lyrics:{}", s.id),
-            (None, None) if route == "lyrics" => "lib".into(),
+            (None, Some(s)) if route == "lyrics" && s.url.is_empty() => format!("lyrics:{}", s.id),
+            (None, _) if route == "lyrics" => "lib".into(),
             (Some(("discography", a)), _) => format!("artist:{}", a.split(':').next().unwrap_or(a)),
             _ => route.into(),
         }
@@ -1679,8 +1683,10 @@ impl App {
 
     fn queue_next_refresh(&self) {
         if let Some(p) = &self.player {
+            let song = |n| &self.queue[self.real_at(n)];
             let n = self.next_index(false);
-            p.queue_next(n.map(|n| self.track(&self.queue[self.real_at(n)])));
+            let n = n.filter(|&n| [n, self.index].iter().all(|&n| song(n).url.is_empty()));
+            p.queue_next(n.map(|n| self.track(song(n))));
         }
     }
 
@@ -1921,7 +1927,8 @@ impl App {
                 };
             }
             Message::Seek(pos) => {
-                let Some(dur) = self.current_song().map(|s| s.duration) else {
+                let song = self.current_song().filter(|s| s.url.is_empty());
+                let Some(dur) = song.map(|s| s.duration) else {
                     return Task::none();
                 };
                 let pos = pos.clamp(0.0, dur.max(0.0));

@@ -433,3 +433,14 @@ fn settings_check_rejects_values_out_of_range() {
     app.position = 5.0;
     assert_eq!((lyric_line(&app), lyric_wait(&app)), (2, None));
 }
+
+#[tokio::test]
+async fn station_loads_no_lyrics() {
+    let mut app = app();
+    let fm = json!([{"id": "r1", "name": "FM", "streamUrl": "http://x/s"}]);
+    let _ = app.update(Message::Play(parse(fm).expect("stations"), 0, "t".into()));
+    let _ = app.update(Message::Panel(1));
+    let _ = app.update(Message::Nav("lyrics".into()));
+    assert_eq!(app.key_of("lyrics"), "lib");
+    assert!(!app.pending.iter().any(|k| k.starts_with("lyrics:")));
+}
