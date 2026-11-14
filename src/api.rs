@@ -237,7 +237,10 @@ fn normalize(v: &mut Value) {
             m.extend(tags.or(named).map(|l| ("labels".to_string(), l)));
             if let Some(Value::Object(d)) = m.get("releaseDate") {
                 let n = |k| d.get(k).and_then(Value::as_u64).unwrap_or_default();
-                let date = format!("{:04}-{:02}-{:02}", n("year"), n("month"), n("day"));
+                let parts = [n("year"), n("month"), n("day")];
+                let parts = parts.iter().take_while(|&&v| v > 0).enumerate();
+                let parts = parts.map(|(i, v)| format!("{v:0w$}", w = [4, 2][i.min(1)]));
+                let date = parts.collect::<Vec<_>>().join("-");
                 m.insert("releaseDate".into(), date.into());
             }
             if let Some(s) = m.get_mut("starred").filter(|s| !s.is_boolean()) {

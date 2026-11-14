@@ -502,6 +502,7 @@ impl App {
             login(u, n, p)
         } else if app.session.is_some() || app.route != "login" {
             let r = std::mem::take(&mut app.route);
+            app.history.clear();
             let ext = app.session.clone().filter(|_| app.shot.is_none()).map(|s| {
                 let me = s.clone();
                 Task::perform(async move { s.extensions().await }, move |r| {

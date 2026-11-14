@@ -354,13 +354,12 @@ pub fn date(s: &str, full: bool) -> String {
         "November",
         "December",
     ];
-    let d = s.get(..10).unwrap_or("").split('-');
+    let d = s.get(..10).unwrap_or(s).split('-');
     let d = d.filter_map(|x| x.parse().ok());
+    let name = |m: usize| if full { M[m - 1] } else { &M[m - 1][..3] };
     match d.collect::<Vec<usize>>()[..] {
-        [y, m @ 1..=12, day] => {
-            let m = M[m - 1];
-            format!("{} {day}, {y}", if full { m } else { &m[..3] })
-        }
+        [y, m @ 1..=12, day @ 1..=31] => format!("{} {day}, {y}", name(m)),
+        [y, m @ 1..=12] => format!("{} {y}", name(m)),
         _ => String::new(),
     }
 }
@@ -383,7 +382,8 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let at = Message::PlayAt(key.into(), n);
     let play = if cur { Message::Toggle } else { at.clone() };
     let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(cur && app.playing)];
-    let num = txt(n + 1, 16.0).color(if cur { ACCENT } else { SUB });
+    let no = [n + 1, s.track as usize][usize::from(key.starts_with("album:") && s.track > 0)];
+    let num = txt(no, 16.0).color(if cur { ACCENT } else { SUB });
     let idx: El = match (hot, cur && app.playing) {
         (true, _) => btn(theme::filled(g, 16.0).center(), play).width(c.3).into(),
         (false, true) => i(i::EQ, 16.0).color(ACCENT).width(c.3).center().into(),
@@ -772,7 +772,8 @@ pub fn route(app: &App) -> El<'_> {
     let r = app.route.as_str();
     let (kind, arg) = r.split_once(':').unwrap_or((r, ""));
     let plain = matches!(kind, "settings" | "lyrics" | "search" | "genres" | "login");
-    if (!plain || (kind == "search" && !arg.is_empty()))
+    let failed = arg.is_empty() && app.data::<String>("genres").is_some();
+    if (!plain || (matches!(kind, "search" | "genres") && (!arg.is_empty() || failed)))
         && let Some(s) = state(app, &app.key_of(r))
     {
         return s;
@@ -1219,8 +1220,10 @@ fn detail(app: &App) -> Option<El<'_>> {
         .map(|(a, _)| {
             let day = Some(date(&a.release_date, true)).filter(|d| !d.is_empty());
             let day = day.or((a.year > 0).then(|| a.year.to_string()));
-            let label = (!a.labels.is_empty())
-                .then(|| format!("\u{2117} {} {}", a.year, a.labels.join(", ")));
+            let year = Some(a.year).filter(|&y| y > 0).map(|y| format!("{y} "));
+            let year = year.unwrap_or_default();
+            let label =
+                (!a.labels.is_empty()).then(|| format!("\u{2117} {year}{}", a.labels.join(", ")));
             let notes = column![day.map(|d| sub(d, 14.0)), label.map(|l| sub(l, 12.0))].spacing(2);
             let year = |x: &Album| {
                 if x.year > 0 {
@@ -1993,7 +1996,7 @@ fn settings<'a>(app: &'a App) -> El<'a> {
         let step = [0.1f32, 1.0][usize::from(*r.start() >= 1.0)];
         let label = match *r.start() < 0.0 {
             true => format!("{v:+.1}{unit}"),
-            false => format!("{v:.0}{unit}"),
+            false => format!("{v:.p$}{unit}", p = usize::from(step < 1.0)),
         };
         let s = slider(r, v, move |x| set(f, x)).step(step);
         let label = sub(label, 14.0).width(56).align_x(Right);
@@ -2701,7 +2704,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             let album = ["album:", "discography:"]
                 .iter()
                 .any(|p| app.route.starts_with(p));
-            let dated = app.route.starts_with("playlist:") || app.route == "liked";
+            let dated =
+                app.route.starts_with("playlist:") || ["liked", "songs"].contains(&&*app.route);
             let check = |l: &'a str, on: bool, msg: Message| {
                 let c = container(on.then(|| i(i::CHECK, 12.0).color(BG))).center(16);
                 let border = iced::Border::default().rounded(2);
