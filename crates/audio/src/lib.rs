@@ -988,7 +988,7 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
     let (mut written, mut running, mut idle, mut dev, mut asked) =
         (0u64, false, None::<Instant>, String::new(), 0u32);
     let (mut opened, mut rebase, mut prep) = (None::<Instant>, false, 0u32);
-    let mut calm = None::<Instant>;
+    let (mut calm, mut used) = (None::<Instant>, false);
     let mut buf = vec![0f32; CHUNK * 2];
     let mut marks = VecDeque::<(u64, Option<f32>, Option<Event>)>::new();
     let seq = std::cell::Cell::new(0u64);
@@ -1121,7 +1121,7 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                         s.play().map_err(|e| e.to_string()).unwrap_or_else(fail);
                         (written, running, idle, out, mix.rate) =
                             (0, true, None, Some((s, p)), rate);
-                        (opened, rebase) = (Some(Instant::now()), true);
+                        (opened, rebase, used) = (Some(Instant::now()), true, true);
                         sh.read.store(0, Relaxed);
                         sh.flush.store(0, Relaxed);
                         if !fresh {
@@ -1226,7 +1226,15 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
             }
             (Some(_), false, _) if left < CLOSE => thread::park_timeout(CLOSE - left),
             _ => {
-                (out, idle, opened) = (None, None, None);
+                out = None;
+                if std::mem::take(&mut used) {
+                    mix.warm = None;
+                    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                    unsafe {
+                        libc::malloc_trim(0);
+                    }
+                }
+                (idle, opened) = (None, None);
                 thread::park();
             }
         }
