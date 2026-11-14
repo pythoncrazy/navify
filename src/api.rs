@@ -1,4 +1,4 @@
-use std::collections::hash_map::RandomState;
+use std::collections::{BTreeMap, hash_map::RandomState};
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -187,8 +187,6 @@ type Q<'a> = [(&'a str, &'a str)];
 pub trait Data: DeserializeOwned + Default {}
 impl<T: DeserializeOwned + Default> Data for T {}
 
-const INVALID: &str = "The server returned an invalid response.";
-
 const SORTS: [[&str; 4]; 11] = [
     ["recent", "recent", "play_date", "play_date"],
     ["newest", "newest", "recently_added", "created_at"],
@@ -218,8 +216,7 @@ fn normalize(v: &mut Value) {
                 && id.is_string()
                 && name.is_string()
             {
-                let one = json!([{"id": id, "name": name}]);
-                m.insert("artists".into(), one);
+                m.insert("artists".into(), json!([{"id": id, "name": name}]));
             }
             if let Some(Value::Object(rg)) = m.remove("replayGain") {
                 m.extend(rg);
@@ -347,22 +344,15 @@ fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
     let mut q =
         json!({"_sort": sort_row(sort)[col], "_order": order, "_start": off, "_end": off + n});
     if sort == "random" {
-        static SEEDS: Mutex<Vec<((usize, usize), u64)>> = Mutex::new(Vec::new());
+        static SEEDS: Mutex<BTreeMap<(usize, usize), u64>> = Mutex::new(BTreeMap::new());
         let (mut seeds, new) = (
             SEEDS.lock().expect("seed lock"),
             RandomState::new().hash_one(0),
         );
-        let seed = match seeds.iter_mut().find(|s| s.0 == (col, n)) {
-            Some(s) if off > 0 => s.1,
-            Some(s) => {
-                s.1 = new;
-                new
-            }
-            None => {
-                seeds.push(((col, n), new));
-                new
-            }
-        };
+        let seed = seeds.entry((col, n)).or_insert(new);
+        if off == 0 {
+            *seed = new;
+        }
         q["seed"] = seed.to_string().into();
     }
     let only = match (sort, col) {
@@ -514,14 +504,10 @@ impl Session {
         let res = self.http.get(url).send().await.map_err(net_err)?;
         let status = res.status().as_u16();
         let http = move || anyhow!("The server returned HTTP {status}.");
-        let bad = move |_| {
-            if status < 300 {
-                anyhow!(INVALID)
-            } else {
-                http()
-            }
-        };
-        let mut v: Value = res.json().await.map_err(bad)?;
+        let mut v: Value = res.json().await.map_err(|_| match status < 300 {
+            true => anyhow!("The server returned an invalid response."),
+            false => http(),
+        })?;
         let mut v = take(&mut v, "subsonic-response");
         ensure!(v.is_object(), http());
         let e = take(&mut v, "error");
@@ -563,11 +549,8 @@ impl Session {
         let rows = serde::Deserializer::deserialize_any(&mut de, Rows(PhantomData));
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         if body.len() > 1 << 20 {
-            unsafe extern "C" {
-                safe fn malloc_trim(pad: usize) -> i32;
-            }
             drop(body);
-            malloc_trim(0);
+            unsafe { libc::malloc_trim(0) };
         }
         let e = |e| anyhow!("The server returned an unexpected response: {e}");
         Ok((rows.map_err(e)?, total.unwrap_or_default()))

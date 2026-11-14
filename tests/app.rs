@@ -19,6 +19,14 @@ fn items<T: navify::api::Data>(ids: impl IntoIterator<Item = String>) -> T {
     parse(ids.into_iter().map(|id| json!({"id": id})).collect()).expect("items")
 }
 
+fn ids(app: &App) -> String {
+    app.queue.iter().map(|s| s.id.as_str()).collect()
+}
+
+fn cur(app: &App) -> String {
+    app.current_song().expect("a song plays").id.clone()
+}
+
 #[test]
 fn album_reopen_in_stale_time_sends_no_request() {
     let mut app = app();
@@ -78,7 +86,6 @@ fn album_reopen_in_stale_time_sends_no_request() {
 async fn shuffle_keeps_the_current_song() {
     let mut app = app();
     let songs = |ids: &str| items::<Vec<Song>>(ids.chars().map(String::from));
-    let cur = |app: &App| app.current_song().expect("a song plays").id.clone();
     let _ = app.update(Message::Play(songs("abcdef"), 3, "t".into()));
     assert_eq!(cur(&app), "d");
     let _ = app.update(Message::Shuffle);
@@ -108,8 +115,7 @@ async fn shuffle_keeps_the_current_song() {
     let _ = app.update(Message::Play(songs("abcd"), 0, "t".into()));
     app.qmove = Some((1, 3));
     let _ = app.q_drop();
-    let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
-    assert!(ids == "acdb" && app.qmove.is_none());
+    assert!(ids(&app) == "acdb" && app.qmove.is_none());
     app.qmove = Some((0, 2));
     let _ = app.q_drop();
     assert_eq!(app.queue[0].id, "a");
@@ -134,7 +140,7 @@ async fn play_button_keeps_shuffle_and_shuffle_starts_anywhere() {
     let _ = app.update(Message::Shuffle);
     let first = (0..30).map(|_| {
         let _ = app.update(Message::PlayCtx(key.clone(), 1));
-        app.current_song().expect("a song plays").id.clone()
+        cur(&app)
     });
     assert!(first.collect::<std::collections::HashSet<_>>().len() > 1);
     assert_eq!(navify::view::fmt_dur(3725.0), "1:02:05");
@@ -193,11 +199,8 @@ async fn playlist_search_and_sort_keep_the_server_order() {
     let key = "playlist:p1".to_string();
     let _ = app.update(Message::Nav(key.clone()));
     let songs: Vec<Song> = ["c", "a", "b"]
-        .map(|t| json!({"id": t, "title": t, "duration": 60}))
-        .to_vec()
-        .into_iter()
-        .map(|v| parse(v).expect("song"))
-        .collect();
+        .map(|t| parse(json!({"id": t, "title": t, "duration": 60})).expect("song"))
+        .into();
     let pl: navify::api::Playlist = parse(json!({"id": "p1", "name": "P"})).expect("playlist");
     let _ = app.update(Message::Loaded(key.clone(), 0, Ok(Arc::new((pl, songs)))));
     let _ = app.update(Message::PlAdd("p1".into(), vec!["a".into()]));
@@ -206,12 +209,10 @@ async fn playlist_search_and_sort_keep_the_server_order() {
     assert!(app.modal.is_none() && app.held.is_none());
     let _ = app.update(act(|a| a.pl_sort = 1));
     let _ = app.update(Message::PlayAt(key.clone(), 0));
-    let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
-    assert_eq!(ids, "abc");
+    assert_eq!(ids(&app), "abc");
     app.cfg.settings.play_mode = 3;
     let _ = app.update(Message::PlayAt(key.clone(), 2));
-    let ids: String = app.queue.iter().map(|s| s.id.as_str()).collect();
-    assert_eq!(ids, "acbc");
+    assert_eq!(ids(&app), "acbc");
     let _ = app.update(act(|a| a.pl_find = Some("B".into())));
     let _ = app.update(Message::SelectAll);
     let _ = app.update(Message::DeleteSel);
@@ -231,7 +232,6 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
     let songs: Vec<Song> = ["a", "b (Live)", "c"]
         .map(|t| parse(json!({"id": t, "title": t})).expect("song"))
         .into();
-    let cur = |app: &App| app.current_song().expect("a song plays").id.clone();
     app.cfg.settings.queue_skip = " live ,".into();
     let _ = app.update(Message::Play(songs.clone(), 2, "t".into()));
     assert_eq!(app.queue.len(), 2);
@@ -267,7 +267,6 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
 async fn queue_and_pages_stay_in_order() {
     let mut app = app();
     let songs = |ids: &str| items::<Vec<Song>>(ids.chars().map(String::from));
-    let ids = |app: &App| app.queue.iter().map(|s| s.id.as_str()).collect::<String>();
     let _ = app.update(Message::Play(songs("abcdef"), 1, "t".into()));
     let _ = app.update(Message::Shuffle);
     let _ = app.update(Message::Queue(songs("xy"), true));
@@ -371,19 +370,14 @@ async fn recorded_shortcut_replaces_the_old_binding() {
 #[test]
 fn cover_cache_drops_large_covers_over_the_limit() {
     let mut app = app();
-    for k in 0..4 {
+    let d = |n| {
         let h = iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]);
-        let d = (iced::Color::BLACK, h, 3 << 20);
-        app.covers.insert(format!("c{k}"), 640, d);
+        (iced::Color::BLACK, h, n)
+    };
+    for k in 0..4 {
+        app.covers.insert(format!("c{k}"), 640, d(3 << 20));
     }
     assert!(app.covers.bytes <= 8 << 20 && app.covers.get("c3", 640).is_some());
-    let d = |n| {
-        (
-            iced::Color::BLACK,
-            iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]),
-            n,
-        )
-    };
     app.covers.insert("p#a".into(), 640, d(100));
     app.covers.insert("p".into(), 128, d(10));
     let before = app.covers.bytes;
