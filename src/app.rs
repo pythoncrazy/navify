@@ -1307,6 +1307,7 @@ impl App {
                     a.position = pos as f32 / 1000.0;
                     a.index = songs.iter().position(|s| s.id == cur).unwrap_or(0);
                     (a.queue, a.shuffle) = (songs.clone(), None);
+                    a.ready(false);
                 }
                 Task::batch([a.covers_now(), a.about()])
             })
@@ -1721,12 +1722,27 @@ impl App {
     }
 
     pub fn wake(&mut self) {
-        let rate = self.current_song().map_or(0, |s| self.track(s).rate);
+        self.ready(true);
+    }
+
+    fn ready(&mut self, device: bool) {
+        let t = self
+            .current_song()
+            .map(|s| (self.track(s), s.url.is_empty()));
+        let (t, song) = t.unwrap_or_default();
+        let rate = [t.rate, 48_000][usize::from(t.rate == 0)];
         let t = Track {
-            rate: [rate, 48_000][usize::from(rate == 0)],
-            ..Track::default()
+            rate: [0, rate][usize::from(device)],
+            url: if song && !self.loaded {
+                t.url
+            } else {
+                String::new()
+            },
+            ..t
         };
-        self.player.iter().for_each(|p| p.warm(t.clone()));
+        self.player
+            .iter()
+            .for_each(|p| p.warm(t.clone(), self.position));
     }
 
     fn warm(&mut self) {
@@ -1751,7 +1767,7 @@ impl App {
         };
         self.aim = self.aim.take().filter(|_| row.is_none());
         self.warmed = tag;
-        self.player.iter().for_each(|p| p.warm(t.clone()));
+        self.player.iter().for_each(|p| p.warm(t.clone(), 0.0));
     }
 
     pub fn update(&mut self, m: Message) -> Task<Message> {

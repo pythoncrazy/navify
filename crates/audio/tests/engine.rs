@@ -149,7 +149,7 @@ fn player_sends_events_on_null_device() {
     );
     let ((rt, http), t) = setup("One Two", None);
     let (p, mut rx) = Player::new(rt.clone(), http);
-    p.warm(t[0].clone());
+    p.warm(t[0].clone(), 0.0);
     p.play(t[0].clone(), 0.0);
     p.queue_next(Some(t[1].clone()));
     let mut got = Vec::new();
