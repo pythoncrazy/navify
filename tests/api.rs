@@ -179,10 +179,13 @@ async fn local_reads_and_writes_with_both_apis() -> Result<()> {
     let songs = s.songs("name", 0, 4).await?.0;
     let ids: Vec<String> = songs.into_iter().map(|x| x.id).collect();
     let starred = async || Ok::<_, Error>(s.starred().await?.2.iter().any(|x| x.id == ids[0]));
-    s.star(&ids[..1], true).await?;
-    assert!(starred().await?);
-    s.star(&ids[..1], false).await?;
-    assert!(!starred().await?);
+    let album = s.albums("name", &[], 0, 1).await?.0.remove(0).id;
+    let liked = async || Ok::<_, Error>(s.starred().await?.1.iter().any(|x| x.id == album));
+    let kinds = [ids[..1].to_vec(), vec![album.clone()], vec![]];
+    s.star(&kinds, true).await?;
+    assert!(starred().await? && liked().await?);
+    s.star(&kinds, false).await?;
+    assert!(!starred().await? && !liked().await?);
     s.rate(&ids[0], 4).await?;
     s.scrobble(&ids[0], false).await?;
     s.scrobble(&ids[0], true).await?;
