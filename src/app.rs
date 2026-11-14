@@ -1930,8 +1930,7 @@ impl App {
                     a.music_brainz_id = m;
                 }
                 let banner = key.starts_with("artist:") && self.cfg.settings.banners;
-                let banner = banner.then(|| v.downcast_ref::<(Artist, Vec<Album>)>());
-                let banner = banner.flatten();
+                let banner = v.downcast_ref::<(Artist, Vec<Album>)>().filter(|_| banner);
                 let banner = banner.map(|(a, _)| a.banner_key());
                 self.cache.insert(key.clone(), (Instant::now(), v));
                 let banner = Task::batch(banner.map(|k| self.request(&k, 0)));
@@ -2101,13 +2100,12 @@ impl App {
                 let back = id.clone();
                 let rate = |s: Session| async move { s.rate(&id, n).await };
                 return self.send(rate, "Could not set the rating.", move |a| {
-                    if a.ratings.get(&back) != Some(&n) {
-                        return Task::none();
+                    if a.ratings.get(&back) == Some(&n) {
+                        match old {
+                            Some(v) => a.ratings.insert(back.clone(), v),
+                            None => a.ratings.remove(&back),
+                        };
                     }
-                    match old {
-                        Some(v) => a.ratings.insert(back.clone(), v),
-                        None => a.ratings.remove(&back),
-                    };
                     Task::none()
                 });
             }
@@ -2179,16 +2177,11 @@ impl App {
                 }
                 return t;
             }
-            Message::MenuClose
-                if self.full
-                    && self.menu.is_none()
-                    && self.modal.is_none()
-                    && self.recording.is_none() =>
-            {
-                return self.set_full(false);
-            }
             Message::MenuClose => {
                 if self.menu.is_none() && self.modal.is_none() && self.recording.is_none() {
+                    if self.full {
+                        return self.set_full(false);
+                    }
                     (self.sel, self.picked) = (None, BTreeSet::new());
                     if self.pl_find.take().is_some()
                         | self.lib_find.take().is_some()
@@ -2440,8 +2433,8 @@ impl App {
             Message::Warm(r) => {
                 self.aim = Some(r.clone());
                 let top = r.strip_prefix("artist:").map(|id| format!("top:{id}"));
-                let keys: Vec<_> = std::iter::once(self.key_of(&r)).chain(top).collect();
-                return Task::batch(keys.iter().map(|k| self.request(k, 0)).collect::<Vec<_>>());
+                let keys = std::iter::once(self.key_of(&r)).chain(top);
+                return Task::batch(keys.map(|k| self.request(&k, 0)));
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
@@ -2540,14 +2533,15 @@ impl App {
                 if let 2 | 3 = m {
                     return self.play_songs(vec![list[n].clone()], src, m);
                 }
-                if !self
+                let sh = m == 1 || self.shuffle.is_some();
+                if self
                     .data::<Page<Song>>(&key)
                     .is_some_and(|p| p.0.len() < p.1)
                 {
-                    self.ctx = key;
-                    return self.start(list, src, n, m == 1 || self.shuffle.is_some());
+                    return self.play_part(key, list, src, n, sh);
                 }
-                return self.play_part(key, list, src, n, m == 1 || self.shuffle.is_some());
+                self.ctx = key;
+                return self.start(list, src, n, sh);
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
             Message::Arrow(_) if self.modal.is_some() => {}
@@ -2618,15 +2612,12 @@ impl App {
             }
             Message::Modal(id, kind) => {
                 self.menu = None;
-                if kind == 5 {
-                    let load = self.request(&format!("song:{id}"), 0);
+                if let 5 | 6 = kind {
+                    let k = format!("{}:{id}", ["song", "artist"][kind as usize - 5]);
+                    let load = self.request(&k, 0);
                     self.modal = Some((id, kind));
-                    return load;
-                }
-                if kind == 6 {
-                    let load = self.request(&format!("artist:{id}"), 0);
-                    self.modal = Some((id, kind));
-                    return Task::batch([load, self.covers_now()]);
+                    let covers = (kind == 6).then(|| self.covers_now());
+                    return Task::batch([load].into_iter().chain(covers));
                 }
                 let Some(p) = self.playlist(&id) else {
                     return self.toast("The playlist is not available.");
@@ -2675,8 +2666,7 @@ impl App {
         let Some((f, t)) = self.qmove.take().filter(ok) else {
             return Task::none();
         };
-        let v = self.shuffle.as_mut();
-        match v {
+        match self.shuffle.as_mut() {
             Some(o) => {
                 let x = o.remove(f);
                 o.insert(t, x);
@@ -2717,14 +2707,13 @@ impl App {
         if !self.login.busy {
             return Task::none();
         }
-        let s = match r {
+        let mut s = match r {
             Ok(s) => s,
             Err(e) => {
                 (self.login.busy, self.login.error) = (false, e);
                 return Task::none();
             }
         };
-        let mut s = s;
         let same = |x: &&crate::api::Server| (&x.url, &x.user) == (&s.server.url, &s.server.user);
         if let Some(old) = self.cfg.servers.iter().find(same) {
             s.server.id.clone_from(&old.id);
@@ -2755,10 +2744,8 @@ impl App {
         if self.expired.0.len() > 1 {
             return Task::none();
         }
-        let (id, ok) = (
-            srv.id.clone(),
-            self.expired.1.is_none_or(|t| t.elapsed() > STALE),
-        );
+        let id = srv.id.clone();
+        let ok = self.expired.1.is_none_or(|t| t.elapsed() > STALE);
         let again = async move {
             anyhow::ensure!(ok, "The server refused the new session.");
             let pass = tokio::task::spawn_blocking(move || config::recall(&srv.id));
@@ -2874,8 +2861,8 @@ impl App {
                 let done = self.listen(false);
                 let next = self.next_index(false);
                 let at = |n: &usize| self.queue.get(self.real_at(*n)).is_some_and(|s| s.id == id);
-                let rest = (self.index + 1..self.queue.len()).chain(0..self.index);
-                let n = next.filter(at).or_else(|| rest.clone().find(at));
+                let mut rest = (self.index + 1..self.queue.len()).chain(0..self.index);
+                let n = next.filter(at).or_else(|| rest.find(at));
                 self.index = n.unwrap_or(self.index);
                 let began = Task::batch(n.map(|_| self.began()));
                 Task::batch([done, began, self.listen(self.playing)])
@@ -2946,8 +2933,8 @@ impl App {
         let now = self.start(part, src, n, sh);
         let seq = self.play_seq;
         let rest = move |a: &mut App, v: Vec<Song>, _| {
-            let (keep, cur) = (a.kept(), a.current_song().map(|s| s.id.clone()));
-            let v: Vec<Song> = v.into_iter().filter(|s| keep(s)).collect();
+            let cur = a.current_song().map(|s| s.id.clone());
+            let v: Vec<Song> = v.into_iter().filter(a.kept()).collect();
             let at = v.iter().position(|s| Some(&s.id) == cur.as_ref());
             let Some(at) = at.filter(|_| a.play_seq == seq) else {
                 return Task::none();
@@ -2987,6 +2974,7 @@ impl App {
         };
         let tiles = |n: usize| span(n, cw + 52.0, cols, crate::pages::grid_y(self));
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
+        let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
         let mut wide: [Vec<&String>; 4] = Default::default();
         let (_, gcols, tw, th) = crate::pages::browse(self);
@@ -3059,7 +3047,6 @@ impl App {
                 ][k]
                     .expect("a search hit")
             };
-            let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
             let ql = q.to_lowercase();
             let pls = pls.iter().filter(|p| p.name.to_lowercase().contains(&ql));
             let pls: Vec<_> = pls.collect();
@@ -3083,7 +3070,6 @@ impl App {
             let art = art.filter_map(|g| crate::pages::genre_cover(self, &g.name));
             wide[2].extend(art);
         } else if let Some(h) = self.data::<Home>(key) {
-            let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
             let pins = pls.iter().take(3).map(|p| &p.cover);
             wide[3].extend(pins.chain(h[0].iter().map(|a| &a.cover)).take(7));
             let hs = cw + 132.0;
@@ -3167,18 +3153,17 @@ impl App {
             event::listen_with(|e, status, _| match e {
                 Event::Window(W::Focused) => Some(act(|a| a.hidden = false)),
                 Event::Window(W::Unfocused) => Some(task(|_| {
-                    let min = |m: Option<bool>| {
-                        task(move |a| {
-                            let min = m == Some(true);
-                            a.hidden |= min;
-                            let tray = min && a.cfg.settings.min_tray && a.tray.is_some();
-                            Task::batch(tray.then(|| a.update(Message::Window(false))))
-                        })
-                    };
                     later(0.3, Message::Noop)
                         .then(|_| iced::window::latest())
                         .and_then(iced::window::is_minimized)
-                        .map(min)
+                        .map(|m| {
+                            task(move |a| {
+                                let min = m == Some(true);
+                                a.hidden |= min;
+                                let tray = min && a.cfg.settings.min_tray && a.tray.is_some();
+                                Task::batch(tray.then(|| a.update(Message::Window(false))))
+                            })
+                        })
                 })),
                 Event::Window(W::CloseRequested) => {
                     Some(task(|a| match a.tray.is_some() && a.cfg.settings.tray {
@@ -3609,11 +3594,8 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             .err()
             .and_then(|e| e.downcast_ref::<std::io::Error>());
         let m = match io.map(std::io::Error::kind) {
-            Some(std::io::ErrorKind::PermissionDenied) => {
-                let k = key.clone();
-                task(move |a| a.expired(k.clone()))
-            }
-            _ => Message::Loaded(key.clone(), offset, r.map_err(|e| e.to_string())),
+            Some(std::io::ErrorKind::PermissionDenied) => task(move |a| a.expired(key.clone())),
+            _ => Message::Loaded(key, offset, r.map_err(|e| e.to_string())),
         };
         ours(&me, m)
     })
