@@ -408,19 +408,18 @@ fn codec(demux: &dyn FormatReader) -> Res<Codec> {
     let t = demux.default_track(TrackType::Audio);
     let a = t.and_then(|t| Some((t, t.codec_params.as_ref()?.audio()?)));
     let (t, p) = a.ok_or("The stream has no audio.")?;
-    let (tid, tb, frames, p) = (t.id, t.time_base, t.num_frames, p.clone());
-    let head: Vec<u8> = p.extra_data.clone().unwrap_or_default().into();
+    let head = p.extra_data.as_deref().unwrap_or_default();
     let sr = p.sample_rate.ok_or("unknown sample rate")?;
-    let params = Some(p).filter(|p| p.codec != CODEC_ID_OPUS);
-    let tb = tb.or(TimeBase::try_from_recip(sr)).ok_or("no time base")?;
-    let opus = params.is_none();
+    let tb = TimeBase::try_from_recip(sr);
+    let tb = t.time_base.or(tb).ok_or("no time base")?;
+    let opus = p.codec == CODEC_ID_OPUS;
     if opus && (head.len() < 19 || head[9] > 2) {
         Err("The Opus stream has more than two channels or a bad header.")?
     }
     let le = |i: usize| u16::from_le_bytes([head[i], head[i + 1]]);
     let pre = if opus { le(10) } else { 0 };
-    let dec: Decode = match params {
-        None => {
+    let dec: Decode = match opus {
+        true => {
             let gain = 10f32.powf(le(16) as i16 as f32 / 5120.0);
             let (mut d, mut buf) = (OpusDecoder::new(48_000, 2)?, vec![0f32; 5760 * 2]);
             Box::new(move |p, out| {
@@ -436,9 +435,9 @@ fn codec(demux: &dyn FormatReader) -> Res<Codec> {
                 Ok(())
             })
         }
-        Some(p) => {
+        false => {
             let mut d =
-                symphonia::default::get_codecs().make_audio_decoder(&p, &Default::default())?;
+                symphonia::default::get_codecs().make_audio_decoder(p, &Default::default())?;
             let (mut buf, mut w) = (Vec::<f32>::new(), Vec::<[f32; 2]>::new());
             Box::new(move |p, out| {
                 let Some(p) = p else {
@@ -479,7 +478,7 @@ fn codec(demux: &dyn FormatReader) -> Res<Codec> {
             })
         }
     };
-    Ok((tid, tb, frames, sr as f64, pre, dec))
+    Ok((t.id, tb, t.num_frames, sr as f64, pre, dec))
 }
 
 struct Source {
@@ -987,8 +986,8 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
     let mut out: Option<(cpal::Stream, Producer<f32>)> = None;
     let (mut written, mut running, mut idle, mut dev, mut asked) =
         (0u64, false, None::<Instant>, String::new(), 0u32);
-    let (mut opened, mut rebase, mut prep) = (None::<Instant>, false, 0u32);
-    let (mut calm, mut used) = (None::<Instant>, false);
+    let (mut opened, mut calm, mut rebase, mut prep) = (None::<Instant>, None, false, 0u32);
+    let mut used = false;
     let mut buf = vec![0f32; CHUNK * 2];
     let mut marks = VecDeque::<(u64, Option<f32>, Option<Event>)>::new();
     let seq = std::cell::Cell::new(0u64);
@@ -1005,22 +1004,19 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
             if let Cmd::Seek(s) = &mut cmd {
                 let ev: Vec<Event> = marks.drain(..).filter_map(|m| m.2).collect();
                 let back = matches!(ev[..], [Event::Started(_)] | [Event::Ended]);
-                match mix.old.take_if(|_| back && mix.inc.is_none()) {
-                    Some(old) => {
-                        if let Some(next) = mix.cur.replace(old) {
-                            let (t, net, io, rate) =
-                                (next.track.clone(), next.net.clone(), io.clone(), mix.rate);
-                            let h = thread::spawn(move || next.moved(&io, rate, 0.0));
-                            mix.pre = Some((t, Some(h), net, 0.0));
-                        }
+                if let Some(old) = mix.old.take_if(|_| back && mix.inc.is_none()) {
+                    if let Some(next) = mix.cur.replace(old) {
+                        let (t, net, io, rate) =
+                            (next.track.clone(), next.net.clone(), io.clone(), mix.rate);
+                        let h = thread::spawn(move || next.moved(&io, rate, 0.0));
+                        mix.pre = Some((t, Some(h), net, 0.0));
                     }
-                    None => {
-                        for e in ev {
-                            if matches!(e, Event::Started(_)) {
-                                *s = 0.0;
-                            }
-                            emit(e);
+                } else {
+                    for e in ev {
+                        if matches!(e, Event::Started(_)) {
+                            *s = 0.0;
                         }
+                        emit(e);
                     }
                 }
             }
@@ -1099,11 +1095,9 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
         if out.is_none() && (!paused || prep > 0) && !marks.is_empty() {
             let mut at = sh.now();
             for e in marks.drain(..).filter_map(|m| m.2) {
-                at = if matches!(e, Event::Started(_)) {
-                    0.0
-                } else {
-                    at
-                };
+                if matches!(e, Event::Started(_)) {
+                    at = 0.0;
+                }
                 emit(e);
             }
             sh.set_pos(at, u64::MAX);
@@ -1200,9 +1194,9 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
         let live = !paused && (mix.cur.is_some() || !marks.is_empty());
         calm = calm.or_else(|| Some(Instant::now())).filter(|_| !live);
         let lag = sh.lag.load(Relaxed) as f64 / 2.0 / f64::from(mix.rate.max(1)) + 0.06;
-        let rest = |t: Instant, d: f64| Duration::from_secs_f64(d).checked_sub(t.elapsed());
-        let hold = opened.and_then(|w| rest(w, HOLD.as_secs_f64()));
-        let wait = hold.max(calm.and_then(|c| rest(c, lag)));
+        let hold = opened.and_then(|w| HOLD.checked_sub(w.elapsed()));
+        let wait =
+            hold.max(calm.and_then(|c| Duration::from_secs_f64(lag).checked_sub(c.elapsed())));
         let want = live || wait.is_some();
         if let Some((s, _)) = &out
             && want != running
@@ -1216,13 +1210,9 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
         }
         let left = idle.get_or_insert_with(Instant::now).elapsed();
         match (&out, want, wait.filter(|_| !live)) {
-            (Some(_), true, Some(d)) => {
+            (Some(_), true, w) => {
                 idle = None;
-                thread::park_timeout(d);
-            }
-            (Some(_), true, None) => {
-                idle = None;
-                thread::park();
+                w.map_or_else(thread::park, thread::park_timeout);
             }
             (Some(_), false, _) if left < CLOSE => thread::park_timeout(CLOSE - left),
             _ => {

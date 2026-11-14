@@ -35,8 +35,7 @@ mod linux {
             .display()
             .to_string()
             .replace('\\', r"\\")
-            .replace('"', r#"\""#);
-        let exe = exe
+            .replace('"', r#"\""#)
             .replace('`', r"\`")
             .replace('$', r"\$")
             .replace('\\', r"\\");

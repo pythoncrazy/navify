@@ -108,8 +108,7 @@ fn load_data(server: &str) -> HashMap<String, (Instant, AnyData)> {
                     .map(|x| Arc::new(x) as AnyData)
             };
         }
-        let d = stored!(k, de)?;
-        Some((k, (now, d)))
+        stored!(k, de).map(|d| (k, (now, d)))
     });
     all.collect()
 }
@@ -179,12 +178,10 @@ fn scan_devices() -> Task<Message> {
 
 fn ours(s: &Session, m: Message) -> Message {
     let s = s.clone();
-    task(
-        move |a: &mut App| match a.session.as_ref().is_some_and(|x| x.same(&s)) {
-            true => a.update(m.clone()),
-            false => Task::none(),
-        },
-    )
+    task(move |a| {
+        let same = a.session.as_ref().is_some_and(|x| x.same(&s));
+        Task::batch(same.then(|| a.update(m.clone())))
+    })
 }
 
 fn say(text: String) -> Message {
@@ -217,8 +214,7 @@ fn bare(id: &str) -> &str {
     id.split_once('#').map_or(id, |x| x.0)
 }
 
-static SHOWN: std::sync::LazyLock<std::sync::Mutex<HashSet<String>>> =
-    std::sync::LazyLock::new(Default::default);
+static SHOWN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
 
 pub(crate) fn later(secs: f32, m: Message) -> Task<Message> {
     Task::future(tokio::time::sleep(Duration::from_secs_f32(secs))).map(move |()| m.clone())
@@ -549,11 +545,7 @@ impl App {
             match s {
                 "queue" | "panel1" => {
                     (self.queue, self.index) = (songs.iter().take(20).cloned().collect(), 0);
-                    let album = self
-                        .route
-                        .starts_with("album:")
-                        .then(|| songs.first())
-                        .flatten();
+                    let album = songs.first().filter(|_| self.route.starts_with("album:"));
                     self.source = album.map_or_else(|| "Liked Songs".into(), |s| s.album.clone());
                     self.panel = if s == "queue" { 2 } else { 1 };
                     let first = songs.first().map(|s| format!("lyrics:{}", s.id));
@@ -564,8 +556,7 @@ impl App {
                     }
                 }
                 "menu" if !songs.is_empty() => {
-                    let at = (480f32.to_bits() as u64) << 32 | 300f32.to_bits() as u64;
-                    CURSOR.store(at, Relaxed);
+                    CURSOR.store(bits(480.0, 300.0), Relaxed);
                     let kind = Box::new(MenuKind::Song(songs[..1].to_vec()));
                     task = self.update(Message::Menu(kind));
                 }
@@ -682,21 +673,14 @@ impl App {
     pub fn lib_layout(&self) -> (u8, usize, f32, f32) {
         let view = [self.cfg.settings.lib_view, 1][usize::from(self.lib_mini())];
         let inner = self.lib_w() - 16.0;
-        let cols = |min: f32| ((inner / min) as usize).max(2);
+        let grid = |v, min: f32, text: f32| {
+            let n = ((inner / min) as usize).max(2);
+            (v, n, inner / n as f32, inner / n as f32 + text)
+        };
         match view {
             0 => (0, 1, inner, 32.0),
-            2 => (
-                2,
-                cols(90.0),
-                inner / cols(90.0) as f32,
-                inner / cols(90.0) as f32,
-            ),
-            3 => (
-                3,
-                cols(128.0),
-                inner / cols(128.0) as f32,
-                inner / cols(128.0) as f32 + 50.0,
-            ),
+            2 => grid(2, 90.0, 0.0),
+            3 => grid(3, 128.0, 50.0),
             _ => (1, 1, inner, 64.0),
         }
     }
@@ -819,10 +803,9 @@ impl App {
         rm: Vec<usize>,
     ) -> Task<Message> {
         self.menu = None;
-        let done = format!("{verb} {}.", self.playlist(&pid).map_or("", |p| &p.name));
-        let old = self.playlist(&pid);
-        let old = old.map_or(String::new(), |p| p.cover.clone());
-        let fresh = self.pl_fresh(pid.clone(), old, 3);
+        let p = self.playlist(&pid);
+        let done = format!("{verb} {}.", p.map_or("", |p| &p.name));
+        let fresh = self.pl_fresh(pid.clone(), p.map_or(String::new(), |p| p.cover.clone()), 3);
         let (undo, key) = (reload(&pid), format!("playlist:{pid}"));
         if self.pending.contains(&format!("{key}#0")) {
             self.dirty.insert(key.clone(), false);
@@ -840,10 +823,9 @@ impl App {
             }
         };
         let sent = act(move |a| {
-            a.dirty
-                .iter_mut()
-                .filter(|d| *d.0 == key)
-                .for_each(|d| *d.1 = true)
+            if let Some(d) = a.dirty.get_mut(&key) {
+                *d = true;
+            }
         });
         Task::batch([
             self.send(f, "Could not change the playlist.", undo)
@@ -966,10 +948,8 @@ impl App {
 
     pub(crate) fn history(&mut self) -> Task<Message> {
         let native = self.session.as_ref().is_some_and(|s| s.server.native);
-        match native && self.panel == 2 && self.recent_tab {
-            true => self.request("songs:recent", 0),
-            false => Task::none(),
-        }
+        let on = native && self.panel == 2 && self.recent_tab;
+        Task::batch(on.then(|| self.request("songs:recent", 0)))
     }
 
     pub(crate) fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
@@ -1024,7 +1004,7 @@ impl App {
         {
             v.jwt = s.jwt();
         }
-        static LAST: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+        static LAST: Mutex<u64> = Mutex::new(0);
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let n = NEXT.fetch_add(1, Relaxed);
         let save = move || {
@@ -1095,15 +1075,13 @@ impl App {
         let s = self.session.as_ref().expect("playback needs a session");
         let format = Some(st.transcode_format.as_str()).filter(|f| !f.is_empty());
         let (url, transcoded) = s.stream_url(song, format, st.transcode_max_bitrate);
-        let (id, gain, duration) = (song.id.clone(), self.gain(song), song.duration);
-        let rate = [song.sampling_rate, 48_000][usize::from(format == Some("opus"))];
         Track {
-            id,
+            id: song.id.clone(),
             url,
-            gain,
+            gain: self.gain(song),
             transcoded,
-            duration,
-            rate,
+            duration: song.duration,
+            rate: [song.sampling_rate, 48_000][usize::from(format == Some("opus"))],
         }
     }
 
@@ -1171,10 +1149,8 @@ impl App {
         let done = Task::batch(self.loaded.then(|| self.listen(false)));
         (self.index, self.playing) = (i.min(self.queue.len() - 1), true);
         let song = &self.queue[self.real_at(self.index)];
-        let (t, at) = (
-            self.track(song),
-            [0.0, at][usize::from(song.url.is_empty())],
-        );
+        let t = self.track(song);
+        let at = [0.0, at][usize::from(song.url.is_empty())];
         self.player.iter().for_each(|p| p.play(t.clone(), at));
         let began = self.began();
         self.position = at;
@@ -1224,7 +1200,7 @@ impl App {
         let files = self
             .session
             .as_ref()
-            .map(|s| [128, 192, 300, 640].map(|z| s.cover_file(&song.cover, z)));
+            .map(|s| SIZES.map(|z| s.cover_file(&song.cover, z)));
         let show = move || {
             let mut n = notify_rust::Notification::new();
             let body = format!("{}{}{}", song.artist, crate::pages::DOT, song.album);
@@ -1384,7 +1360,7 @@ impl App {
         static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
         static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
         type Known = Option<(std::path::PathBuf, HashMap<String, Color>)>;
-        static KNOWN: std::sync::Mutex<Known> = std::sync::Mutex::new(None);
+        static KNOWN: Mutex<Known> = Mutex::new(None);
         let dec = |items: Vec<(String, u32, Result<bytes::Bytes, String>)>,
                    mut colors: HashMap<String, Color>,
                    s: &Session| {
@@ -1456,7 +1432,7 @@ impl App {
             err.map(|e| a.toast(&format!("Could not load a cover. {e}")))
         };
         self.covers.disk += 1;
-        let (colors, own, s2) = (self.covers.color.clone(), s.clone(), s.clone());
+        let (colors, s2) = (self.covers.color.clone(), s.clone());
         let load = async move {
             let (mut hit, mut miss) = (Vec::new(), Vec::new());
             for (k, sz, seen) in need {
@@ -1507,7 +1483,7 @@ impl App {
                 }
                 Task::batch(tasks)
             });
-            ours(&own, t)
+            ours(&s2, t)
         })
     }
 
@@ -1699,14 +1675,12 @@ impl App {
         (self.ctx, self.source, self.qmove) = Default::default();
         (self.starred, self.ratings, self.plays, self.recent) = Default::default();
         (self.cache, self.seeds, self.pending, self.scrolls) = Default::default();
-        self.stale.clear();
-        self.dirty.clear();
         (self.covers, self.history, self.hi, self.panel) = Default::default();
         (self.menu, self.modal, self.recording, self.hover) = Default::default();
         (self.sel, self.picked, self.pl_find, self.pl_more) = Default::default();
-        (self.lib_find, self.full) = Default::default();
-        (self.route, self.expired, self.save_seq) =
-            (String::new(), Default::default(), self.save_seq + 1);
+        (self.lib_find, self.full, self.stale, self.dirty) = Default::default();
+        (self.route, self.expired) = Default::default();
+        self.save_seq += 1;
         h
     }
 
@@ -1727,45 +1701,31 @@ impl App {
         }
     }
 
-    pub fn wake(&mut self) {
-        self.ready(true);
-    }
-
-    fn ready(&mut self, device: bool) {
+    pub(crate) fn ready(&mut self, device: bool) {
         let t = self
             .current_song()
-            .map(|s| (self.track(s), s.url.is_empty()));
-        let (t, song) = t.unwrap_or_default();
+            .map(|s| (self.track(s), s.url.is_empty() && !self.loaded));
+        let (mut t, live) = t.unwrap_or_default();
         let rate = [t.rate, 48_000][usize::from(t.rate == 0)];
-        let t = Track {
-            rate: [0, rate][usize::from(device)],
-            url: if song && !self.loaded {
-                t.url
-            } else {
-                String::new()
-            },
-            ..t
-        };
-        self.player
-            .iter()
-            .for_each(|p| p.warm(t.clone(), self.position));
+        t.rate = [0, rate][usize::from(device)];
+        if !live {
+            t.url.clear();
+        }
+        if let Some(p) = &self.player {
+            p.warm(t, self.position);
+        }
     }
 
     fn warm(&mut self) -> Option<Task<Message>> {
         let row = self.hover.as_deref().and_then(|h| h.rsplit_once('#'));
         let row = row.and_then(|(k, n)| Some((k, n.parse::<usize>().ok()?)));
-        let first = || {
-            let key = self.key_of(self.aim.as_deref().filter(|_| self.shuffle.is_none())?);
-            self.songs_of(&key)?.0.first()
-        };
-        let song = match row {
-            Some((k, n)) => self.songs_of(k).and_then(|v| v.0.get(n)),
-            None => first(),
-        };
-        let tag = if row.is_some() {
-            &self.hover
-        } else {
-            &self.aim
+        let (song, tag) = match row {
+            Some((k, n)) => (self.songs_of(k).and_then(|v| v.0.get(n)), &self.hover),
+            None => {
+                let aim = self.aim.as_deref().filter(|_| self.shuffle.is_none());
+                let song = aim.and_then(|a| self.songs_of(&self.key_of(a))?.0.first());
+                (song, &self.aim)
+            }
         };
         let song = song.filter(|s| s.url.is_empty() && self.warmed != *tag);
         let (tag, t) = song.map(|s| (tag.clone(), self.track(s)))?;
@@ -1930,8 +1890,7 @@ impl App {
                     a.music_brainz_id = m;
                 }
                 let banner = key.starts_with("artist:") && self.cfg.settings.banners;
-                let banner = banner.then(|| v.downcast_ref::<(Artist, Vec<Album>)>());
-                let banner = banner.flatten();
+                let banner = v.downcast_ref::<(Artist, Vec<Album>)>().filter(|_| banner);
                 let banner = banner.map(|(a, _)| a.banner_key());
                 self.cache.insert(key.clone(), (Instant::now(), v));
                 let banner = Task::batch(banner.map(|k| self.request(&k, 0)));
@@ -2101,13 +2060,12 @@ impl App {
                 let back = id.clone();
                 let rate = |s: Session| async move { s.rate(&id, n).await };
                 return self.send(rate, "Could not set the rating.", move |a| {
-                    if a.ratings.get(&back) != Some(&n) {
-                        return Task::none();
+                    if a.ratings.get(&back) == Some(&n) {
+                        match old {
+                            Some(v) => a.ratings.insert(back.clone(), v),
+                            None => a.ratings.remove(&back),
+                        };
                     }
-                    match old {
-                        Some(v) => a.ratings.insert(back.clone(), v),
-                        None => a.ratings.remove(&back),
-                    };
                     Task::none()
                 });
             }
@@ -2179,16 +2137,11 @@ impl App {
                 }
                 return t;
             }
-            Message::MenuClose
-                if self.full
-                    && self.menu.is_none()
-                    && self.modal.is_none()
-                    && self.recording.is_none() =>
-            {
-                return self.set_full(false);
-            }
             Message::MenuClose => {
                 if self.menu.is_none() && self.modal.is_none() && self.recording.is_none() {
+                    if self.full {
+                        return self.set_full(false);
+                    }
                     (self.sel, self.picked) = (None, BTreeSet::new());
                     if self.pl_find.take().is_some()
                         | self.lib_find.take().is_some()
@@ -2440,8 +2393,8 @@ impl App {
             Message::Warm(r) => {
                 self.aim = Some(r.clone());
                 let top = r.strip_prefix("artist:").map(|id| format!("top:{id}"));
-                let keys: Vec<_> = std::iter::once(self.key_of(&r)).chain(top).collect();
-                return Task::batch(keys.iter().map(|k| self.request(k, 0)).collect::<Vec<_>>());
+                let keys = std::iter::once(self.key_of(&r)).chain(top);
+                return Task::batch(keys.map(|k| self.request(&k, 0)));
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
@@ -2540,14 +2493,15 @@ impl App {
                 if let 2 | 3 = m {
                     return self.play_songs(vec![list[n].clone()], src, m);
                 }
-                if !self
+                let sh = m == 1 || self.shuffle.is_some();
+                if self
                     .data::<Page<Song>>(&key)
                     .is_some_and(|p| p.0.len() < p.1)
                 {
-                    self.ctx = key;
-                    return self.start(list, src, n, m == 1 || self.shuffle.is_some());
+                    return self.play_part(key, list, src, n, sh);
                 }
-                return self.play_part(key, list, src, n, m == 1 || self.shuffle.is_some());
+                self.ctx = key;
+                return self.start(list, src, n, sh);
             }
             Message::Arrow(up) if self.menu.is_some() => return self.focus_move(up),
             Message::Arrow(_) if self.modal.is_some() => {}
@@ -2618,15 +2572,12 @@ impl App {
             }
             Message::Modal(id, kind) => {
                 self.menu = None;
-                if kind == 5 {
-                    let load = self.request(&format!("song:{id}"), 0);
+                if let 5 | 6 = kind {
+                    let k = format!("{}:{id}", ["song", "artist"][kind as usize - 5]);
+                    let load = self.request(&k, 0);
                     self.modal = Some((id, kind));
-                    return load;
-                }
-                if kind == 6 {
-                    let load = self.request(&format!("artist:{id}"), 0);
-                    self.modal = Some((id, kind));
-                    return Task::batch([load, self.covers_now()]);
+                    let covers = (kind == 6).then(|| self.covers_now());
+                    return Task::batch([load].into_iter().chain(covers));
                 }
                 let Some(p) = self.playlist(&id) else {
                     return self.toast("The playlist is not available.");
@@ -2675,8 +2626,7 @@ impl App {
         let Some((f, t)) = self.qmove.take().filter(ok) else {
             return Task::none();
         };
-        let v = self.shuffle.as_mut();
-        match v {
+        match self.shuffle.as_mut() {
             Some(o) => {
                 let x = o.remove(f);
                 o.insert(t, x);
@@ -2717,14 +2667,13 @@ impl App {
         if !self.login.busy {
             return Task::none();
         }
-        let s = match r {
+        let mut s = match r {
             Ok(s) => s,
             Err(e) => {
                 (self.login.busy, self.login.error) = (false, e);
                 return Task::none();
             }
         };
-        let mut s = s;
         let same = |x: &&crate::api::Server| (&x.url, &x.user) == (&s.server.url, &s.server.user);
         if let Some(old) = self.cfg.servers.iter().find(same) {
             s.server.id.clone_from(&old.id);
@@ -2755,10 +2704,8 @@ impl App {
         if self.expired.0.len() > 1 {
             return Task::none();
         }
-        let (id, ok) = (
-            srv.id.clone(),
-            self.expired.1.is_none_or(|t| t.elapsed() > STALE),
-        );
+        let id = srv.id.clone();
+        let ok = self.expired.1.is_none_or(|t| t.elapsed() > STALE);
         let again = async move {
             anyhow::ensure!(ok, "The server refused the new session.");
             let pass = tokio::task::spawn_blocking(move || config::recall(&srv.id));
@@ -2874,8 +2821,8 @@ impl App {
                 let done = self.listen(false);
                 let next = self.next_index(false);
                 let at = |n: &usize| self.queue.get(self.real_at(*n)).is_some_and(|s| s.id == id);
-                let rest = (self.index + 1..self.queue.len()).chain(0..self.index);
-                let n = next.filter(at).or_else(|| rest.clone().find(at));
+                let mut rest = (self.index + 1..self.queue.len()).chain(0..self.index);
+                let n = next.filter(at).or_else(|| rest.find(at));
                 self.index = n.unwrap_or(self.index);
                 let began = Task::batch(n.map(|_| self.began()));
                 Task::batch([done, began, self.listen(self.playing)])
@@ -2946,8 +2893,8 @@ impl App {
         let now = self.start(part, src, n, sh);
         let seq = self.play_seq;
         let rest = move |a: &mut App, v: Vec<Song>, _| {
-            let (keep, cur) = (a.kept(), a.current_song().map(|s| s.id.clone()));
-            let v: Vec<Song> = v.into_iter().filter(|s| keep(s)).collect();
+            let cur = a.current_song().map(|s| s.id.clone());
+            let v: Vec<Song> = v.into_iter().filter(a.kept()).collect();
             let at = v.iter().position(|s| Some(&s.id) == cur.as_ref());
             let Some(at) = at.filter(|_| a.play_seq == seq) else {
                 return Task::none();
@@ -2987,6 +2934,7 @@ impl App {
         };
         let tiles = |n: usize| span(n, cw + 52.0, cols, crate::pages::grid_y(self));
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
+        let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
         let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
         let mut wide: [Vec<&String>; 4] = Default::default();
         let (_, gcols, tw, th) = crate::pages::browse(self);
@@ -3059,7 +3007,6 @@ impl App {
                 ][k]
                     .expect("a search hit")
             };
-            let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
             let ql = q.to_lowercase();
             let pls = pls.iter().filter(|p| p.name.to_lowercase().contains(&ql));
             let pls: Vec<_> = pls.collect();
@@ -3083,7 +3030,6 @@ impl App {
             let art = art.filter_map(|g| crate::pages::genre_cover(self, &g.name));
             wide[2].extend(art);
         } else if let Some(h) = self.data::<Home>(key) {
-            let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
             let pins = pls.iter().take(3).map(|p| &p.cover);
             wide[3].extend(pins.chain(h[0].iter().map(|a| &a.cover)).take(7));
             let hs = cw + 132.0;
@@ -3167,18 +3113,17 @@ impl App {
             event::listen_with(|e, status, _| match e {
                 Event::Window(W::Focused) => Some(act(|a| a.hidden = false)),
                 Event::Window(W::Unfocused) => Some(task(|_| {
-                    let min = |m: Option<bool>| {
-                        task(move |a| {
-                            let min = m == Some(true);
-                            a.hidden |= min;
-                            let tray = min && a.cfg.settings.min_tray && a.tray.is_some();
-                            Task::batch(tray.then(|| a.update(Message::Window(false))))
-                        })
-                    };
                     later(0.3, Message::Noop)
                         .then(|_| iced::window::latest())
                         .and_then(iced::window::is_minimized)
-                        .map(min)
+                        .map(|m| {
+                            task(move |a| {
+                                let min = m == Some(true);
+                                a.hidden |= min;
+                                let tray = min && a.cfg.settings.min_tray && a.tray.is_some();
+                                Task::batch(tray.then(|| a.update(Message::Window(false))))
+                            })
+                        })
                 })),
                 Event::Window(W::CloseRequested) => {
                     Some(task(|a| match a.tray.is_some() && a.cfg.settings.tray {
@@ -3609,11 +3554,8 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
             .err()
             .and_then(|e| e.downcast_ref::<std::io::Error>());
         let m = match io.map(std::io::Error::kind) {
-            Some(std::io::ErrorKind::PermissionDenied) => {
-                let k = key.clone();
-                task(move |a| a.expired(k.clone()))
-            }
-            _ => Message::Loaded(key.clone(), offset, r.map_err(|e| e.to_string())),
+            Some(std::io::ErrorKind::PermissionDenied) => task(move |a| a.expired(key.clone())),
+            _ => Message::Loaded(key, offset, r.map_err(|e| e.to_string())),
         };
         ours(&me, m)
     })
@@ -3689,6 +3631,10 @@ pub static CURSOR: AtomicU64 = AtomicU64::new(0);
 
 pub fn cursor() -> (f32, f32) {
     point(CURSOR.load(Relaxed))
+}
+
+pub fn bits(x: f32, y: f32) -> u64 {
+    (x.to_bits() as u64) << 32 | y.to_bits() as u64
 }
 
 pub fn point(bits: u64) -> (f32, f32) {

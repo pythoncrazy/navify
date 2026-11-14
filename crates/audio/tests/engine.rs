@@ -39,6 +39,22 @@ fn setup(titles: &str, format: Option<&str>) -> ((Handle, reqwest::Client), Vec<
     ((rt.handle().clone(), reqwest::Client::new()), tracks)
 }
 
+fn proxy(body: impl Fn(&str) -> Vec<u8> + Send + 'static) -> std::net::SocketAddr {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let at = l.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for mut c in l.incoming().map(|c| c.expect("accept")) {
+            let mut b = [0; 4096];
+            let n = c.read(&mut b).expect("read");
+            let body = body(&String::from_utf8_lossy(&b[..n]));
+            let head = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+            let _ = c.write_all(head).and_then(|_| c.write_all(&body));
+        }
+    });
+    at
+}
+
 #[test]
 #[ignore = "needs the local test server"]
 fn render_gives_exact_length_and_gain() {
@@ -64,23 +80,13 @@ fn render_gives_exact_length_and_gain() {
         );
     }
     for (seek, want) in [(0.0, 3.0), (1.0, 2.0)] {
-        use std::io::{Read, Write};
         let (io, mut t) = setup("One", Some("mp3"));
-        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let (up, at) = (t[0].url.clone(), l.local_addr().expect("address"));
-        std::thread::spawn(move || {
-            for mut c in l.incoming().map(|c| c.expect("accept")) {
-                let mut b = [0; 4096];
-                let n = c.read(&mut b).expect("read");
-                let req = String::from_utf8_lossy(&b[..n]).to_string();
-                let off = req.split("timeOffset=").nth(1).map(|s| s.split(' ').next());
-                let url = format!("{up}&timeOffset={}", off.flatten().unwrap_or("0"));
-                let body = reqwest::blocking::get(url)
-                    .and_then(|r| r.bytes())
-                    .expect("get");
-                let head = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
-                let _ = c.write_all(head).and_then(|_| c.write_all(&body));
-            }
+        let up = t[0].url.clone();
+        let at = proxy(move |req| {
+            let off = req.split("timeOffset=").nth(1).map(|s| s.split(' ').next());
+            let url = format!("{up}&timeOffset={}", off.flatten().unwrap_or("0"));
+            let body = reqwest::blocking::get(url).and_then(|r| r.bytes());
+            body.expect("get").to_vec()
         });
         (t[0].url, t[0].transcoded) = (format!("http://{at}/?a=1"), false);
         let pcm = render(io, t, RATE, seek, 0.0).expect("render without range support");
@@ -91,17 +97,10 @@ fn render_gives_exact_length_and_gain() {
         );
     }
     let (io, mut t) = setup("Four", None);
-    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let (up, at) = (t[0].url.clone(), l.local_addr().expect("address"));
-    std::thread::spawn(move || {
-        use std::io::{Read, Write};
-        for mut c in l.incoming().map(|c| c.expect("accept")) {
-            let _ = c.read(&mut [0; 4096]).expect("read");
-            let body = reqwest::blocking::get(&up).and_then(|r| r.bytes());
-            let body = body.expect("get").repeat(2);
-            let head = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
-            let _ = c.write_all(head).and_then(|_| c.write_all(&body));
-        }
+    let up = t[0].url.clone();
+    let at = proxy(move |_| {
+        let body = reqwest::blocking::get(&up).and_then(|r| r.bytes());
+        body.expect("get").repeat(2)
     });
     (t[0].url, t[0].transcoded, t[0].duration) = (format!("http://{at}/live"), true, 0.0);
     let pcm = render(io, t, RATE, 0.0, 0.0).expect("render a chained stream");

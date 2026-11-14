@@ -57,8 +57,8 @@ fn main() {
                 _ => {
                     let nums = step.split(['(', ',', ')']).map(str::trim);
                     if let [x, y] = nums.filter_map(|t| t.parse().ok()).collect::<Vec<f32>>()[..] {
-                        let bits = (u64::from(x.to_bits()) << 32) | u64::from(y.to_bits());
-                        navify::app::CURSOR.store(bits, std::sync::atomic::Ordering::Relaxed);
+                        let at = navify::app::bits(x, y);
+                        navify::app::CURSOR.store(at, std::sync::atomic::Ordering::Relaxed);
                     }
                     emu.run(&app, iced_test::Instruction::parse(step).expect("step"));
                 }
