@@ -145,7 +145,8 @@ impl Engine {
         }
 
         let flat = fill_border_radius == [0.0; 4];
-        if let (Background::Color(color), true) = (background, flat)
+        if matches!(background, Background::Color(color) if color.a == 0.0) {
+        } else if let (Background::Color(color), true) = (background, flat)
             && let Some(rect) = tiny_skia::Rect::from_xywh(
                 physical_bounds.x,
                 physical_bounds.y,

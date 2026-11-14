@@ -369,7 +369,7 @@ impl GlyphCache {
     }
 }
 
-fn blit(
+pub(crate) fn blit(
     pixels: &mut tiny_skia::PixmapMut<'_>,
     x: i32,
     y: i32,
