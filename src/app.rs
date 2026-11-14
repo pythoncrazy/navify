@@ -108,8 +108,7 @@ fn load_data(server: &str) -> HashMap<String, (Instant, AnyData)> {
                     .map(|x| Arc::new(x) as AnyData)
             };
         }
-        let d = stored!(k, de)?;
-        Some((k, (now, d)))
+        stored!(k, de).map(|d| (k, (now, d)))
     });
     all.collect()
 }
@@ -179,12 +178,10 @@ fn scan_devices() -> Task<Message> {
 
 fn ours(s: &Session, m: Message) -> Message {
     let s = s.clone();
-    task(
-        move |a: &mut App| match a.session.as_ref().is_some_and(|x| x.same(&s)) {
-            true => a.update(m.clone()),
-            false => Task::none(),
-        },
-    )
+    task(move |a| {
+        let same = a.session.as_ref().is_some_and(|x| x.same(&s));
+        Task::batch(same.then(|| a.update(m.clone())))
+    })
 }
 
 fn say(text: String) -> Message {
@@ -217,8 +214,7 @@ fn bare(id: &str) -> &str {
     id.split_once('#').map_or(id, |x| x.0)
 }
 
-static SHOWN: std::sync::LazyLock<std::sync::Mutex<HashSet<String>>> =
-    std::sync::LazyLock::new(Default::default);
+static SHOWN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
 
 pub(crate) fn later(secs: f32, m: Message) -> Task<Message> {
     Task::future(tokio::time::sleep(Duration::from_secs_f32(secs))).map(move |()| m.clone())
@@ -549,11 +545,7 @@ impl App {
             match s {
                 "queue" | "panel1" => {
                     (self.queue, self.index) = (songs.iter().take(20).cloned().collect(), 0);
-                    let album = self
-                        .route
-                        .starts_with("album:")
-                        .then(|| songs.first())
-                        .flatten();
+                    let album = songs.first().filter(|_| self.route.starts_with("album:"));
                     self.source = album.map_or_else(|| "Liked Songs".into(), |s| s.album.clone());
                     self.panel = if s == "queue" { 2 } else { 1 };
                     let first = songs.first().map(|s| format!("lyrics:{}", s.id));
@@ -682,21 +674,14 @@ impl App {
     pub fn lib_layout(&self) -> (u8, usize, f32, f32) {
         let view = [self.cfg.settings.lib_view, 1][usize::from(self.lib_mini())];
         let inner = self.lib_w() - 16.0;
-        let cols = |min: f32| ((inner / min) as usize).max(2);
+        let grid = |v, min: f32, text: f32| {
+            let n = ((inner / min) as usize).max(2);
+            (v, n, inner / n as f32, inner / n as f32 + text)
+        };
         match view {
             0 => (0, 1, inner, 32.0),
-            2 => (
-                2,
-                cols(90.0),
-                inner / cols(90.0) as f32,
-                inner / cols(90.0) as f32,
-            ),
-            3 => (
-                3,
-                cols(128.0),
-                inner / cols(128.0) as f32,
-                inner / cols(128.0) as f32 + 50.0,
-            ),
+            2 => grid(2, 90.0, 0.0),
+            3 => grid(3, 128.0, 50.0),
             _ => (1, 1, inner, 64.0),
         }
     }
@@ -819,10 +804,9 @@ impl App {
         rm: Vec<usize>,
     ) -> Task<Message> {
         self.menu = None;
-        let done = format!("{verb} {}.", self.playlist(&pid).map_or("", |p| &p.name));
-        let old = self.playlist(&pid);
-        let old = old.map_or(String::new(), |p| p.cover.clone());
-        let fresh = self.pl_fresh(pid.clone(), old, 3);
+        let p = self.playlist(&pid);
+        let done = format!("{verb} {}.", p.map_or("", |p| &p.name));
+        let fresh = self.pl_fresh(pid.clone(), p.map_or(String::new(), |p| p.cover.clone()), 3);
         let (undo, key) = (reload(&pid), format!("playlist:{pid}"));
         if self.pending.contains(&format!("{key}#0")) {
             self.dirty.insert(key.clone(), false);
@@ -840,10 +824,9 @@ impl App {
             }
         };
         let sent = act(move |a| {
-            a.dirty
-                .iter_mut()
-                .filter(|d| *d.0 == key)
-                .for_each(|d| *d.1 = true)
+            if let Some(d) = a.dirty.get_mut(&key) {
+                *d = true;
+            }
         });
         Task::batch([
             self.send(f, "Could not change the playlist.", undo)
@@ -966,10 +949,8 @@ impl App {
 
     pub(crate) fn history(&mut self) -> Task<Message> {
         let native = self.session.as_ref().is_some_and(|s| s.server.native);
-        match native && self.panel == 2 && self.recent_tab {
-            true => self.request("songs:recent", 0),
-            false => Task::none(),
-        }
+        let on = native && self.panel == 2 && self.recent_tab;
+        Task::batch(on.then(|| self.request("songs:recent", 0)))
     }
 
     pub(crate) fn request(&mut self, key: &str, offset: usize) -> Task<Message> {
@@ -1024,7 +1005,7 @@ impl App {
         {
             v.jwt = s.jwt();
         }
-        static LAST: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+        static LAST: Mutex<u64> = Mutex::new(0);
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let n = NEXT.fetch_add(1, Relaxed);
         let save = move || {
@@ -1095,15 +1076,13 @@ impl App {
         let s = self.session.as_ref().expect("playback needs a session");
         let format = Some(st.transcode_format.as_str()).filter(|f| !f.is_empty());
         let (url, transcoded) = s.stream_url(song, format, st.transcode_max_bitrate);
-        let (id, gain, duration) = (song.id.clone(), self.gain(song), song.duration);
-        let rate = [song.sampling_rate, 48_000][usize::from(format == Some("opus"))];
         Track {
-            id,
+            id: song.id.clone(),
             url,
-            gain,
+            gain: self.gain(song),
             transcoded,
-            duration,
-            rate,
+            duration: song.duration,
+            rate: [song.sampling_rate, 48_000][usize::from(format == Some("opus"))],
         }
     }
 
@@ -1171,10 +1150,8 @@ impl App {
         let done = Task::batch(self.loaded.then(|| self.listen(false)));
         (self.index, self.playing) = (i.min(self.queue.len() - 1), true);
         let song = &self.queue[self.real_at(self.index)];
-        let (t, at) = (
-            self.track(song),
-            [0.0, at][usize::from(song.url.is_empty())],
-        );
+        let t = self.track(song);
+        let at = [0.0, at][usize::from(song.url.is_empty())];
         self.player.iter().for_each(|p| p.play(t.clone(), at));
         let began = self.began();
         self.position = at;
@@ -1224,7 +1201,7 @@ impl App {
         let files = self
             .session
             .as_ref()
-            .map(|s| [128, 192, 300, 640].map(|z| s.cover_file(&song.cover, z)));
+            .map(|s| SIZES.map(|z| s.cover_file(&song.cover, z)));
         let show = move || {
             let mut n = notify_rust::Notification::new();
             let body = format!("{}{}{}", song.artist, crate::pages::DOT, song.album);
@@ -1384,7 +1361,7 @@ impl App {
         static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
         static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
         type Known = Option<(std::path::PathBuf, HashMap<String, Color>)>;
-        static KNOWN: std::sync::Mutex<Known> = std::sync::Mutex::new(None);
+        static KNOWN: Mutex<Known> = Mutex::new(None);
         let dec = |items: Vec<(String, u32, Result<bytes::Bytes, String>)>,
                    mut colors: HashMap<String, Color>,
                    s: &Session| {
@@ -1456,7 +1433,7 @@ impl App {
             err.map(|e| a.toast(&format!("Could not load a cover. {e}")))
         };
         self.covers.disk += 1;
-        let (colors, own, s2) = (self.covers.color.clone(), s.clone(), s.clone());
+        let (colors, s2) = (self.covers.color.clone(), s.clone());
         let load = async move {
             let (mut hit, mut miss) = (Vec::new(), Vec::new());
             for (k, sz, seen) in need {
@@ -1507,7 +1484,7 @@ impl App {
                 }
                 Task::batch(tasks)
             });
-            ours(&own, t)
+            ours(&s2, t)
         })
     }
 
@@ -1699,14 +1676,12 @@ impl App {
         (self.ctx, self.source, self.qmove) = Default::default();
         (self.starred, self.ratings, self.plays, self.recent) = Default::default();
         (self.cache, self.seeds, self.pending, self.scrolls) = Default::default();
-        self.stale.clear();
-        self.dirty.clear();
         (self.covers, self.history, self.hi, self.panel) = Default::default();
         (self.menu, self.modal, self.recording, self.hover) = Default::default();
         (self.sel, self.picked, self.pl_find, self.pl_more) = Default::default();
-        (self.lib_find, self.full) = Default::default();
-        (self.route, self.expired, self.save_seq) =
-            (String::new(), Default::default(), self.save_seq + 1);
+        (self.lib_find, self.full, self.stale, self.dirty) = Default::default();
+        (self.route, self.expired) = Default::default();
+        self.save_seq += 1;
         h
     }
 
@@ -1734,38 +1709,28 @@ impl App {
     fn ready(&mut self, device: bool) {
         let t = self
             .current_song()
-            .map(|s| (self.track(s), s.url.is_empty()));
-        let (t, song) = t.unwrap_or_default();
+            .map(|s| (self.track(s), s.url.is_empty() && !self.loaded));
+        let (mut t, live) = t.unwrap_or_default();
         let rate = [t.rate, 48_000][usize::from(t.rate == 0)];
-        let t = Track {
-            rate: [0, rate][usize::from(device)],
-            url: if song && !self.loaded {
-                t.url
-            } else {
-                String::new()
-            },
-            ..t
-        };
-        self.player
-            .iter()
-            .for_each(|p| p.warm(t.clone(), self.position));
+        t.rate = [0, rate][usize::from(device)];
+        if !live {
+            t.url.clear();
+        }
+        if let Some(p) = &self.player {
+            p.warm(t, self.position);
+        }
     }
 
     fn warm(&mut self) -> Option<Task<Message>> {
         let row = self.hover.as_deref().and_then(|h| h.rsplit_once('#'));
         let row = row.and_then(|(k, n)| Some((k, n.parse::<usize>().ok()?)));
-        let first = || {
-            let key = self.key_of(self.aim.as_deref().filter(|_| self.shuffle.is_none())?);
-            self.songs_of(&key)?.0.first()
-        };
-        let song = match row {
-            Some((k, n)) => self.songs_of(k).and_then(|v| v.0.get(n)),
-            None => first(),
-        };
-        let tag = if row.is_some() {
-            &self.hover
-        } else {
-            &self.aim
+        let (song, tag) = match row {
+            Some((k, n)) => (self.songs_of(k).and_then(|v| v.0.get(n)), &self.hover),
+            None => {
+                let aim = self.aim.as_deref().filter(|_| self.shuffle.is_none());
+                let song = aim.and_then(|a| self.songs_of(&self.key_of(a))?.0.first());
+                (song, &self.aim)
+            }
         };
         let song = song.filter(|s| s.url.is_empty() && self.warmed != *tag);
         let (tag, t) = song.map(|s| (tag.clone(), self.track(s)))?;
