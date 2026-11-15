@@ -943,12 +943,20 @@ fn open(
             let lag = (delay * f64::from(rate)) as u64 * 2 + out.len() as u64;
             sh.lag.store(lag, Relaxed);
             let stale = sh.flush.load(Relaxed).saturating_sub(read) as usize;
+            let mut head = 0;
             if stale > 0
                 && let Ok(c) = cons.read_chunk(stale.min(cons.slots()))
             {
+                let old = c.as_slices().0;
+                head = old.len().min(out.len()).min(rate as usize / 100) & !1;
+                for (i, (o, s)) in out[..head].iter_mut().zip(old).enumerate() {
+                    *o = s * vol * (1.0 - (i / 2 * 2) as f32 / head as f32);
+                }
+                vol = [vol, 0.0][usize::from(head > 0)];
                 read += c.len() as u64;
                 c.commit_all();
             }
+            let out = &mut out[head..];
             let paused = sh.paused.load(Relaxed);
             if paused && vol < 1e-4 {
                 return out.fill(0.0);
