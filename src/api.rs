@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, hash_map::RandomState};
+use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Result, anyhow, ensure};
@@ -344,16 +344,8 @@ fn sorted(sort: &str, col: usize, off: usize, n: usize) -> Value {
     let mut q =
         json!({"_sort": sort_row(sort)[col], "_order": order, "_start": off, "_end": off + n});
     if sort == "random" {
-        static SEEDS: Mutex<BTreeMap<(usize, usize), u64>> = Mutex::new(BTreeMap::new());
-        let (mut seeds, new) = (
-            SEEDS.lock().expect("seed lock"),
-            RandomState::new().hash_one(0),
-        );
-        let seed = seeds.entry((col, n)).or_insert(new);
-        if off == 0 {
-            *seed = new;
-        }
-        q["seed"] = seed.to_string().into();
+        static SEED: LazyLock<u64> = LazyLock::new(|| RandomState::new().hash_one(0));
+        q["seed"] = SEED.to_string().into();
     }
     let only = match (sort, col) {
         ("starred", _) => "starred",

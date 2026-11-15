@@ -180,7 +180,7 @@ mod wrap {
         Point,
         bool,
         usize,
-        Option<f32>,
+        Option<(f32, Option<std::time::Instant>)>,
     );
     struct Scan(Option<(Rect, Rect, f32)>, Option<(f32, f32)>, Option<f32>);
     impl Operation for Scan {
@@ -450,7 +450,6 @@ mod wrap {
                 ring.5 = usize::MAX;
             }
             if self.4 >= usize::MAX - 1 && root {
-                ring.2 = ring.2.filter(|_| ring.6.is_none());
                 (ring.5, ring.6) = (self.4, None);
             } else if self.4 < usize::MAX - 1
                 && let Event::Window(RedrawRequested(now)) = e
@@ -459,41 +458,33 @@ mod wrap {
                     && let (Some((b, ch, off)), Some((ly, lh))) = scan(w, c0, None, None)
                 {
                     let old = std::mem::replace(&mut ring.5, self.4);
-                    ring.1 = 0.0;
                     let max = (ch.height - b.height).max(0.0);
                     let y = (ly - ch.y + lh * 0.5 - b.height * 0.45).clamp(0.0, max);
                     let near = old == usize::MAX - 1 || (y - off).abs() < b.height;
                     match self.3 == 1 && old != usize::MAX && near && (y - off).abs() >= 1.0 {
-                        true => {
-                            ring.2 = ring.2.filter(|_| ring.6.is_some());
-                            ring.6 = Some(y);
-                        }
+                        true => ring.6 = Some((y, ring.6.and_then(|g| g.1))),
                         false => {
-                            ring.2 = ring.2.filter(|_| ring.6.is_none());
                             ring.6 = None;
                             scan(w, c0, None, Some(y));
                         }
                     }
                 }
-                if let Some(y) = ring.6 {
-                    match ring.2.map(|t| t + frame).filter(|d| d > now) {
+                if let Some((y, t)) = ring.6 {
+                    match t.map(|t| t + frame).filter(|d| d > now) {
                         Some(due) => sh.request_redraw_at(due),
                         None => {
                             let at = scan(w, c0, Some((0.0, 0.0)), None).0;
                             let y = at.map_or(y, |x| y.min((x.1.height - x.0.height).max(0.0)));
                             let off = at.map_or(y, |x| x.2);
-                            let dt = ring.2.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
+                            let dt = t.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
                             let rem = y - off;
                             let next = match rem.abs() < 1.0 {
                                 true => {
-                                    (ring.2, ring.6) = (None, None);
-                                    if ring.1 != 0.0 {
-                                        sh.request_redraw();
-                                    }
+                                    ring.6 = None;
                                     y
                                 }
                                 false => {
-                                    ring.2 = Some(*now);
+                                    ring.6 = Some((y, Some(*now)));
                                     sh.request_redraw_at(*now + frame);
                                     off + rem * (1.0 - (-dt / 0.08).exp())
                                 }
@@ -509,7 +500,6 @@ mod wrap {
                     .0
                     .is_some_and(|x| c.is_over(x.0))
             {
-                ring.2 = ring.2.filter(|_| ring.6.is_none());
                 (ring.5, ring.6) = (usize::MAX - 1, None);
                 sh.publish(super::act(|a| a.lyric = false));
             }
@@ -590,7 +580,6 @@ mod wrap {
                     .0
                     .is_some_and(|x| (x.2 - o).abs() > 0.5)
             }) {
-                ring.2 = ring.2.filter(|_| ring.6.is_none());
                 (ring.5, ring.6) = (usize::MAX - 1, None);
                 sh.publish(super::act(|a| a.lyric = false));
             }

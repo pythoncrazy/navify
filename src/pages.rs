@@ -374,7 +374,9 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
     let at = Message::PlayAt(key.into(), n);
     let play = if cur { Message::Toggle } else { at.clone() };
     let g = [theme::fill::PLAY, theme::fill::PAUSE][usize::from(cur && app.playing)];
-    let no = [n + 1, s.track as usize][usize::from(in_album && s.track > 0)];
+    let tagged = |v: &[Song]| v.iter().all(|s| s.track > 0);
+    let tagged = in_album && app.songs_of(key).is_some_and(|v| tagged(v.0));
+    let no = [n + 1, s.track as usize][usize::from(tagged)];
     let num = txt(no, 16.0).color(if cur { ACCENT } else { SUB });
     let idx: El = match (hot, cur && app.playing) {
         (true, _) => btn(theme::filled(g, 16.0).center(), play).width(c.3).into(),
