@@ -2,7 +2,7 @@ use crate::core::image as raster;
 use crate::core::{Rectangle, Size};
 use crate::graphics;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::hash_map;
 
@@ -55,18 +55,25 @@ impl Pipeline {
         };
 
         // An upright image is scaled one time to its display size and
-        // then copied to whole pixels. The cache keeps only that copy.
-        let width = (bounds.width * transform.sx).round();
-        let height = (bounds.height * transform.sy).round();
+        // then copied to whole pixels. The edges are rounded, so the copy
+        // stays inside the bounds of the image.
+        let edge =
+            |at: f32, scale: f32, move_by: f32| (at * scale + move_by).round();
+        let (sx, sy, tx, ty) =
+            (transform.sx, transform.sy, transform.tx, transform.ty);
+        let (x, y) = (edge(bounds.x, sx, tx), edge(bounds.y, sy, ty));
+        let width = edge(bounds.x + bounds.width, sx, tx) - x;
+        let height = edge(bounds.y + bounds.height, sy, ty) - y;
 
         if !transform.has_skew()
             && filter_method == raster::FilterMethod::Linear
             && width >= 1.0
             && height >= 1.0
+            && width as u32 <= entry.width
+            && height as u32 <= entry.height
             && let Some(scaled) = entry.fit(handle, width as u32, height as u32)
         {
-            let x = (bounds.x * transform.sx + transform.tx).round() as i32;
-            let y = (bounds.y * transform.sy + transform.ty).round() as i32;
+            let (x, y) = (x as i32, y as i32);
 
             if clip_mask.is_none() && opacity >= 1.0 {
                 return crate::text::blit(pixels, x, y, scaled, 1.0);
@@ -120,10 +127,16 @@ impl Pipeline {
     }
 }
 
+// Entries, copies, and full-size pixels that were not used in the last
+// `AGE` frames are dropped. A partial redraw thus keeps the covers that
+// are on screen but outside the damage area.
+const AGE: u64 = 30;
+const PIXELS: u64 = 1;
+
 #[derive(Debug, Default)]
 struct Cache {
-    entries: FxHashMap<raster::Id, Option<Entry>>,
-    hits: FxHashSet<raster::Id>,
+    entries: FxHashMap<raster::Id, (u64, Option<Entry>)>,
+    frame: u64,
 }
 
 impl Cache {
@@ -131,39 +144,61 @@ impl Cache {
         &mut self,
         handle: &raster::Handle,
     ) -> Result<&mut Entry, raster::Error> {
-        let id = handle.id();
+        let frame = self.frame;
 
-        if let hash_map::Entry::Vacant(entry) = self.entries.entry(id) {
+        if let hash_map::Entry::Vacant(entry) = self.entries.entry(handle.id())
+        {
             match decode(handle) {
                 Ok((width, height, pixels)) => {
-                    let _ = entry.insert(Some(Entry {
-                        width,
-                        height,
-                        pixels,
-                        scaled: Vec::new(),
-                        keep: false,
-                    }));
+                    let _ = entry.insert((
+                        frame,
+                        Some(Entry {
+                            width,
+                            height,
+                            pixels,
+                            scaled: Vec::new(),
+                            keep: false,
+                            used: frame,
+                            frame,
+                        }),
+                    ));
                 }
                 Err(raster::Error::Empty) => return Err(raster::Error::Empty),
                 Err(error) => {
-                    let _ = entry.insert(None);
+                    let _ = entry.insert((frame, None));
 
                     return Err(error);
                 }
             }
         }
 
-        let _ = self.hits.insert(id);
+        let (seen, entry) = self
+            .entries
+            .get_mut(&handle.id())
+            .expect("Image should be allocated");
 
-        self.entries
-            .get_mut(&id)
-            .and_then(Option::as_mut)
-            .ok_or(raster::Error::Empty)
+        *seen = frame;
+
+        let entry = entry.as_mut().ok_or(raster::Error::Empty)?;
+        entry.frame = frame;
+
+        Ok(entry)
     }
 
     fn trim(&mut self) {
-        self.entries.retain(|key, _| self.hits.contains(key));
-        self.hits.clear();
+        let frame = self.frame;
+
+        self.entries.retain(|_, (seen, _)| *seen + AGE > frame);
+
+        for entry in self.entries.values_mut().filter_map(|e| e.1.as_mut()) {
+            entry.scaled.retain(|s| s.1 + AGE > frame);
+
+            if !entry.keep && entry.used + PIXELS <= frame {
+                entry.pixels = Vec::new();
+            }
+        }
+
+        self.frame += 1;
     }
 }
 
@@ -195,8 +230,10 @@ struct Entry {
     width: u32,
     height: u32,
     pixels: Vec<u32>,
-    scaled: Vec<tiny_skia::Pixmap>,
+    scaled: Vec<(tiny_skia::Pixmap, u64)>,
     keep: bool,
+    used: u64,
+    frame: u64,
 }
 
 impl Entry {
@@ -204,8 +241,16 @@ impl Entry {
         &mut self,
         handle: &raster::Handle,
     ) -> Option<tiny_skia::PixmapRef<'_>> {
+        self.used = self.frame;
+
         if self.pixels.is_empty() {
-            self.pixels = decode(handle).ok()?.2;
+            let (width, height, pixels) = decode(handle).ok()?;
+
+            if (width, height) != (self.width, self.height) {
+                self.scaled.clear();
+            }
+
+            (self.width, self.height, self.pixels) = (width, height, pixels);
         }
 
         tiny_skia::PixmapRef::from_bytes(
@@ -221,12 +266,17 @@ impl Entry {
         width: u32,
         height: u32,
     ) -> Option<tiny_skia::PixmapRef<'_>> {
+        let frame = self.frame;
         let size = |s: &tiny_skia::Pixmap| (s.width(), s.height());
 
-        if let Some(at) =
-            self.scaled.iter().position(|s| size(s) == (width, height))
+        if let Some(at) = self
+            .scaled
+            .iter()
+            .position(|s| size(&s.0) == (width, height))
         {
-            return Some(self.scaled[at].as_ref());
+            self.scaled[at].1 = frame;
+
+            return Some(self.scaled[at].0.as_ref());
         }
 
         let resize = |from: tiny_skia::PixmapRef<'_>, w: u32, h: u32| {
@@ -250,8 +300,8 @@ impl Entry {
             Some(to)
         };
 
-        // Halve the image while it is two times too large, so each
-        // target pixel gets the mean of its source pixels.
+        // Halve the image while the half is not smaller than the target,
+        // so the last bilinear step reduces by two times at most.
         let image = self.image(handle)?;
         let mut half: Option<tiny_skia::Pixmap> = None;
 
@@ -259,7 +309,7 @@ impl Entry {
             let from = half.as_ref().map_or(image, |h| h.as_ref());
             let (w, h) = (from.width() / 2, from.height() / 2);
 
-            if w < width * 2 || h < height * 2 {
+            if w < width || h < height {
                 break;
             }
 
@@ -270,12 +320,8 @@ impl Entry {
         let scaled = resize(from, width, height)?;
 
         self.scaled.truncate(2);
-        self.scaled.insert(0, scaled);
+        self.scaled.insert(0, (scaled, frame));
 
-        if !self.keep {
-            self.pixels = Vec::new();
-        }
-
-        Some(self.scaled[0].as_ref())
+        Some(self.scaled[0].0.as_ref())
     }
 }

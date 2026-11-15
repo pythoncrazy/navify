@@ -2642,8 +2642,8 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
         MenuKind::Columns => {
             let st = &app.cfg.settings;
             let album = in_album(app);
-            let dated =
-                app.route.starts_with("playlist:") || ["liked", "songs"].contains(&&*app.route);
+            let dated = app.route.starts_with("playlist:")
+                || (app.route == "liked" || app.route.split(':').next() == Some("songs"));
             let check = |l: &'a str, on: bool, msg: Message| {
                 let c = container(on.then(|| i(i::CHECK, 12.0).color(BG))).center(16);
                 let border = iced::Border::default().rounded(2);
