@@ -1827,19 +1827,25 @@ impl App {
 
     fn handle(&mut self, m: Message) -> Task<Message> {
         let st = &self.cfg.settings;
-        let replaces = match &m {
-            Message::Play(..) => true,
+        let q = (st.confirm_queue && !self.queue.is_empty()).then(|| (String::new(), 4));
+        let hold = match &m {
+            Message::Play(..) => q,
             Message::PlayAt(k, n) => {
                 let ok = self.songs_of(k);
                 let ok = ok.is_none_or(|(l, _)| l.get(*n).is_some_and(|s| !s.is_dir));
-                ok && st.play_mode < 2 && *k != self.ctx
+                q.filter(|_| ok && st.play_mode < 2 && *k != self.ctx)
             }
-            Message::PlayCtx(k, 0) => st.play_mode < 2 && *k != self.ctx,
-            Message::PlayCtx(k, 1) => *k != self.ctx,
-            _ => false,
+            Message::PlayCtx(k, 0) => q.filter(|_| st.play_mode < 2 && *k != self.ctx),
+            Message::PlayCtx(k, 1) => q.filter(|_| *k != self.ctx),
+            Message::PlAdd(pid, ids) => {
+                let have = self.data::<(Playlist, Vec<Song>)>(&format!("playlist:{pid}"));
+                let dup = have.is_some_and(|p| p.1.iter().any(|s| ids.contains(&s.id)));
+                dup.then(|| (pid.clone(), 7))
+            }
+            _ => None,
         };
-        if replaces && st.confirm_queue && self.modal.is_none() && !self.queue.is_empty() {
-            (self.menu, self.modal, self.held) = (None, Some((String::new(), 4)), Some(m));
+        if let Some(h) = hold.filter(|_| self.modal.is_none()) {
+            (self.menu, self.modal, self.held) = (None, Some(h), Some(m));
             return layer_focus(true, |_, n| n.min(2) - 1);
         }
         match m {
@@ -1918,19 +1924,16 @@ impl App {
                 return Task::batch([load, setup, banner]);
             }
             Message::Nav(r) => return self.nav(r),
-            Message::Back if self.hi > 0 && self.session.is_some() && self.modal.is_none() => {
-                self.hi -= 1;
-                return self.show();
+            Message::Back | Message::Fwd => {
+                let hi = match m {
+                    Message::Back => self.hi.wrapping_sub(1),
+                    _ => self.hi + 1,
+                };
+                if hi < self.history.len() && self.session.is_some() && self.modal.is_none() {
+                    self.hi = hi;
+                    return self.show();
+                }
             }
-            Message::Fwd
-                if self.hi + 1 < self.history.len()
-                    && self.session.is_some()
-                    && self.modal.is_none() =>
-            {
-                self.hi += 1;
-                return self.show();
-            }
-            Message::Back | Message::Fwd => {}
             Message::Scrolled(off, view, content) => {
                 let (key, step) = (self.route.clone(), self.row_h() as usize);
                 let old = self.scrolls.insert(key.clone(), (off, view));
@@ -2045,14 +2048,10 @@ impl App {
                 let back = items.iter().filter(|f| was(f) != Some(on)).cloned();
                 let back: Vec<Found> = back.collect();
                 let kind = |f: &Found| usize::from(f.2.is_some()) + 2 * usize::from(f.3.is_some());
-                let of = |k| {
-                    items
-                        .iter()
-                        .filter(|f| kind(f) == k)
-                        .map(|f| f.0.clone())
-                        .collect()
-                };
-                let kinds: [Vec<String>; 3] = [0, 1, 2].map(of);
+                let kinds: [Vec<String>; 3] = [0, 1, 2].map(|k| {
+                    let v = items.iter().filter(|f| kind(f) == k);
+                    v.map(|f| f.0.clone()).collect()
+                });
                 self.star(&items, on);
                 let star = |s: Session| async move { s.star(&kinds, on).await };
                 let star = self.send(star, "Could not update Your Library.", move |a| {
@@ -2175,27 +2174,21 @@ impl App {
                 return self.persist();
             }
             Message::Key(c) => {
+                let open = self.session.is_some() && self.modal.is_none();
+                let help = self.session.is_some() && matches!(self.modal, Some((_, 3)));
                 let hit = KEYS.iter().find(|k| {
-                    self.binding(k.0) == c
-                        && (matches!(k.0, "close" | "quit")
-                            || self.session.is_some()
-                                && (self.modal.is_none()
-                                    || k.0 == "shortcuts"
-                                        && self.modal.as_ref().is_some_and(|m| m.1 == 3)))
+                    let ok = open || matches!(k.0, "close" | "quit") || help && k.0 == "shortcuts";
+                    self.binding(k.0) == c && ok
                 });
                 let base = c.rsplit('+').next().filter(|_| !c.starts_with("C+"));
-                let open = self.session.is_some() && self.modal.is_none();
                 let m = match (hit, base.unwrap_or_default()) {
                     (Some(k), _) => (k.3)(),
                     (_, "Tab") => return self.focus_move(c.contains("Shift+")),
                     (_, "ArrowUp") if open => Message::Arrow(true),
                     (_, "ArrowDown") if open => Message::Arrow(false),
-                    (_, "Enter") if open && self.menu.is_none() => {
-                        return Task::batch(
-                            self.sel
-                                .clone()
-                                .map(|(k, n)| self.update(Message::PlayAt(k, n))),
-                        );
+                    (_, "Enter") if open && self.menu.is_none() && self.sel.is_some() => {
+                        let (k, n) = self.sel.clone().expect("a selection");
+                        Message::PlayAt(k, n)
                     }
                     (_, "Delete" | "Backspace") if open && self.menu.is_none() => {
                         Message::DeleteSel
@@ -2205,13 +2198,6 @@ impl App {
                 return self.update(m);
             }
             Message::PlAdd(pid, ids) => {
-                let have = self.data::<(Playlist, Vec<Song>)>(&format!("playlist:{pid}"));
-                let dup = have.is_some_and(|p| p.1.iter().any(|s| ids.contains(&s.id)));
-                if dup && self.modal.is_none() {
-                    let add = Some(Message::PlAdd(pid.clone(), ids));
-                    (self.menu, self.modal, self.held) = (None, Some((pid, 7)), add);
-                    return layer_focus(true, |_, n| n.min(2) - 1);
-                }
                 if self.modal.as_ref().is_some_and(|m| m.1 == 7) {
                     (self.modal, self.held) = (None, None);
                 }
@@ -2394,10 +2380,8 @@ impl App {
                     false => w::close(id),
                 };
                 let q = self.loaded.then(|| self.save_queue());
-                return Task::batch(
-                    q.into_iter()
-                        .chain([self.persist(), self.save_data(), close]),
-                );
+                let save = [self.persist(), self.save_data(), close];
+                return Task::batch(q.into_iter().chain(save));
             }
             Message::Warm(r) => {
                 self.aim = Some(r.clone());
@@ -2407,8 +2391,7 @@ impl App {
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
-                let mode = Some(mode).filter(|&m| m > 0);
-                let mode = mode.unwrap_or(self.cfg.settings.play_mode);
+                let mode = [mode, self.cfg.settings.play_mode][usize::from(mode == 0)];
                 let part = self.data::<Page<Song>>(&route);
                 let part = part.is_some_and(|p| p.0.len() < p.1 && !p.0.is_empty());
                 if let Some((v, src)) = self.songs_of(&route)
@@ -2965,12 +2948,8 @@ impl App {
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
             big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
-            let art = a
-                .artists
-                .first()
-                .map(|x| &x.cover)
-                .filter(|c| !c.is_empty());
-            small.push(art.unwrap_or(&a.artist_id));
+            let art = a.artists.first().map(|x| &x.cover);
+            small.push(art.filter(|c| !c.is_empty()).unwrap_or(&a.artist_id));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             let empty = s.is_empty() && p.song_count == 0;
             let empty = empty || (self.panel != 4 && self.pl_more.is_some());
@@ -3338,10 +3317,7 @@ fn decode(
     use {::image::ImageReader, ::image::imageops::FilterType, std::hash::BuildHasher};
     let wide = k.strip_prefix('b').and_then(|r| r.split_once(':'));
     let wide = wide.and_then(|(n, _)| n.parse::<f32>().ok());
-    let (size, round) = (
-        if wide.is_some() { 1280 } else { size },
-        k.starts_with("o:"),
-    );
+    let (size, round) = (wide.map_or(size, |_| 1280), k.starts_with("o:"));
     let aspect = wide.map_or(5.0 / 3.0 * f32::from(k.starts_with("w:")), |n| n / 10.0);
     let png = raw.starts_with(b"\x89PNG");
     if aspect == 0.0
@@ -3426,11 +3402,7 @@ fn decode(
             let v = b.iter().map(|x| x.0[i]);
             v.clone().max().unwrap_or(0) - v.min().unwrap_or(0)
         };
-        let mut boxes = vec![
-            hist.into_iter()
-                .filter(|x| ok(rgb(x.0)))
-                .collect::<Vec<_>>(),
-        ];
+        let mut boxes: Vec<Vec<_>> = vec![hist.into_iter().filter(|x| ok(rgb(x.0))).collect()];
         while boxes.len() < 16 {
             let vol = |b: &Vec<_>| (0..3).map(|i| u32::from(span(b, i)) + 1).product::<u32>();
             let k = (0..boxes.len()).max_by_key(|&k| vol(&boxes[k]));
@@ -3464,11 +3436,8 @@ fn decode(
             .filter(|w| ok(w.0))
             .collect();
         let bright = |c| hsl(c).2 >= 0.8 && hsl(c).1 < 0.25;
-        let top = sw
-            .iter()
-            .filter(|w| !bright(w.0))
-            .map(|w| w.1)
-            .fold(0.0, f32::max);
+        let top = sw.iter().filter(|w| !bright(w.0));
+        let top = top.map(|w| w.1).fold(0.0, f32::max);
         let pick = |l: [f32; 3], s: [f32; 3]| {
             let fit = sw
                 .iter()
@@ -3491,10 +3460,8 @@ fn decode(
             })
     });
     if aspect == 0.0 && !big && !round {
-        let raw = png
-            .then(|| save(&img.into_rgba8(), false))
-            .flatten()
-            .unwrap_or(raw);
+        let small = png.then(|| save(&img.into_rgba8(), false)).flatten();
+        let raw = small.unwrap_or(raw);
         return Ok((color, image::Handle::from_bytes(raw.clone()), raw.len()));
     }
     let mut img = img.into_rgba8();
@@ -3507,11 +3474,8 @@ fn decode(
         let d = (x as f32 + 0.5 - w as f32 / 2.0).hypot(y as f32 + 0.5 - h as f32 / 2.0);
         p.0[3] = (p.0[3] as f32 * (r - d + 0.5).clamp(0.0, 1.0)) as u8;
     }
-    let d = (
-        color,
-        image::Handle::from_rgba(w, h, img.into_raw()),
-        (w * h * 4) as usize,
-    );
+    let n = (w * h * 4) as usize;
+    let d = (color, image::Handle::from_rgba(w, h, img.into_raw()), n);
     if big && aspect == 0.0 && size <= 300 {
         let mut all = BIG.lock().expect("cover lock");
         all.truncate(3);
@@ -3572,10 +3536,8 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
         })
     };
     Task::perform(load, move |r| {
-        let io = r
-            .as_ref()
-            .err()
-            .and_then(|e| e.downcast_ref::<std::io::Error>());
+        let io = r.as_ref().err();
+        let io = io.and_then(|e| e.downcast_ref::<std::io::Error>());
         let m = match io.map(std::io::Error::kind) {
             Some(std::io::ErrorKind::PermissionDenied) => task(move |a| a.expired(key.clone())),
             _ => Message::Loaded(key, offset, r.map_err(|e| e.to_string())),
@@ -3668,12 +3630,8 @@ pub fn point(bits: u64) -> (f32, f32) {
 }
 pub static SHIFT: AtomicU64 = AtomicU64::new(0);
 pub static MODS: AtomicU32 = AtomicU32::new(0);
-pub static ANCHOR: Mutex<iced::Rectangle> = Mutex::new(iced::Rectangle {
-    x: 0.0,
-    y: 0.0,
-    width: 0.0,
-    height: 0.0,
-});
+pub static ANCHOR: Mutex<iced::Rectangle> =
+    Mutex::new(iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::ZERO));
 
 type Rx = Mutex<Option<UnboundedReceiver<Message>>>;
 static CH: LazyLock<(UnboundedSender<Message>, Rx)> = LazyLock::new(|| {
