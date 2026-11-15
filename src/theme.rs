@@ -281,12 +281,9 @@ pub fn fill(c: impl Into<Background>, r: f32) -> impl Fn(&Theme) -> container::S
 }
 
 pub fn wash(a: f32) -> impl Fn(&Theme) -> container::Style {
-    let bg = (a > 0.0).then(|| tint(a).into());
-    let s = container::Style {
-        background: bg,
-        ..Default::default()
-    };
-    move |_| s.border(Border::default().rounded(4))
+    let mut s = container::Style::default().border(Border::default().rounded(4));
+    s.background = (a > 0.0).then(|| tint(a).into());
+    move |_| s
 }
 
 pub fn hue(n: usize) -> Color {
