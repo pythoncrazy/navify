@@ -109,6 +109,7 @@ struct Shared {
     rate: AtomicU32,
     mark: AtomicU64,
     plays: AtomicU64,
+    seq: AtomicU64,
     warm: AtomicU64,
 }
 
@@ -157,7 +158,6 @@ impl Player {
     }
 
     pub fn play(&self, track: Track, at: f32) {
-        self.sh.paused.store(false, Relaxed);
         self.sh.set_pos(at.max(0.0), u64::MAX);
         let n = self.sh.plays.fetch_add(1, Relaxed) + 1;
         self.send(Cmd::Play(track, at.max(0.0), n));
@@ -601,6 +601,7 @@ impl Source {
         let (track_id, mut past) = (self.tid, self.dur > 0.0 && secs as f64 >= self.dur);
         let t = self.demux.tracks().iter().find(|t| t.id == track_id);
         let start = t.ok_or("invalid track")?.start_ts;
+        let mut base = secs as f64;
         if !past {
             let ts = self
                 .tb
@@ -611,13 +612,14 @@ impl Source {
                 Ok(to) => {
                     let at = self.tb.calc_time_saturating(to.actual_ts).as_secs_f64();
                     self.skip = ((target - at.max(0.0)) * self.rate).max(0.0) as usize;
+                    base = base.max(at - self.delay);
                 }
                 Err(SymError::SeekError(SeekErrorKind::OutOfRange)) => past = true,
                 Err(e) => Err(e)?,
             }
         }
         (self.dec)(None, &mut self.pcm)?;
-        (self.rs, self.off, self.base, self.done, self.eof) = (None, 0, secs as f64, 0, past);
+        (self.rs, self.off, self.base, self.done, self.eof) = (None, 0, base, 0, past);
         self.pcm.clear();
         self.out.clear();
         Ok(())
@@ -759,7 +761,7 @@ impl Mixer {
         let h = thread::spawn(move || {
             if let Some((sh, turn)) = wait {
                 thread::park_timeout(Duration::from_millis(80));
-                if sh.warm.load(Relaxed) != turn {
+                if sh.warm.load(Relaxed) != turn && n.st().ahead != AHEAD {
                     return Err(String::new());
                 }
             }
@@ -771,14 +773,12 @@ impl Mixer {
     fn take_pre(pre: &mut Pre, io: &Io, rate: u32) -> Option<Result<Source, String>> {
         let (t, h, net, at) = pre.take()?;
         net.full();
-        let s = h.and_then(|h| {
+        let s = h.map(|h| {
             h.thread().unpark();
-            h.join().expect("open thread").ok()
+            h.join().expect("open thread")
         });
-        let s = s.map_or_else(
-            || Source::open(t.clone(), io, rate, at, Net::new(AHEAD)),
-            Ok,
-        );
+        let s = s.filter(|r| r.as_ref().err().is_none_or(|e| !e.is_empty()));
+        let s = s.unwrap_or_else(|| Source::open(t.clone(), io, rate, at, Net::new(AHEAD)));
         Some(s.map(|s| Source { track: t, ..s }))
     }
 
@@ -838,7 +838,7 @@ impl Mixer {
             }
             self.fade.0 += out.len() / 2;
             if self.fade.0 >= len {
-                self.cur = self.inc.take();
+                self.old = std::mem::replace(&mut self.cur, self.inc.take());
             }
             return Ok((n.max(m), ev));
         }
@@ -953,7 +953,9 @@ fn open(
             if paused && vol < 1e-4 {
                 return out.fill(0.0);
             }
-            let n = cons.pop_partial_slice(out).0.len();
+            let fade = ((1e-4 / vol).ln() / (1.0 - ramp).ln()).ceil() as usize * 2 + 2;
+            let len = [out.len(), fade.min(out.len())][usize::from(paused)];
+            let n = cons.pop_partial_slice(&mut out[..len]).0.len();
             out[n..].fill(0.0);
             let target = [get(&sh.volume).powi(3), 0.0][usize::from(paused)];
             for f in out.as_chunks_mut::<2>().0 {
@@ -962,7 +964,7 @@ fn open(
             }
             read += n as u64;
             sh.read.store(read, Relaxed);
-            if cons.slots() < half || read >= sh.mark.load(Relaxed) {
+            if n > 0 && cons.slots() < half || read >= sh.mark.load(Relaxed) {
                 me.unpark();
             }
         },
@@ -972,7 +974,7 @@ fn open(
                 return;
             }
             if !sh2.broken.swap(true, Relaxed) && !sh2.paused.load(Relaxed) {
-                let _ = etx.send((sh2.plays.load(Relaxed), Event::Error(e.to_string())));
+                let _ = etx.send((sh2.seq.load(Relaxed), Event::Error(e.to_string())));
             }
             me2.unpark();
         },
@@ -986,15 +988,14 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
     let mut out: Option<(cpal::Stream, Producer<f32>)> = None;
     let (mut written, mut running, mut idle, mut dev, mut asked) =
         (0u64, false, None::<Instant>, String::new(), 0u32);
-    let (mut opened, mut calm, mut rebase, mut prep) = (None::<Instant>, None, false, 0u32);
-    let mut used = false;
+    let (mut opened, mut calm, mut rebase) = (None::<Instant>, None, false);
+    let (mut used, mut stale, mut dead) = (false, false, false);
     let mut buf = vec![0f32; CHUNK * 2];
     let mut marks = VecDeque::<(u64, Option<f32>, Option<Event>)>::new();
-    let seq = std::cell::Cell::new(0u64);
-    let emit = |e: Event| drop(tx.send((seq.get(), e)));
+    let emit = |e: Event| drop(tx.send((sh.seq.load(Relaxed), e)));
     let fail = |e: String| emit(Event::Error(e));
     loop {
-        let (mut play, mut seek) = (None, None);
+        let (mut play, mut seek, mut prep) = (None, None, 0u32);
         loop {
             let mut cmd = match rx.try_recv() {
                 Ok(c) => c,
@@ -1026,11 +1027,13 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
             ) {
                 sh.flush.store(written, Relaxed);
                 marks.clear();
-                rebase = true;
+                (rebase, stale) = (true, false);
             }
             match cmd {
                 Cmd::Play(t, at, n) => {
-                    seq.set(n);
+                    sh.seq.store(n, Relaxed);
+                    sh.paused.store(false, Relaxed);
+                    dead = false;
                     let pre = [&mut mix.pre, &mut mix.warm]
                         .into_iter()
                         .find_map(|p| p.take_if(|p| p.3 == at && p.0.url == t.url));
@@ -1065,7 +1068,7 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                     .chain(&mut mix.cur)
                     .take(1)
                     .for_each(|c| c.track.gain = g),
-                Cmd::Device(d) => (dev, out) = (d, None),
+                Cmd::Device(d) => (dev, out, dead) = (d, None, false),
                 Cmd::Seek(s) => {
                     sh.set_pos(s, u64::MAX);
                     match &mut play {
@@ -1092,7 +1095,7 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                 marks.clear();
             }
         }
-        if out.is_none() && (!paused || prep > 0) && !marks.is_empty() {
+        if out.is_none() && !paused && !marks.is_empty() {
             let mut at = sh.now();
             for e in marks.drain(..).filter_map(|m| m.2) {
                 if matches!(e, Event::Started(_)) {
@@ -1108,7 +1111,8 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                 (None, Some(c)) => c.rate as u32,
                 _ => prep,
             };
-            if want > 0 && out.is_none() && (!paused || prep > 0) {
+            let wake = prep > 0 && !dead && marks.is_empty();
+            if want > 0 && out.is_none() && (!paused || wake) {
                 asked = want;
                 match open(&dev, asked, &sh, &tx) {
                     Ok((s, p, rate)) => {
@@ -1118,17 +1122,15 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                         (opened, rebase, used) = (Some(Instant::now()), true, true);
                         sh.read.store(0, Relaxed);
                         sh.flush.store(0, Relaxed);
-                        if !fresh {
-                            mix.seek(&io, get(&sh.pos)).unwrap_or_else(fail);
-                        }
+                        stale = !fresh;
                     }
+                    Err(_) if !fresh && (paused || mix.cur.is_none()) => dead = true,
                     Err(e) => {
                         (mix.cur, mix.inc, play) = (None, None, None);
                         fail(e.to_string());
                     }
                 }
             }
-            prep = 0;
             let Some((t, at, pre, hit)) = play.take() else {
                 break;
             };
@@ -1143,6 +1145,9 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
             if mix.cur.as_ref().is_some_and(|c| c.rate as u32 != asked) {
                 out = None;
             }
+        }
+        if !paused && std::mem::take(&mut stale) {
+            mix.seek(&io, get(&sh.pos)).unwrap_or_else(fail);
         }
         if let Some((_, p)) = &mut out
             && let Some(c) = mix.inc.as_ref().or(mix.cur.as_ref()).filter(|_| !paused)

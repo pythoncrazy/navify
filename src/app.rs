@@ -38,6 +38,7 @@ pub type AnyData = Arc<dyn Any + Send + Sync>;
 type Decoded = (Color, image::Handle, usize);
 type Slot = Option<(u64, image::Handle, usize)>;
 type Rows = (Vec<Song>, Vec<usize>);
+type Found = (String, Option<Song>, Option<Album>, Option<Artist>);
 type Stamp = (Option<String>, u8, usize);
 type Run = dyn Fn(&mut App) -> Task<Message> + Send + Sync;
 
@@ -361,7 +362,7 @@ pub struct App {
     pub cache: HashMap<String, (Instant, AnyData)>,
     pub seeds: HashMap<String, AnyData>,
     stale: HashSet<String>,
-    dirty: HashMap<String, bool>,
+    dirty: HashMap<String, (u32, bool)>,
     pub pending: HashSet<String>,
     pub scrolls: HashMap<String, (f32, f32)>,
     pub lyric: bool,
@@ -807,25 +808,44 @@ impl App {
         let done = format!("{verb} {}.", p.map_or("", |p| &p.name));
         let fresh = self.pl_fresh(pid.clone(), p.map_or(String::new(), |p| p.cover.clone()), 3);
         let (undo, key) = (reload(&pid), format!("playlist:{pid}"));
-        if self.pending.contains(&format!("{key}#0")) {
-            self.dirty.insert(key.clone(), false);
-        }
+        let busy = self.dirty.entry(key.clone()).or_default();
+        busy.1 |= self.pending.contains(&format!("{key}#0"));
+        busy.0 += 1;
         let f = |s: Session| {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             static TURN: LazyLock<tokio::sync::watch::Sender<u64>> =
                 LazyLock::new(|| tokio::sync::watch::channel(0).0);
+            static FAIL: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
             let n = NEXT.fetch_add(1, Relaxed);
             async move {
                 let _ = TURN.subscribe().wait_for(|&t| t == n).await;
-                let r = s.playlist_update(&pid, None, None, None, &add, &rm).await;
+                let fail = || FAIL.lock().expect("playlist lock");
+                let skip = fail().iter().any(|f| f.0 == pid && n < f.1);
+                let r = match skip {
+                    true => Err(anyhow::anyhow!(
+                        "An earlier change of this playlist failed."
+                    )),
+                    false => s.playlist_update(&pid, None, None, None, &add, &rm).await,
+                };
+                if r.is_err() && !skip {
+                    fail().retain(|f| f.0 != pid);
+                    fail().push((pid, NEXT.load(Relaxed)));
+                }
                 TURN.send_replace(n + 1);
                 r
             }
         };
-        let sent = act(move |a| {
-            if let Some(d) = a.dirty.get_mut(&key) {
-                *d = true;
+        let sent = task(move |a| {
+            let Some(busy) = a.dirty.get_mut(&key) else {
+                return Task::none();
+            };
+            busy.0 -= 1;
+            if busy.0 > 0 {
+                return Task::none();
             }
+            let dropped = a.dirty.remove(&key).is_some_and(|b| b.1);
+            a.stale.extend(dropped.then(|| key.clone()));
+            Task::batch(dropped.then(|| a.request(&key, 0)))
         });
         Task::batch([
             self.send(f, "Could not change the playlist.", undo)
@@ -904,10 +924,18 @@ impl App {
             .or_else(|| all.find(|a| a.id == id))
     }
 
-    fn star(&mut self, ids: &[String], on: bool) {
-        for id in ids {
-            let was = self.starred.insert(id.clone(), on);
-            if let Some(mut s) = self.find_song(id) {
+    fn found(&self, id: &str) -> Found {
+        let song = self.find_song(id);
+        let album = song.is_none().then(|| self.find_album(id)).flatten();
+        let artist = song.is_none() && album.is_none();
+        let artist = artist.then(|| self.find_artist(id).cloned()).flatten();
+        (id.into(), song, album, artist)
+    }
+
+    fn star(&mut self, items: &[Found], on: bool) {
+        for (id, song, album, artist) in items.iter().cloned() {
+            let was = self.starred.insert(id, on);
+            if let Some(mut s) = song {
                 let had = usize::from(was.unwrap_or(s.starred));
                 self.edit::<Lib>("lib", |l| {
                     l.liked = (l.liked + on as usize).saturating_sub(had)
@@ -919,13 +947,13 @@ impl App {
                     *total = (*total + on as usize).saturating_sub(had as usize);
                     items.splice(0..0, on.then_some(s));
                 });
-            } else if let Some(mut a) = self.find_album(id) {
+            } else if let Some(mut a) = album {
                 a.starred = on;
                 self.edit::<Lib>("lib", |l| {
                     l.albums.retain(|x| x.id != a.id);
                     l.albums.extend(on.then_some(a));
                 });
-            } else if let Some(mut a) = self.find_artist(id).cloned() {
+            } else if let Some(mut a) = artist {
                 a.starred = on;
                 self.edit::<Lib>("lib", |l| {
                     l.artists.retain(|x| x.id != a.id);
@@ -1037,16 +1065,22 @@ impl App {
         all.sort_by_key(|a| a.0);
         let data: serde_json::Map<_, _> = all.into_iter().take(40).map(|e| (e.1, e.2)).collect();
         let mut body = serde_json::json!({"server": s.server.id, "data": data});
+        static N: AtomicU32 = AtomicU32::new(1);
+        static LAST: Mutex<u32> = Mutex::new(0);
+        let n = N.fetch_add(1, Relaxed);
         blocking("Could not save the page cache. ", move || {
             use flate2::{Compression, write::DeflateEncoder};
             prune(&mut body);
-            static N: AtomicU32 = AtomicU32::new(0);
-            let tmp = format!("tmp{}", N.fetch_add(1, Relaxed));
-            let (path, tmp) = (data_file(), data_file().with_extension(tmp));
+            let (path, tmp) = (data_file(), data_file().with_extension(format!("tmp{n}")));
             std::fs::create_dir_all(path.parent().expect("the cache has a directory"))?;
             let mut z = DeflateEncoder::new(Vec::new(), Compression::default());
             std::io::Write::write_all(&mut z, &serde_json::to_vec(&body)?)?;
             std::fs::write(&tmp, z.finish()?)?;
+            let mut last = LAST.lock().expect("save lock");
+            if n < *last {
+                return Ok(std::fs::remove_file(tmp)?);
+            }
+            *last = n;
             Ok::<_, anyhow::Error>(std::fs::rename(tmp, path)?)
         })
     }
@@ -1705,7 +1739,9 @@ impl App {
         let t = self
             .current_song()
             .map(|s| (self.track(s), s.url.is_empty() && !self.loaded));
-        let (mut t, live) = t.unwrap_or_default();
+        let Some((mut t, live)) = t else {
+            return;
+        };
         let rate = [t.rate, 48_000][usize::from(t.rate == 0)];
         t.rate = [0, rate][usize::from(device)];
         if !live {
@@ -1857,9 +1893,9 @@ impl App {
             Message::Loaded(key, off, Ok(v)) => {
                 self.pending.remove(&format!("{key}#{off}"));
                 self.stale.remove(&key);
-                if let Some(sent) = self.dirty.remove(&key).filter(|_| off == 0) {
-                    self.stale.extend(sent.then(|| key.clone()));
-                    return Task::batch(sent.then(|| self.request(&key, 0)));
+                if let Some(busy) = self.dirty.get_mut(&key).filter(|_| off == 0) {
+                    busy.1 = true;
+                    return Task::none();
                 }
                 let mb = key
                     .strip_prefix("artist:")
@@ -2026,30 +2062,33 @@ impl App {
                 if self.route == "liked" && !on {
                     (self.sel, self.picked) = (None, BTreeSet::new());
                 }
-                let was = |id: &String| {
-                    let s = self.starred.get(id).copied();
-                    s.or_else(|| self.find_song(id).map(|s| s.starred))
-                        .or_else(|| self.find_album(id).map(|a| a.starred))
-                        .or_else(|| self.find_artist(id).map(|a| a.starred))
+                let items: Vec<Found> = ids.iter().map(|id| self.found(id)).collect();
+                let was = |(id, s, al, ar): &&Found| {
+                    let s = self
+                        .starred
+                        .get(id)
+                        .copied()
+                        .or(s.as_ref().map(|s| s.starred));
+                    s.or(al.as_ref().map(|a| a.starred))
+                        .or(ar.as_ref().map(|a| a.starred))
                 };
-                let back = ids.iter().filter(|id| was(id) != Some(on)).cloned();
-                let back: Vec<String> = back.collect();
-                let kind = |id: &&String| match self.find_song(id) {
-                    Some(_) => 0,
-                    None if self.find_album(id).is_some() => 1,
-                    None => 2 * usize::from(self.find_artist(id).is_some()),
+                let back = items.iter().filter(|f| was(f) != Some(on)).cloned();
+                let back: Vec<Found> = back.collect();
+                let kind = |f: &Found| usize::from(f.2.is_some()) + 2 * usize::from(f.3.is_some());
+                let of = |k| {
+                    items
+                        .iter()
+                        .filter(|f| kind(f) == k)
+                        .map(|f| f.0.clone())
+                        .collect()
                 };
-                let of = |k| ids.iter().filter(|id| kind(id) == k).cloned().collect();
                 let kinds: [Vec<String>; 3] = [0, 1, 2].map(of);
-                let keep = ["liked", "lib"].map(|k| (k, self.cache.get(k).cloned()));
-                self.star(&ids, on);
+                self.star(&items, on);
                 let star = |s: Session| async move { s.star(&kinds, on).await };
                 let star = self.send(star, "Could not update Your Library.", move |a| {
-                    a.starred.extend(back.iter().map(|id| (id.clone(), !on)));
-                    let keep = keep
-                        .iter()
-                        .filter_map(|(k, v)| Some((k.to_string(), v.clone()?)));
-                    a.cache.extend(keep);
+                    let back = back.iter().filter(|f| a.starred.get(&f.0) == Some(&on));
+                    let back: Vec<Found> = back.cloned().collect();
+                    a.star(&back, !on);
                     Task::none()
                 });
                 return Task::batch([self.covers_now(), star]);
@@ -2891,22 +2930,36 @@ impl App {
     ) -> Task<Message> {
         self.ctx.clone_from(&key);
         let now = self.start(part, src, n, sh);
-        let seq = self.play_seq;
+        let (seq, order) = (self.play_seq, self.shuffle.clone());
+        let ids: Vec<String> = self.queue.iter().map(|s| s.id.clone()).collect();
         let rest = move |a: &mut App, v: Vec<Song>, _| {
+            let same = a.queue.iter().map(|s| &s.id).eq(&ids) && a.shuffle == order;
             let cur = a.current_song().map(|s| s.id.clone());
             let v: Vec<Song> = v.into_iter().filter(a.kept()).collect();
             let at = v.iter().position(|s| Some(&s.id) == cur.as_ref());
-            let Some(at) = at.filter(|_| a.play_seq == seq) else {
+            let Some(at) = at.filter(|_| same && a.play_seq == seq) else {
                 return Task::none();
             };
+            let pos = |i: &usize| v.iter().position(|s| s.id == a.queue[*i].id);
+            let done: Vec<usize> = a.shuffle.as_ref().map_or_else(Vec::new, |o| {
+                o[..a.index]
+                    .iter()
+                    .filter_map(pos)
+                    .filter(|&p| p != at)
+                    .collect()
+            });
+            let mut o = shuffle(0..v.len(), at);
+            o.retain(|i| !done.contains(i));
+            let index = done.len();
             (a.queue, a.index) = (v, at);
             if a.shuffle.is_some() {
-                (a.shuffle, a.index) = (Some(shuffle(0..a.queue.len(), at)), 0);
+                (a.shuffle, a.index) = (Some([done, o].concat()), index);
             }
             a.queue_next_refresh();
             a.save_later()
         };
-        let rest = self.ctx_songs(key, "Nothing to play.", "Could not play.", rest);
+        let fail = "Could not load all the songs of the list.";
+        let rest = self.ctx_songs(key, "Nothing to play.", fail, rest);
         Task::batch([now, rest])
     }
 

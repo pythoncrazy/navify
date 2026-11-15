@@ -547,6 +547,7 @@ impl Session {
         let body = res.bytes().await.map_err(net_err)?;
         let mut de = serde_json::Deserializer::from_slice(&body);
         let rows = serde::Deserializer::deserialize_any(&mut de, Rows(PhantomData));
+        let rows = rows.and_then(|r| de.end().map(|()| r));
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         if body.len() > 1 << 20 {
             drop(body);

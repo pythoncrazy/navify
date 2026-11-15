@@ -62,7 +62,7 @@ impl Engine {
                 .min(quad.bounds.height / 2.0);
         }
 
-        let path = rounded_rectangle(quad.bounds, fill_border_radius);
+        let path = || rounded_rectangle(quad.bounds, fill_border_radius);
 
         let shadow = quad.shadow;
 
@@ -166,7 +166,7 @@ impl Engine {
             );
         } else {
             pixels.fill_path(
-                &path,
+                &path(),
                 &tiny_skia::Paint {
                     shader: match background {
                         Background::Color(color) => {
