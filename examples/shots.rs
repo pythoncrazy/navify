@@ -71,11 +71,7 @@ fn main() {
     let name = std::env::var("NAVIFY_SHOT").unwrap_or("shot".into());
     let name = name.replace([':', '/', '|'], "_");
     let path = format!("target/shots/{name}.png");
-    let (sw, sh, rgba) = (
-        shot.size.width,
-        shot.size.height,
-        image::ExtendedColorType::Rgba8,
-    );
-    image::save_buffer(&path, shot.as_ref(), sw, sh, rgba).expect("save shot");
+    let (dim, rgba) = (shot.size, image::ExtendedColorType::Rgba8);
+    image::save_buffer(&path, shot.as_ref(), dim.width, dim.height, rgba).expect("save shot");
     eprintln!("wrote {path}");
 }

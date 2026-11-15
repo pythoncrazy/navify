@@ -309,9 +309,8 @@ impl<'de, T: Data> serde::de::Visitor<'de> for Rows<T> {
 pub fn parse<T: Data>(mut v: Value) -> Result<T> {
     normalize(&mut v);
     let e = |e| anyhow!("The server returned an unexpected response: {e}");
-    Ok(serde_json::from_value::<Option<T>>(v)
-        .map_err(e)?
-        .unwrap_or_default())
+    let v = serde_json::from_value::<Option<T>>(v).map_err(e)?;
+    Ok(v.unwrap_or_default())
 }
 
 fn net_err(e: reqwest::Error) -> anyhow::Error {
@@ -519,9 +518,8 @@ impl Session {
         if matches!(path, "album" | "song" | "artist") {
             q["missing"] = false.into();
         }
-        let req = self
-            .http
-            .get(reqwest::Url::parse_with_params(&url, pairs(&q))?);
+        let url = reqwest::Url::parse_with_params(&url, pairs(&q))?;
+        let req = self.http.get(url);
         let req = req.header("x-nd-authorization", format!("Bearer {}", self.jwt()));
         let res = req.send().await.map_err(net_err)?;
         let header = |k| res.headers().get(k).and_then(|v| v.to_str().ok());
@@ -553,16 +551,11 @@ impl Session {
         self.get::<Value>(method, q, "").await.map(drop)
     }
 
-    async fn detail<T: Data, U: Data>(
-        &self,
-        kind: &str,
-        id: &str,
-        key: &str,
-    ) -> Result<(T, Vec<U>)> {
+    async fn detail<T: Data, U: Data>(&self, kind: &str, id: &str, k: &str) -> Result<(T, Vec<U>)> {
         let method = format!("get{}{}", kind[..1].to_uppercase(), &kind[1..]);
         let ptr = format!("/{kind}");
         let mut v: Value = self.get(&method, json!({"id": id}), &ptr).await?;
-        let list = parse(take(&mut v, key))?;
+        let list = parse(take(&mut v, k))?;
         Ok((parse(v)?, list))
     }
 
@@ -574,11 +567,7 @@ impl Session {
 
     async fn trio(&self, method: &str, q: Value, ptr: &str) -> Result<Trio> {
         let mut v: Value = self.get(method, q, ptr).await?;
-        let (ar, al, so) = (
-            take(&mut v, "artist"),
-            take(&mut v, "album"),
-            take(&mut v, "song"),
-        );
+        let [ar, al, so] = ["artist", "album", "song"].map(|k| take(&mut v, k));
         Ok((parse(ar)?, parse(al)?, parse(so)?))
     }
 
@@ -741,12 +730,11 @@ impl Session {
             let (mut list, total): (Vec<Song>, _) =
                 self.nd("song", sorted(sort, 3, off, n)).await?;
             let played = matches!(sort, "recent" | "frequent");
-            return Ok(
-                match list.iter().position(|s| played && s.play_count == 0) {
-                    Some(i) => (list.drain(..i).collect(), off + i),
-                    None => (list, total),
-                },
-            );
+            let cut = list.iter().position(|s| played && s.play_count == 0);
+            return Ok(match cut {
+                Some(i) => (list.drain(..i).collect(), off + i),
+                None => (list, total),
+            });
         }
         if sort == "starred" {
             let all = self.starred().await?.2;
@@ -783,9 +771,8 @@ impl Session {
     }
 
     pub async fn extensions(&self) -> Result<Vec<String>> {
-        let ext: Vec<Value> = self
-            .get("getOpenSubsonicExtensions", (), "/openSubsonicExtensions")
-            .await?;
+        let ptr = "/openSubsonicExtensions";
+        let ext: Vec<Value> = self.get("getOpenSubsonicExtensions", (), ptr).await?;
         let names = ext.iter().filter_map(|e| e["name"].as_str());
         Ok(names.map(str::to_string).collect())
     }
@@ -812,9 +799,8 @@ impl Session {
     }
 
     pub async fn directory(&self, id: &str) -> Result<(String, Vec<Song>)> {
-        let mut d: Value = self
-            .get("getMusicDirectory", json!({"id": id}), "/directory")
-            .await?;
+        let q = json!({"id": id});
+        let mut d: Value = self.get("getMusicDirectory", q, "/directory").await?;
         let name = d["name"].as_str().unwrap_or_default().to_string();
         Ok((name, parse(take(&mut d, "child"))?))
     }
@@ -830,9 +816,8 @@ impl Session {
     }
 
     pub async fn star(&self, [songs, albums, artists]: &[Vec<String>; 3], on: bool) -> Result<()> {
-        let method = if on { "star" } else { "unstar" };
         let q = json!({"id": songs, "albumId": albums, "artistId": artists});
-        self.act(method, q).await
+        self.act(if on { "star" } else { "unstar" }, q).await
     }
 
     pub async fn rate(&self, id: &str, n: u8) -> Result<()> {

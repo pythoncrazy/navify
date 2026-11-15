@@ -8,6 +8,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle, Thread};
 use std::time::{Duration, Instant};
 
+use cpal::Stream;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::header::{CONTENT_RANGE, RANGE};
 use reqwest::{Client, Response, Url};
@@ -85,10 +86,9 @@ pub fn devices() -> Result<Vec<(String, String)>, String> {
             let (id, name) = (d.id().map_err(|e| e.to_string())?, d.to_string());
             let n = seen.entry(name.clone()).or_insert(0);
             *n += 1;
-            let name = if *n > 1 {
-                format!("{name} ({n})")
-            } else {
-                name
+            let name = match *n {
+                1 => name,
+                n => format!("{name} ({n})"),
             };
             Ok((id.to_string(), name))
         })
@@ -119,11 +119,8 @@ fn get(a: &AtomicU32) -> f32 {
 
 impl Shared {
     fn now(&self) -> f32 {
-        let ahead = self
-            .read
-            .load(Relaxed)
-            .saturating_sub(self.lag.load(Relaxed))
-            .saturating_sub(self.base.load(Relaxed));
+        let [read, lag, base] = [&self.read, &self.lag, &self.base].map(|a| a.load(Relaxed));
+        let ahead = read.saturating_sub(lag).saturating_sub(base);
         get(&self.pos) + ahead as f32 / 2.0 / self.rate.load(Relaxed).max(1) as f32
     }
 
@@ -603,11 +600,8 @@ impl Source {
         let start = t.ok_or("invalid track")?.start_ts;
         let mut base = secs as f64;
         if !past {
-            let ts = self
-                .tb
-                .calc_timestamp(time)
-                .ok_or("invalid seek")?
-                .max(start);
+            let ts = self.tb.calc_timestamp(time).ok_or("invalid seek")?;
+            let ts = ts.max(start);
             match self.demux.seek(mode, SeekTo::Timestamp { ts, track_id }) {
                 Ok(to) => {
                     let at = self.tb.calc_time_saturating(to.actual_ts).as_secs_f64();
@@ -628,10 +622,8 @@ impl Source {
     fn moved(mut self, io: &Io, rate: u32, secs: f32) -> Result<Source, String> {
         let seq = self.net.st().len.is_none();
         if seq && self.dur > 0.0 && secs as f64 >= self.dur - 0.5 {
-            return self
-                .seek(self.dur as f32)
-                .map(|()| self)
-                .map_err(|e| e.to_string());
+            let r = self.seek(self.dur as f32);
+            return r.map(|()| self).map_err(|e| e.to_string());
         }
         if !seq && self.seek(secs).is_ok() {
             return Ok(self);
@@ -827,12 +819,8 @@ impl Mixer {
             let m = inc.fill(&mut self.b, rate)?;
             self.b[m * 2..].fill(0.0);
             let (pos, len) = self.fade;
-            let frames = out
-                .as_chunks_mut::<2>()
-                .0
-                .iter_mut()
-                .zip(self.b.as_chunks::<2>().0);
-            for (i, (o, b)) in frames.enumerate() {
+            let (oc, bc) = (out.as_chunks_mut::<2>().0, self.b.as_chunks::<2>().0);
+            for (i, (o, b)) in oc.iter_mut().zip(bc).enumerate() {
                 let (s, c) = (((pos + i) as f32 / len as f32).min(1.0) * FRAC_PI_2).sin_cos();
                 o.iter_mut().zip(b).for_each(|(o, b)| *o = *o * c + b * s);
             }
@@ -846,12 +834,8 @@ impl Mixer {
             return Ok((n, ev));
         }
         self.old = self.cur.take();
-        match self
-            .bad
-            .take()
-            .map(Err)
-            .or_else(|| Self::take_pre(&mut self.pre, io, rate))
-        {
+        let bad = self.bad.take().map(Err);
+        match bad.or_else(|| Self::take_pre(&mut self.pre, io, rate)) {
             Some(Ok(mut s)) => {
                 let m = s.fill(&mut out[n * 2..], rate)?;
                 let id = s.track.id.clone();
@@ -874,11 +858,8 @@ pub fn render(io: Io, tracks: Vec<Track>, rate: u32, at: f32, cf: f32) -> Res<Ve
     mix.pre = it.next().map(pre);
     let (mut out, mut buf) = (Vec::new(), vec![0.0; CHUNK * 2]);
     while mix.cur.is_some() {
-        while mix
-            .pre
-            .as_ref()
-            .and_then(|p| p.1.as_ref())
-            .is_some_and(|h| !h.is_finished())
+        while let Some((_, Some(h), ..)) = &mix.pre
+            && !h.is_finished()
         {
             thread::sleep(Duration::from_millis(1));
         }
@@ -893,12 +874,7 @@ pub fn render(io: Io, tracks: Vec<Track>, rate: u32, at: f32, cf: f32) -> Res<Ve
     Ok(out)
 }
 
-fn open(
-    id: &str,
-    want: u32,
-    sh: &Arc<Shared>,
-    tx: &Events,
-) -> Res<(cpal::Stream, Producer<f32>, u32)> {
+fn open(id: &str, want: u32, sh: &Arc<Shared>, tx: &Events) -> Res<(Stream, Producer<f32>, u32)> {
     let host = cpal::default_host();
     let dev = match id {
         "" => host.default_output_device(),
@@ -936,11 +912,8 @@ fn open(
         config,
         move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
             let t = info.timestamp();
-            let delay = t
-                .playback
-                .saturating_duration_since(t.callback)
-                .as_secs_f64();
-            let lag = (delay * f64::from(rate)) as u64 * 2 + out.len() as u64;
+            let delay = t.playback.saturating_duration_since(t.callback);
+            let lag = (delay.as_secs_f64() * f64::from(rate)) as u64 * 2 + out.len() as u64;
             sh.lag.store(lag, Relaxed);
             let stale = sh.flush.load(Relaxed).saturating_sub(read) as usize;
             let mut head = 0;
@@ -993,7 +966,7 @@ fn open(
 
 fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
     let mut mix = Mixer::default();
-    let mut out: Option<(cpal::Stream, Producer<f32>)> = None;
+    let mut out: Option<(Stream, Producer<f32>)> = None;
     let (mut written, mut running, mut idle, mut dev, mut asked) =
         (0u64, false, None::<Instant>, String::new(), 0u32);
     let (mut opened, mut calm, mut rebase) = (None::<Instant>, None, false);
@@ -1021,18 +994,13 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                         mix.pre = Some((t, Some(h), net, 0.0));
                     }
                 } else {
-                    for e in ev {
-                        if matches!(e, Event::Started(_)) {
-                            *s = 0.0;
-                        }
-                        emit(e);
+                    if ev.iter().any(|e| matches!(e, Event::Started(_))) {
+                        *s = 0.0;
                     }
+                    ev.into_iter().for_each(&emit);
                 }
             }
-            if !matches!(
-                cmd,
-                Cmd::Next(_) | Cmd::Gain(_) | Cmd::Device(_) | Cmd::Warm(..)
-            ) {
+            if matches!(cmd, Cmd::Play(..) | Cmd::Seek(_) | Cmd::Stop) {
                 sh.flush.store(written, Relaxed);
                 marks.clear();
                 (rebase, stale) = (true, false);
@@ -1070,12 +1038,11 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                         mix.warm = Mixer::early(&t, &io, mix.rate, at, Some((sh.clone(), n)));
                     }
                 }
-                Cmd::Gain(g) => mix
-                    .inc
-                    .iter_mut()
-                    .chain(&mut mix.cur)
-                    .take(1)
-                    .for_each(|c| c.track.gain = g),
+                Cmd::Gain(g) => {
+                    if let Some(c) = mix.inc.as_mut().or(mix.cur.as_mut()) {
+                        c.track.gain = g;
+                    }
+                }
                 Cmd::Device(d) => (dev, out, dead) = (d, None, false),
                 Cmd::Seek(s) => {
                     sh.set_pos(s, u64::MAX);
@@ -1104,13 +1071,10 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
             }
         }
         if out.is_none() && !paused && !marks.is_empty() {
-            let mut at = sh.now();
-            for e in marks.drain(..).filter_map(|m| m.2) {
-                if matches!(e, Event::Started(_)) {
-                    at = 0.0;
-                }
-                emit(e);
-            }
+            let at = sh.now();
+            let ev: Vec<Event> = marks.drain(..).filter_map(|m| m.2).collect();
+            let at = [at, 0.0][usize::from(ev.iter().any(|e| matches!(e, Event::Started(_))))];
+            ev.into_iter().for_each(&emit);
             sh.set_pos(at, u64::MAX);
         }
         loop {
@@ -1172,12 +1136,11 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
         }
         if let Some((_, prod)) = &mut out {
             while !paused && mix.cur.is_some() && prod.slots() >= buf.len() {
-                let (n, ev) = mix
-                    .step(&io, &mut buf, get(&sh.crossfade))
-                    .unwrap_or_else(|e| {
-                        (mix.cur, mix.inc) = (None, None);
-                        (0, Some(Event::Error(e.to_string())))
-                    });
+                let step = mix.step(&io, &mut buf, get(&sh.crossfade));
+                let (n, ev) = step.unwrap_or_else(|e| {
+                    (mix.cur, mix.inc) = (None, None);
+                    (0, Some(Event::Error(e.to_string())))
+                });
                 prod.push_entire_slice(&buf[..n * 2])
                     .expect("ring buffer has room");
                 written += n as u64 * 2;
@@ -1199,11 +1162,8 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
             }
             e.into_iter().for_each(&emit);
         }
-        let next = marks
-            .iter()
-            .find(|m| m.2.is_some())
-            .map_or(u64::MAX, |m| m.0);
-        sh.mark.store(next, Relaxed);
+        let next = marks.iter().find(|m| m.2.is_some());
+        sh.mark.store(next.map_or(u64::MAX, |m| m.0), Relaxed);
         let live = !paused && (mix.cur.is_some() || !marks.is_empty());
         calm = calm.or_else(|| Some(Instant::now())).filter(|_| !live);
         let lag = sh.lag.load(Relaxed) as f64 / 2.0 / f64::from(mix.rate.max(1)) + 0.06;
