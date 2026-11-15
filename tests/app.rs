@@ -19,6 +19,10 @@ fn items<T: navify::api::Data>(ids: impl IntoIterator<Item = String>) -> T {
     parse(ids.into_iter().map(|id| json!({"id": id})).collect()).expect("items")
 }
 
+fn load(app: &mut App, key: &str, off: usize, data: impl std::any::Any + Send + Sync) {
+    let _ = app.update(Message::Loaded(key.into(), off, Ok(Arc::new(data))));
+}
+
 fn ids(app: &App) -> String {
     app.queue.iter().map(|s| s.id.as_str()).collect()
 }
@@ -34,15 +38,13 @@ fn album_reopen_in_stale_time_sends_no_request() {
     let _ = app.update(Message::Nav(key.clone()));
     assert!(app.pending.contains(pend));
     let album: Album = parse(json!({"id": "a1"})).expect("album");
-    let data = Arc::new((album, Vec::<Song>::new()));
-    let _ = app.update(Message::Loaded(key.clone(), 0, Ok(data)));
+    load(&mut app, &key, 0, (album, Vec::<Song>::new()));
     let _ = app.update(Message::Nav("home".into()));
     let _ = app.update(Message::Nav(key.clone()));
     assert!(app.route == key && !app.pending.contains(pend));
     for (offset, n) in [(0, 100), (100, 50)] {
         let items: Vec<Album> = items((offset..offset + n).map(|i| i.to_string()));
-        let page: AnyData = Arc::new((items, 150usize));
-        let _ = app.update(Message::Loaded("albums".into(), offset, Ok(page)));
+        load(&mut app, "albums", offset, (items, 150usize));
     }
     let p = app
         .data::<(Vec<Album>, usize)>("albums")
@@ -57,25 +59,13 @@ fn album_reopen_in_stale_time_sends_no_request() {
     let _ = app.update(Message::Back);
     assert!(app.search_q.is_empty());
     let ar: Artist = parse(json!({"id": "ar1", "name": "A", "mbzArtistId": "m1"})).expect("artist");
-    let _ = app.update(Message::Loaded(
-        "artists".into(),
-        0,
-        Ok(Arc::new((vec![ar.clone()], 1usize))),
-    ));
+    load(&mut app, "artists", 0, (vec![ar.clone()], 1usize));
     let _ = app.update(Message::Nav("artist:ar1".into()));
     assert!(app.pending.contains("banner:mb:m1#0") && banner(&app, &ar) == Some(String::new()));
     let bare: Artist = parse(json!({"id": "ar1", "name": "A"})).expect("artist");
-    let _ = app.update(Message::Loaded(
-        "artist:ar1".into(),
-        0,
-        Ok(Arc::new((bare, Vec::<Album>::new()))),
-    ));
+    load(&mut app, "artist:ar1", 0, (bare, Vec::<Album>::new()));
     assert_eq!(app.find_artist("ar1").unwrap().music_brainz_id, "m1");
-    let _ = app.update(Message::Loaded(
-        "banner:mb:m1".into(),
-        0,
-        Ok(Arc::new(String::new())),
-    ));
+    load(&mut app, "banner:mb:m1", 0, String::new());
     assert!(banner(&app, &ar).is_none());
     let _ = app.update(Message::Nav("home".into()));
     let _ = app.update(Message::Nav("artist:ar1".into()));
@@ -127,11 +117,7 @@ async fn play_button_keeps_shuffle_and_shuffle_starts_anywhere() {
     let key = "album:a1".to_string();
     let album: Album = parse(json!({"id": "a1"})).expect("album");
     let songs = items::<Vec<Song>>("abcdef".chars().map(String::from));
-    let _ = app.update(Message::Loaded(
-        key.clone(),
-        0,
-        Ok(Arc::new((album, songs))),
-    ));
+    load(&mut app, &key, 0, (album, songs));
     let _ = app.update(Message::PlayCtx(key.clone(), 0));
     assert!(app.shuffle.is_none());
     let _ = app.update(Message::Shuffle);
@@ -202,7 +188,7 @@ async fn playlist_search_and_sort_keep_the_server_order() {
         .map(|t| parse(json!({"id": t, "title": t, "duration": 60})).expect("song"))
         .into();
     let pl: navify::api::Playlist = parse(json!({"id": "p1", "name": "P"})).expect("playlist");
-    let _ = app.update(Message::Loaded(key.clone(), 0, Ok(Arc::new((pl, songs)))));
+    load(&mut app, &key, 0, (pl, songs));
     let _ = app.update(Message::PlAdd("p1".into(), vec!["a".into()]));
     assert!(app.modal.as_ref().is_some_and(|m| m.1 == 7) && app.held.is_some());
     let _ = app.update(Message::MenuClose);
@@ -249,11 +235,7 @@ async fn queue_filter_skips_songs_and_replace_asks_first() {
         .map(|v| parse(v).expect("entry"))
         .into();
     let fkey = "folder:f1".to_string();
-    let _ = app.update(Message::Loaded(
-        fkey.clone(),
-        0,
-        Ok(Arc::new(("F".to_string(), dir))),
-    ));
+    load(&mut app, &fkey, 0, ("F".to_string(), dir));
     app.sel = Some((fkey.clone(), 1));
     let _ = app.update(Message::Arrow(true));
     assert_eq!(app.sel.as_ref().map(|s| s.1), Some(1));
@@ -281,16 +263,16 @@ async fn queue_and_pages_stay_in_order() {
     let _ = app.update(Message::Queue(songs("z"), false));
     assert!(ids(&app) == "z" && app.shuffle.as_ref().is_some_and(|o| o.len() == 1));
     let _ = app.update(Message::Nav("albums".into()));
-    let page = |o: usize, n: usize| -> AnyData {
-        Arc::new((
-            items::<Vec<Album>>((o..o + n).map(|i| i.to_string())),
+    let page = |o: usize| {
+        (
+            items::<Vec<Album>>((o..o + 100).map(|i| i.to_string())),
             300usize,
-        ))
+        )
     };
-    let _ = app.update(Message::Loaded("albums".into(), 0, Ok(page(0, 100))));
+    load(&mut app, "albums", 0, page(0));
     app.sel = Some(("albums".into(), 5));
-    let _ = app.update(Message::Loaded("albums".into(), 100, Ok(page(100, 100))));
-    let _ = app.update(Message::Loaded("albums".into(), 100, Ok(page(100, 100))));
+    load(&mut app, "albums", 100, page(100));
+    load(&mut app, "albums", 100, page(100));
     let p = app.data::<(Vec<Album>, usize)>("albums").expect("pages");
     assert!(p.0.len() == 200 && p.0[150].id == "150");
     assert_eq!(app.sel, Some(("albums".into(), 5)));
@@ -415,8 +397,7 @@ fn settings_check_rejects_values_out_of_range() {
             (Some(4000), "c".into()),
         ],
     };
-    let ok = Ok(Arc::new(vec![lyr]) as _);
-    let _ = app.update(Message::Loaded("lyrics:a".into(), 0, ok));
+    load(&mut app, "lyrics:a", 0, vec![lyr]);
     assert_eq!((lyric_line(&app), lyric_wait(&app)), (0, Some(1008)));
     app.position = 1.0;
     assert_eq!((lyric_line(&app), lyric_wait(&app)), (0, Some(609)));
@@ -454,7 +435,7 @@ async fn failed_unstar_puts_the_song_back() {
     let server = serde_json::from_value(json!({"url": url})).expect("server");
     app.session = Some(navify::api::Session::new(server));
     let liked: (Vec<Song>, usize) = (parse(json!([{"id": "a", "starred": true}])).unwrap(), 1);
-    let _ = app.update(Message::Loaded("liked".into(), 0, Ok(Arc::new(liked))));
+    load(&mut app, "liked", 0, liked);
     let t = app.update(Message::Star(vec!["a".into()], false));
     let liked = |app: &App| app.data::<(Vec<Song>, usize)>("liked").map(|l| l.0.len());
     assert_eq!(liked(&app), Some(0));
@@ -476,12 +457,12 @@ async fn failed_unstar_puts_the_song_back() {
 #[tokio::test]
 async fn play_from_a_part_of_a_list_starts_at_once() {
     let mut app = app();
-    let part: AnyData = Arc::new((
+    let part = (
         items::<Vec<Song>>((0..100).map(|i| i.to_string())),
         250usize,
-    ));
+    );
     let _ = app.update(Message::Nav("songs".into()));
-    let _ = app.update(Message::Loaded("songs".into(), 0, Ok(part)));
+    load(&mut app, "songs", 0, part);
     let _ = app.update(Message::PlayAt("songs".into(), 5));
     assert_eq!(app.current_song().map(|s| s.id.as_str()), Some("5"));
     assert!(app.playing && app.queue.len() == 100 && app.ctx == "songs");
