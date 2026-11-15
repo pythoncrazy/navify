@@ -39,7 +39,6 @@ type Decoded = (Color, image::Handle, usize);
 type Slot = Option<(u64, image::Handle, usize)>;
 type Rows = (Vec<Song>, Vec<usize>);
 type Found = (String, Option<Song>, Option<Album>, Option<Artist>);
-type Stamp = (Option<String>, u8, usize);
 type Run = dyn Fn(&mut App) -> Task<Message> + Send + Sync;
 
 macro_rules! pager {
@@ -435,7 +434,7 @@ pub struct App {
     pub pl_find: Option<String>,
     pub pl_more: Option<String>,
     pub pl_sort: u8,
-    pl_view: (String, Stamp, Option<Rows>),
+    pl_view: (String, Option<String>, u8, usize, Option<Rows>),
 }
 
 fn shot_key(shot: Option<&str>) -> Option<String> {
@@ -732,7 +731,7 @@ impl App {
     }
 
     fn pl_rows(&self, key: &str) -> Option<&Rows> {
-        self.pl_view.2.as_ref().filter(|_| self.pl_view.0 == key)
+        self.pl_view.4.as_ref().filter(|_| self.pl_view.0 == key)
     }
 
     fn orig(&self, key: &str, i: usize) -> usize {
@@ -1087,19 +1086,15 @@ impl App {
 
     pub fn gain(&self, song: &Song) -> f32 {
         let (st, rg) = (&self.cfg.settings, &song.rg);
-        let (db, peak) = match st.replaygain.as_str() {
-            "track" => (
-                rg.track_gain.or(rg.album_gain),
-                rg.track_peak.or(rg.album_peak),
-            ),
-            "album" => (
-                rg.album_gain.or(rg.track_gain),
-                rg.album_peak.or(rg.track_peak),
-            ),
+        let g = [rg.track_gain, rg.album_gain];
+        let p = [rg.track_peak, rg.album_peak];
+        let i = match st.replaygain.as_str() {
+            "track" => 0,
+            "album" => 1,
             _ => return 1.0,
         };
-        let peak = peak.unwrap_or(1.0).max(1e-3);
-        let db = db.unwrap_or(st.fallback_db) + st.preamp_db;
+        let peak = p[i].or(p[1 - i]).unwrap_or(1.0).max(1e-3);
+        let db = g[i].or(g[1 - i]).unwrap_or(st.fallback_db) + st.preamp_db;
         let max = [f32::MAX, 1.0 / peak][usize::from(st.rg_clip)];
         10f32.powf(db / 20.0).min(max)
     }
@@ -1226,9 +1221,8 @@ impl App {
         let song_id = song.id.clone();
         let now = |s: Session| async move { s.scrobble(&song_id, false).await };
         let msg = "Could not send the playing track to the server.";
-        let now = self.send(now, msg, |_| Task::none());
-        let radio = !song.url.is_empty();
-        let now = Task::batch((self.cfg.settings.scrobble && !radio).then_some(now));
+        let on = self.cfg.settings.scrobble && song.url.is_empty();
+        let now = Task::batch(on.then(|| self.send(now, msg, |_| Task::none())));
         let lyr = self.about();
         #[cfg(all(unix, not(target_os = "macos")))]
         let files = self
@@ -1267,11 +1261,8 @@ impl App {
 
     pub fn clock(&self) -> Box<dyn Fn() -> f32> {
         let fixed = self.seek_preview.unwrap_or(self.position);
-        match self
-            .player
-            .as_ref()
-            .filter(|_| self.loaded && self.seek_preview.is_none())
-        {
+        let p = self.player.as_ref();
+        match p.filter(|_| self.loaded && self.seek_preview.is_none()) {
             Some(p) => Box::new(p.clock()),
             None => Box::new(move || fixed),
         }
@@ -1372,19 +1363,17 @@ impl App {
         let mut need = Vec::new();
         for (id, size) in ids {
             self.covers.tick += 1;
-            let (t, e) = (self.covers.tick, self.covers.map.get_mut(bare(&id)));
-            let hash = id.split_once('#').map_or("", |x| x.1);
+            let (b, hash) = id.split_once('#').unwrap_or((&id, ""));
+            let (t, e) = (self.covers.tick, self.covers.map.get_mut(b));
             let e = e.filter(|(h, _)| hash.is_empty() || h == hash);
-            let have = e
-                .and_then(|(_, e)| e[slot(size)].as_mut())
-                .map(|s| s.0 = t)
-                .is_some();
-            let bad = self.covers.failed.contains(bare(&id));
-            let raw = bare(&id).rsplit(':').next().unwrap_or_default();
-            if raw.is_empty() || have || bad || !self.covers.want.insert((bare(&id).into(), size)) {
+            let have = e.and_then(|(_, e)| e[slot(size)].as_mut());
+            let have = have.map(|s| s.0 = t).is_some();
+            let bad = self.covers.failed.contains(b);
+            let raw = b.rsplit(':').next().unwrap_or_default();
+            if raw.is_empty() || have || bad || !self.covers.want.insert((b.into(), size)) {
                 continue;
             }
-            let seen = SHOWN.lock().expect("cover set").contains(bare(&id));
+            let seen = SHOWN.lock().expect("cover set").contains(b);
             need.push((id, size, seen));
         }
         if need.is_empty() {
@@ -1481,9 +1470,7 @@ impl App {
             let s = s2.clone();
             let t = task(move |a| {
                 a.covers.disk = a.covers.disk.saturating_sub(1);
-                if a.covers.disk == 0 {
-                    a.covers.wait = false;
-                }
+                a.covers.wait &= a.covers.disk > 0;
                 let mut tasks: Vec<_> = apply(a, out.clone()).into_iter().collect();
                 for chunk in miss.chunks(4) {
                     let (chunk, s, own, colors) =
@@ -1511,7 +1498,6 @@ impl App {
                         dec(got, colors, &s).await
                     };
                     tasks.push(Task::perform(net, move |res| {
-                        let res = res.clone();
                         ours(&own, task(move |a| Task::batch(apply(a, res.clone()))))
                     }));
                 }
@@ -1623,10 +1609,10 @@ impl App {
             .filter(|(k, (t, _))| t.elapsed() >= STALE && !keep(k));
         let mut old: Vec<(Instant, String)> = old.map(|(k, (t, _))| (*t, k.clone())).collect();
         old.sort_unstable();
-        let n = self.cache.len().saturating_sub(KEEP).min(old.len());
-        old[..n]
-            .iter()
-            .for_each(|(_, k)| drop(self.cache.remove(k)));
+        let n = self.cache.len().saturating_sub(KEEP);
+        for (_, k) in old.into_iter().take(n) {
+            self.cache.remove(&k);
+        }
         let keys = parts.iter().chain(&b).map(String::as_str);
         let keys = [key.as_str(), "lib"].into_iter().chain(keys);
         let mut tasks: Vec<_> = keys.map(|k| self.request(k, 0)).collect();
@@ -1670,27 +1656,13 @@ impl App {
         {
             p.set_device(&n.device);
         }
-        let gain = |s: &config::Settings| {
-            let t = (s.transcode_format.clone(), s.transcode_max_bitrate);
-            (
-                s.replaygain.clone(),
-                s.preamp_db,
-                s.fallback_db,
-                s.rg_clip,
-                t,
-            )
-        };
-        let point = |s: &config::Settings| {
-            (
-                s.scrobble,
-                s.scrobble_by_time,
-                s.scrobble_pct,
-                s.scrobble_secs,
-            )
-        };
-        let heard = self.loaded && point(&o) != point(n);
-        let (grid, zoom) = (o.disc_grid != n.disc_grid, o.zoom != n.zoom);
-        if gain(&o) != gain(n)
+        macro_rules! diff {
+            ($($f:ident),+) => { $(o.$f != n.$f)||+ };
+        }
+        let heard = self.loaded && diff!(scrobble, scrobble_by_time, scrobble_pct, scrobble_secs);
+        let (grid, zoom) = (diff!(disc_grid), diff!(zoom));
+        let gain = diff!(replaygain, preamp_db, fallback_db, rg_clip);
+        if (gain || diff!(transcode_format, transcode_max_bitrate))
             && let (Some(p), Some(s)) = (&self.player, self.current_song())
         {
             p.set_gain(self.gain(s));
@@ -1791,19 +1763,17 @@ impl App {
         }
         let data = self.cache.get(&self.route);
         let data = data.map_or(0, |c| Arc::as_ptr(&c.1).cast::<()>() as usize);
-        let (r, (f, s, d), _) = &self.pl_view;
+        let (r, f, s, d, _) = &self.pl_view;
         if (r, f, *s, *d) != (&self.route, &self.pl_find, self.pl_sort, data) {
             let diff = (f, *s) != (&self.pl_find, self.pl_sort);
-            let moved = diff || r.starts_with("playlist:");
-            let stamp = (self.pl_find.clone(), self.pl_sort, data);
-            if moved && self.sel.as_ref().is_some_and(|s| s.0 == self.route) && *r == self.route {
+            let (same, pl) = (*r == self.route, self.route.starts_with("playlist:"));
+            if same && (diff || pl) && self.sel.as_ref().is_some_and(|s| s.0 == self.route) {
                 (self.sel, self.picked) = (None, BTreeSet::new());
             }
-            let rows = self.pl_view_of();
-            let rows = rows.filter(|_| self.route.starts_with("playlist:"));
-            let cov = (diff || *r == self.route) && self.route.starts_with("playlist:");
-            self.pl_view = (self.route.clone(), stamp, rows);
-            if cov {
+            let rows = self.pl_view_of().filter(|_| pl);
+            let (r, f) = (self.route.clone(), self.pl_find.clone());
+            self.pl_view = (r, f, self.pl_sort, data, rows);
+            if (diff || same) && pl {
                 t = Task::batch([t, self.covers_now()]);
             }
         }
