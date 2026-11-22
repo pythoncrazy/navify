@@ -107,6 +107,8 @@ pub struct Album {
     pub compilation: bool,
     pub release_types: Vec<String>,
     pub release_date: String,
+    #[serde(alias = "createdAt")]
+    pub created: String,
     pub genre: String,
     pub labels: Vec<String>,
     pub artists: Vec<Artist>,
