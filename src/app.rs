@@ -39,6 +39,7 @@ pub type AnyData = Arc<dyn Any + Send + Sync>;
 type Decoded = (Color, image::Handle, usize);
 type Slot = Option<(u64, image::Handle, usize)>;
 type Rows = (Vec<Song>, Vec<usize>);
+type Lists = HashMap<String, (String, Vec<String>)>;
 type Found = (String, Option<Song>, Option<Album>, Option<Artist>);
 type Run = dyn Fn(&mut App) -> Task<Message> + Send + Sync;
 
@@ -60,6 +61,7 @@ macro_rules! stored {
             "artist" => $m!((Artist, Vec<Album>)),
             "top" => $m!(Vec<Song>),
             "info" => $m!(Info),
+            "lists" => $m!(Lists),
             _ => None,
         }
     };
@@ -1150,7 +1152,7 @@ impl App {
                             .and_then(|x| serde_json::to_value(x).ok())
                     };
                 }
-                let top = k != "home" && k != "lib";
+                let top = !["home", "lib", "lists"].contains(&k.as_str());
                 Some(((top, std::cmp::Reverse(*t)), k.clone(), stored!(k, ser)?))
             })
             .collect();
@@ -1699,6 +1701,7 @@ impl App {
         let keep = |k: &String| {
             *k == key
                 || k == "lib"
+                || k == "lists"
                 || parts.contains(k)
                 || [&about, &b, &lyr].iter().any(|x| x.as_ref() == Some(k))
         };
@@ -1740,6 +1743,21 @@ impl App {
         static SEED: LazyLock<std::hash::RandomState> = LazyLock::new(Default::default);
         if let Some(l) = self.data::<Lib>("lib").filter(|_| key == "liked") {
             return Some(Arc::new((l.songs.clone(), l.songs.len())));
+        }
+        if let Some(id) = key.strip_prefix("playlist:") {
+            let p = self.playlist(id)?;
+            let ids = &self
+                .data::<Lists>("lists")?
+                .get(id)
+                .filter(|l| !l.0.is_empty() && l.0 == p.changed)?
+                .1;
+            let all = &self.catalog.as_ref()?.2;
+            let by: HashMap<&str, &Song> = all.iter().map(|s| (&*s.id, s)).collect();
+            let v: Option<Vec<Song>> = ids
+                .iter()
+                .map(|i| by.get(&**i).map(|s| (*s).clone()))
+                .collect();
+            return Some(Arc::new((p.clone(), v?)));
         }
         let (artists, albums, songs) = &**self.catalog.as_ref()?;
         let (kind, arg) = key.split_once(':').unwrap_or((key, ""));
@@ -2075,6 +2093,17 @@ impl App {
                 if let Some(busy) = self.dirty.get_mut(&key).filter(|_| off == 0) {
                     busy.1 = true;
                     return Task::none();
+                }
+                if let Some((p, songs)) = v.downcast_ref::<(Playlist, Vec<Song>)>()
+                    && let Some(changed) = self.playlist(&p.id).map(|x| x.changed.clone())
+                {
+                    let mut l = self.data::<Lists>("lists").cloned().unwrap_or_default();
+                    l.insert(
+                        p.id.clone(),
+                        (changed, songs.iter().map(|s| s.id.clone()).collect()),
+                    );
+                    self.cache
+                        .insert("lists".into(), (Instant::now(), Arc::new(l)));
                 }
                 let mb = key
                     .strip_prefix("artist:")

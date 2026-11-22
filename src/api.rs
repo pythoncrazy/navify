@@ -163,6 +163,8 @@ pub struct Playlist {
     pub song_count: u32,
     pub duration: f32,
     pub cover: String,
+    #[serde(alias = "updatedAt")]
+    pub changed: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
