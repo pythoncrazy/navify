@@ -76,6 +76,10 @@ async fn read_suite(s: &Session) -> Result<()> {
     s.genres().await?;
     s.radios().await?;
     s.lyrics(&songs[0].id).await?;
+    let all = s.everything().await?;
+    assert!(!all.0.is_empty() && all.1.len() >= page.len() && !all.2.is_empty());
+    let found = api::find(&all, &songs[0].title.to_uppercase(), 50).2;
+    assert!(found.iter().any(|x| x.id == songs[0].id));
     s.similar_songs(&songs[0].id, 3).await?;
     let cover = s.cover(&album.id, 128).await?;
     assert!(image::load_from_memory(&cover).is_ok() && s.cover_file(&album.id, 128).exists());
@@ -98,7 +102,7 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     for v in [native, subsonic] {
         let s: Song = api::parse(v)?;
         let names = (&*s.id, &*s.cover, &*s.album_id, &*s.artists[0].name);
-        assert_eq!(names, ("n1", "n1", "al1", "Ar"));
+        assert_eq!(names, ("n1", "al1", "al1", "Ar"));
         assert_eq!(s.artists[0].cover, "o:ar1");
         assert_eq!((s.track, s.disc, s.starred, s.user_rating), (3, 2, true, 4));
         assert_eq!((s.rg.track_gain, s.rg.album_peak), (Some(-7.5), Some(1.2)));

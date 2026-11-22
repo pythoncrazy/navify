@@ -257,6 +257,16 @@ fn normalize(v: &mut Value) {
             {
                 m.extend([("title".into(), n), ("cover".into(), "".into())]);
             }
+            let album = m
+                .get("albumId")
+                .and_then(Value::as_str)
+                .is_some_and(|a| !a.is_empty());
+            if album && m.get("isDir") != Some(&true.into()) {
+                if m.insert("hasCoverArt".into(), false.into()) != Some(false.into()) {
+                    m.remove("imageHash");
+                }
+                m.remove("coverArt");
+            }
             let has = m.get("hasCoverArt") != Some(&false.into());
             let id = m.get(["albumId", "id"][usize::from(has)]).cloned();
             let (id, hash) = (id.filter(Value::is_string), m.remove("imageHash"));
@@ -304,6 +314,34 @@ impl<'de, T: Data> serde::de::Visitor<'de> for Rows<T> {
         }
         Ok(rows)
     }
+}
+
+pub fn find((artists, albums, songs): &Trio, q: &str, n: usize) -> Trio {
+    let q = q.to_lowercase();
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let rank = |name: &str, more: [&str; 2]| {
+        let name = name.to_lowercase();
+        let hay = format!("{name} {} {}", more[0], more[1]).to_lowercase();
+        let hit = words.iter().all(|w| hay.contains(w));
+        hit.then(|| [name == q, name.starts_with(&q), name.contains(&q), true])
+            .and_then(|r| r.iter().position(|&b| b))
+    };
+    fn top<T: Clone>(v: &[T], n: usize, f: impl Fn(&T) -> Option<(usize, u32)>) -> Vec<T> {
+        let mut hits: Vec<_> = v.iter().filter_map(|x| Some((f(x)?, x))).collect();
+        hits.sort_by_key(|((r, plays), _)| (*r, std::cmp::Reverse(*plays)));
+        hits.into_iter().take(n).map(|h| h.1.clone()).collect()
+    }
+    (
+        top(artists, n, |a| {
+            Some((rank(&a.name, ["", ""])?, a.album_count))
+        }),
+        top(albums, n, |a| {
+            Some((rank(&a.name, [&a.artist, ""])?, a.play_count))
+        }),
+        top(songs, n, |s| {
+            Some((rank(&s.title, [&s.artist, &s.album])?, s.play_count))
+        }),
+    )
 }
 
 pub fn parse<T: Data>(mut v: Value) -> Result<T> {
@@ -594,8 +632,6 @@ impl Session {
         {
             return Ok(b.into());
         }
-        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-        let _net = NET.acquire().await.expect("the cover semaphore is open");
         let id = cover_id(id);
         let url = match id.starts_with("https://") {
             true => id.to_string(),
@@ -760,6 +796,37 @@ impl Session {
     pub async fn search(&self, query: &str, n: usize) -> Result<Trio> {
         let q = json!({"query": query, "artistCount": n, "albumCount": n, "songCount": n});
         self.trio("search3", q, "/searchResult3").await
+    }
+
+    pub async fn scanned(&self) -> Result<String> {
+        let v: Value = self.get("getScanStatus", (), "/scanStatus").await?;
+        Ok(v["lastScan"].as_str().unwrap_or_default().into())
+    }
+
+    pub async fn everything(&self) -> Result<Trio> {
+        let all = async |method: &str, ptr: &str, q: fn(usize) -> Value| {
+            let mut all = Vec::new();
+            loop {
+                let page: Vec<Value> = self.get(method, q(all.len()), ptr).await?;
+                if page.is_empty() {
+                    return Ok::<_, anyhow::Error>(Value::Array(all));
+                }
+                all.extend(page);
+            }
+        };
+        let albums = all(
+            "getAlbumList2",
+            "/albumList2/album",
+            |n| json!({"type": "alphabeticalByName", "size": 500, "offset": n}),
+        );
+        let songs = all(
+            "search3",
+            "/searchResult3/song",
+            |n| json!({"query": "", "songCount": 5000, "songOffset": n, "artistCount": 0, "albumCount": 0}),
+        );
+        let artists = self.index("getArtists", "/artists/index");
+        let (artists, albums, songs) = tokio::try_join!(artists, albums, songs)?;
+        Ok((artists, parse(albums)?, parse(songs)?))
     }
 
     pub async fn starred(&self) -> Result<Trio> {

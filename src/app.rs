@@ -417,6 +417,7 @@ pub struct App {
     anchor: usize,
     pub hover: Option<String>,
     aim: Option<String>,
+    catalog: Option<Arc<Trio>>,
     heard_stop: Option<iced::task::Handle>,
     warmed: Option<String>,
     warm_at: u64,
@@ -526,7 +527,8 @@ impl App {
                     )
                 })
             });
-            Task::batch([app.nav(r), app.restore()].into_iter().chain(ext))
+            let sync = app.sync_index();
+            Task::batch([app.nav(r), app.restore(), sync].into_iter().chain(ext))
         } else {
             app.show()
         };
@@ -1045,6 +1047,82 @@ impl App {
         blocking("Could not save the settings. ", save)
     }
 
+    fn sync_index(&self) -> Task<Message> {
+        let Some(s) = self.session.clone() else {
+            return Task::none();
+        };
+        let (id, me) = (s.server.id.clone(), s.clone());
+        let file = crate::api::cache_dir("").join("index");
+        let disk = move || -> Option<(String, Arc<Trio>)> {
+            let (z, mut raw) = (std::fs::read(&file).ok()?, Vec::new());
+            let mut d = flate2::read::DeflateDecoder::new(&z[..]);
+            std::io::Read::read_to_end(&mut d, &mut raw).ok()?;
+            let mut v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+            (v["server"] == id).then_some(())?;
+            let t = serde_json::from_value(v["data"].take()).ok()?;
+            Some((v["scan"].as_str()?.into(), Arc::new(t)))
+        };
+        Task::perform(tokio::task::spawn_blocking(disk), move |r| {
+            let (scan, t) = r.expect("index load").unzip();
+            let s = me.clone();
+            let check = move |s: Session| async move {
+                let now = s.scanned().await?;
+                if scan.as_ref().is_some_and(|w| !w.is_empty() && *w == now) {
+                    return Ok(None);
+                }
+                let t = s.everything().await?;
+                let mut body = serde_json::json!({"server": s.server.id, "scan": now, "data": t});
+                let save = move || -> anyhow::Result<()> {
+                    use flate2::{Compression, write::DeflateEncoder};
+                    prune(&mut body);
+                    let mut z = DeflateEncoder::new(Vec::new(), Compression::default());
+                    std::io::Write::write_all(&mut z, &serde_json::to_vec(&body)?)?;
+                    let file = crate::api::cache_dir("").join("index");
+                    std::fs::create_dir_all(file.parent().expect("the cache has a directory"))?;
+                    let tmp = file.with_extension("tmp");
+                    std::fs::write(&tmp, z.finish()?)?;
+                    Ok(std::fs::rename(tmp, file)?)
+                };
+                tokio::task::spawn_blocking(save).await??;
+                Ok(Some(Arc::new(t)))
+            };
+            ours(
+                &s,
+                task(move |a| {
+                    a.catalog = a.catalog.take().or(t.clone());
+                    let set = |t: Option<Arc<Trio>>| {
+                        task(move |a| {
+                            a.catalog = t.clone().or(a.catalog.take());
+                            a.prefetch()
+                        })
+                    };
+                    a.call(check.clone(), "Could not load the library index.", set)
+                }),
+            )
+        })
+    }
+
+    fn prefetch(&self) -> Task<Message> {
+        let Some((s, t)) = self.session.clone().zip(self.catalog.clone()) else {
+            return Task::none();
+        };
+        let keys =
+            t.0.iter()
+                .map(|a| &a.cover)
+                .chain(t.1.iter().map(|a| &a.cover));
+        let keys = keys.filter(|c| !c.is_empty()).cloned();
+        let keys: Vec<String> = keys.filter(|c| !s.cover_file(c, 128).exists()).collect();
+        let jobs = keys.into_iter().map(move |k| {
+            let s = s.clone();
+            async move {
+                static BG: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(6);
+                let _bg = BG.acquire().await.expect("the prefetch semaphore is open");
+                drop(s.cover(&k, 128).await);
+            }
+        });
+        Task::perform(iced::futures::future::join_all(jobs), |_| Message::Noop)
+    }
+
     fn save_data(&self) -> Task<Message> {
         let Some(s) = &self.session else {
             return Task::none();
@@ -1362,6 +1440,9 @@ impl App {
         };
         let mut need = Vec::new();
         for (id, size) in ids {
+            let album = self.catalog.as_ref().filter(|_| !id.contains(['#', ':']));
+            let album = album.and_then(|t| t.1.iter().find(|a| a.id == id));
+            let id = album.map_or(id, |a| a.cover.clone());
             self.covers.tick += 1;
             let (b, hash) = id.split_once('#').unwrap_or((&id, ""));
             let (t, e) = (self.covers.tick, self.covers.map.get_mut(b));
@@ -1381,7 +1462,7 @@ impl App {
         }
         type Batch = Vec<(String, u32, Result<Decoded, String>)>;
         static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
         type Known = Option<(std::path::PathBuf, HashMap<String, Color>)>;
         static KNOWN: Mutex<Known> = Mutex::new(None);
         let dec = |items: Vec<(String, u32, Result<bytes::Bytes, String>)>,
@@ -1472,30 +1553,17 @@ impl App {
                 a.covers.disk = a.covers.disk.saturating_sub(1);
                 a.covers.wait &= a.covers.disk > 0;
                 let mut tasks: Vec<_> = apply(a, out.clone()).into_iter().collect();
-                for chunk in miss.chunks(4) {
-                    let (chunk, s, own, colors) =
-                        (chunk.to_vec(), s.clone(), s.clone(), a.covers.color.clone());
+                for (k, sz, seen) in miss.clone() {
+                    let (s, own, colors) = (s.clone(), s.clone(), a.covers.color.clone());
                     let net = async move {
-                        let mut dl = Vec::new();
-                        for (k, sz, seen) in chunk {
-                            let s = s.clone();
-                            dl.push(tokio::spawn(async move {
-                                let _net =
-                                    NET.acquire().await.expect("the cover semaphore is open");
-                                let gone =
-                                    seen && !SHOWN.lock().expect("cover set").contains(bare(&k));
-                                let r = match gone {
-                                    true => Err(String::new()),
-                                    false => s.cover(&k, sz).await.map_err(|e| e.to_string()),
-                                };
-                                (k, sz, r)
-                            }));
-                        }
-                        let mut got = Vec::new();
-                        for h in dl {
-                            got.push(h.await.expect("cover task"));
-                        }
-                        dec(got, colors, &s).await
+                        let _net = NET.acquire().await.expect("the cover semaphore is open");
+                        let gone = seen && !SHOWN.lock().expect("cover set").contains(bare(&k));
+                        let r = match gone {
+                            true => Err(String::new()),
+                            false => s.cover(&k, sz).await.map_err(|e| e.to_string()),
+                        };
+                        drop(_net);
+                        dec(vec![(k, sz, r)], colors, &s).await
                     };
                     tasks.push(Task::perform(net, move |res| {
                         ours(&own, task(move |a| Task::batch(apply(a, res.clone()))))
@@ -1678,7 +1746,7 @@ impl App {
     fn reset(&mut self) -> Task<Message> {
         let h = self.halt();
         (self.queue, self.shuffle, self.index, self.position) = (Vec::new(), None, 0, 0.0);
-        (self.ctx, self.source, self.qmove) = Default::default();
+        (self.ctx, self.source, self.qmove, self.catalog) = Default::default();
         (self.starred, self.ratings, self.plays, self.recent) = Default::default();
         (self.cache, self.seeds, self.pending, self.scrolls) = Default::default();
         (self.covers, self.history, self.hi, self.panel) = Default::default();
@@ -1947,14 +2015,15 @@ impl App {
             }
             Message::Search(q) => {
                 (self.search_q, self.search_seq) = (q, self.search_seq + 1);
-                let (t, n) = (self.search_q.trim(), self.search_seq);
-                if t.is_empty() || self.cache.contains_key(&format!("search:{t}")) {
-                    return self.update(Message::SearchGo(n));
-                }
-                return later(0.25, Message::SearchGo(n));
+                return self.update(Message::SearchGo(self.search_seq));
             }
             Message::SearchGo(n) if n == self.search_seq => {
                 let q = self.search_q.trim();
+                if let Some(ix) = self.catalog.as_ref().filter(|_| !q.is_empty()) {
+                    let hits: AnyData = Arc::new(crate::api::find(ix, q, 20));
+                    self.cache
+                        .insert(format!("search:{q}"), (Instant::now(), hits));
+                }
                 let r = format!("search{}{q}", if q.is_empty() { "" } else { ":" });
                 return match (r == self.route, self.route.starts_with("search")) {
                     (true, _) => self.request(&r, 0),
@@ -2684,7 +2753,7 @@ impl App {
         self.history.clear();
         let to = shot_key(self.shot.as_deref()).unwrap_or_else(|| "home".into());
         let (t, n) = (self.persist(), self.nav(to));
-        Task::batch([h, t, n, self.restore(), kept])
+        Task::batch([h, t, n, self.restore(), self.sync_index(), kept])
     }
 
     fn expired(&mut self, key: String) -> Task<Message> {
