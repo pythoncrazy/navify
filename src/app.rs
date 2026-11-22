@@ -1070,13 +1070,24 @@ impl App {
         let (id, me) = (s.server.id.clone(), s.clone());
         let file = crate::api::cache_dir("").join("index");
         let disk = move || -> Option<(String, Arc<Trio>)> {
+            #[derive(serde::Deserialize)]
+            struct Index {
+                server: String,
+                v: u32,
+                scan: String,
+                data: Trio,
+            }
             let (z, mut raw) = (std::fs::read(&file).ok()?, Vec::new());
             let mut d = flate2::read::DeflateDecoder::new(&z[..]);
             std::io::Read::read_to_end(&mut d, &mut raw).ok()?;
-            let mut v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-            (v["server"] == id && v["v"] == 2).then_some(())?;
-            let t = serde_json::from_value(v["data"].take()).ok()?;
-            Some((v["scan"].as_str()?.into(), Arc::new(t)))
+            let i: Option<Index> = serde_json::from_slice(&raw).ok();
+            drop((raw, z));
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            unsafe {
+                libc::malloc_trim(0);
+            }
+            let i = i.filter(|i| i.server == id && i.v == 2)?;
+            Some((i.scan, Arc::new(i.data)))
         };
         Task::perform(tokio::task::spawn_blocking(disk), move |r| {
             let (scan, t) = r.expect("index load").unzip();
@@ -1098,7 +1109,12 @@ impl App {
                     std::fs::create_dir_all(file.parent().expect("the cache has a directory"))?;
                     let tmp = file.with_extension("tmp");
                     std::fs::write(&tmp, z.finish()?)?;
-                    Ok(std::fs::rename(tmp, file)?)
+                    std::fs::rename(tmp, file)?;
+                    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                    unsafe {
+                        libc::malloc_trim(0);
+                    }
+                    Ok(())
                 };
                 tokio::task::spawn_blocking(save).await??;
                 Ok(Some(Arc::new(t)))
@@ -2620,7 +2636,15 @@ impl App {
                 self.aim = Some(r.clone());
                 let top = r.strip_prefix("artist:").map(|id| format!("top:{id}"));
                 let keys = std::iter::once(self.key_of(&r)).chain(top);
-                return Task::batch(keys.map(|k| self.request(&k, 0)));
+                let mut tasks: Vec<_> = keys.map(|k| self.request(&k, 0)).collect();
+                let cover = match r.split_once(':') {
+                    Some(("album", id)) => self.find_album(id).map(|a| a.cover),
+                    Some(("playlist", id)) => self.playlist(id).map(|p| p.cover.clone()),
+                    _ => None,
+                };
+                let size = self.bucket(crate::pages::art_px(self));
+                tasks.push(self.want_covers(cover.map(|c| (c, size))));
+                return Task::batch(tasks);
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
