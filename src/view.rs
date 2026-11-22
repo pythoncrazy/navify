@@ -182,7 +182,7 @@ mod wrap {
         at: Point,
         hold: bool,
         lo: usize,
-        goal: Option<(f32, Option<std::time::Instant>)>,
+        goal: Option<(f32, Option<std::time::Instant>, f32)>,
     }
     struct Scan(Option<(Rect, Rect, f32)>, Option<(f32, f32)>, Option<f32>);
     impl Operation for Scan {
@@ -449,14 +449,14 @@ mod wrap {
                     let y = (ly - ch.y + lh * 0.5 - b.height * 0.45).clamp(0.0, max);
                     let near = old == usize::MAX - 1 || (y - off).abs() < b.height;
                     match self.mode == 1 && old != usize::MAX && near && (y - off).abs() >= 1.0 {
-                        true => ring.goal = Some((y, ring.goal.and_then(|g| g.1))),
+                        true => ring.goal = Some((y, ring.goal.and_then(|g| g.1), f32::NAN)),
                         false => {
                             ring.goal = None;
                             scan(w, c0, None, Some(y));
                         }
                     }
                 }
-                if let Some((y, t)) = ring.goal {
+                if let Some((y, t, last)) = ring.goal {
                     match t.map(|t| t + frame).filter(|d| d > now) {
                         Some(due) => sh.request_redraw_at(due),
                         None => {
@@ -465,13 +465,13 @@ mod wrap {
                             let off = at.map_or(y, |x| x.2);
                             let dt = t.map_or(1.0 / 60.0, |t| (*now - t).as_secs_f32());
                             let rem = y - off;
-                            let next = match rem.abs() < 1.0 {
+                            let next = match rem.abs() < 1.0 || (off - last).abs() < 0.25 {
                                 true => {
                                     ring.goal = None;
                                     y
                                 }
                                 false => {
-                                    ring.goal = Some((y, Some(*now)));
+                                    ring.goal = Some((y, Some(*now), off));
                                     sh.request_redraw_at(*now + frame);
                                     off + rem * (1.0 - (-dt / 0.08).exp())
                                 }

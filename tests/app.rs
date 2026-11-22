@@ -329,9 +329,7 @@ async fn recorded_shortcut_replaces_the_old_binding() {
     let pl: navify::api::Playlist = parse(json!({"id": "p1", "name": "P"})).expect("playlist");
     let lib = navify::app::Lib {
         playlists: vec![pl],
-        artists: Vec::new(),
-        albums: Vec::new(),
-        liked: 0,
+        ..Default::default()
     };
     app.cache
         .insert("lib".into(), (std::time::Instant::now(), Arc::new(lib)));

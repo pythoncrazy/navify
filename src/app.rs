@@ -31,6 +31,7 @@ pub struct Lib {
     pub artists: Vec<Artist>,
     pub albums: Vec<Album>,
     pub liked: usize,
+    pub songs: Vec<Song>,
 }
 
 type Page<T> = (Vec<T>, usize);
@@ -38,6 +39,7 @@ pub type AnyData = Arc<dyn Any + Send + Sync>;
 type Decoded = (Color, image::Handle, usize);
 type Slot = Option<(u64, image::Handle, usize)>;
 type Rows = (Vec<Song>, Vec<usize>);
+type Lists = HashMap<String, (String, Vec<String>)>;
 type Found = (String, Option<Song>, Option<Album>, Option<Artist>);
 type Run = dyn Fn(&mut App) -> Task<Message> + Send + Sync;
 
@@ -59,6 +61,7 @@ macro_rules! stored {
             "artist" => $m!((Artist, Vec<Album>)),
             "top" => $m!(Vec<Song>),
             "info" => $m!(Info),
+            "lists" => $m!(Lists),
             _ => None,
         }
     };
@@ -417,6 +420,11 @@ pub struct App {
     anchor: usize,
     pub hover: Option<String>,
     aim: Option<String>,
+    catalog: Option<Arc<Trio>>,
+    catalog_hay: Option<Arc<crate::api::Hay>>,
+    catalog_covers: HashMap<String, String>,
+    catalog_scan: String,
+    catalog_at: Option<Instant>,
     heard_stop: Option<iced::task::Handle>,
     warmed: Option<String>,
     warm_at: u64,
@@ -526,7 +534,8 @@ impl App {
                     )
                 })
             });
-            Task::batch([app.nav(r), app.restore()].into_iter().chain(ext))
+            let sync = app.sync_index();
+            Task::batch([app.nav(r), app.restore(), sync].into_iter().chain(ext))
         } else {
             app.show()
         };
@@ -937,7 +946,15 @@ impl App {
             if let Some(mut s) = song {
                 let had = usize::from(was.unwrap_or(s.starred));
                 self.edit::<Lib>("lib", |l| {
-                    l.liked = (l.liked + on as usize).saturating_sub(had)
+                    l.liked = (l.liked + on as usize).saturating_sub(had);
+                    l.songs.retain(|x| x.id != s.id);
+                    l.songs.splice(
+                        0..0,
+                        on.then(|| Song {
+                            starred: true,
+                            ..s.clone()
+                        }),
+                    );
                 });
                 s.starred = on;
                 self.edit::<Page<Song>>("liked", |(items, total)| {
@@ -984,6 +1001,11 @@ impl App {
             t.elapsed() < STALE && (key.starts_with("banner:") || !v.is::<String>())
         };
         if offset == 0 && !self.stale.contains(key) && self.cache.get(key).is_some_and(fresh) {
+            return Task::none();
+        }
+        if let Some(d) = self.local(key).filter(|_| offset == 0) {
+            self.stale.remove(key);
+            self.cache.insert(key.into(), (Instant::now(), d));
             return Task::none();
         }
         match self.session.clone() {
@@ -1045,6 +1067,161 @@ impl App {
         blocking("Could not save the settings. ", save)
     }
 
+    fn sync_index(&self) -> Task<Message> {
+        let Some(s) = self.session.clone().filter(|s| s.server.native) else {
+            return Task::none();
+        };
+        let (id, me) = (s.server.id.clone(), s.clone());
+        let file = crate::api::cache_dir("").join("index");
+        let disk = move || -> Option<(String, Arc<Trio>)> {
+            #[derive(serde::Deserialize)]
+            struct Index {
+                server: String,
+                v: u32,
+                scan: String,
+                data: Trio,
+            }
+            let (z, mut raw) = (std::fs::read(&file).ok()?, Vec::new());
+            let mut d = flate2::read::DeflateDecoder::new(&z[..]);
+            std::io::Read::read_to_end(&mut d, &mut raw).ok()?;
+            let i: Option<Index> = serde_json::from_slice(&raw).ok();
+            drop((raw, z));
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            unsafe {
+                libc::malloc_trim(0);
+            }
+            let i = i.filter(|i| i.server == id && i.v == 3)?;
+            Some((i.scan, Arc::new(i.data)))
+        };
+        Task::perform(tokio::task::spawn_blocking(disk), move |r| {
+            let d = r.expect("index load");
+            ours(
+                &me,
+                task(move |a| {
+                    let set = d.clone().map(|(scan, t)| a.set_catalog(scan, t));
+                    Task::batch(set.into_iter().chain([a.index_check()]))
+                }),
+            )
+        })
+    }
+
+    fn index_check(&mut self) -> Task<Message> {
+        self.catalog_at = Some(Instant::now());
+        let scan = self.catalog_scan.clone();
+        let check = move |s: Session| async move {
+            let Some(now) = s
+                .scanned()
+                .await?
+                .filter(|now| scan.is_empty() || *now != scan)
+            else {
+                return Ok(None);
+            };
+            let t = s.everything().await?;
+            let mut body =
+                serde_json::json!({"server": s.server.id, "v": 3, "scan": now, "data": t});
+            let save = move || -> anyhow::Result<()> {
+                use flate2::{Compression, write::DeflateEncoder};
+                prune(&mut body);
+                let mut z = DeflateEncoder::new(Vec::new(), Compression::default());
+                std::io::Write::write_all(&mut z, &serde_json::to_vec(&body)?)?;
+                let file = crate::api::cache_dir("").join("index");
+                std::fs::create_dir_all(file.parent().expect("the cache has a directory"))?;
+                let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
+                std::fs::write(&tmp, z.finish()?)?;
+                std::fs::rename(tmp, file)?;
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                unsafe {
+                    libc::malloc_trim(0);
+                }
+                Ok(())
+            };
+            tokio::task::spawn_blocking(save).await??;
+            Ok(Some((now, Arc::new(t))))
+        };
+        let set = |r: Option<(String, Arc<Trio>)>| {
+            task(move |a| {
+                let set = r.clone().map(|(scan, t)| a.set_catalog(scan, t));
+                Task::batch(set.into_iter().chain([a.prefetch()]))
+            })
+        };
+        self.call(check, "Could not load the library index.", set)
+    }
+
+    fn set_catalog(&mut self, scan: String, t: Arc<Trio>) -> Task<Message> {
+        self.catalog_hay = Some(Arc::new(crate::api::hay(&t)));
+        self.catalog_covers =
+            t.1.iter()
+                .map(|a| (a.id.clone(), a.cover.clone()))
+                .collect();
+        (self.catalog_scan, self.catalog) = (scan, Some(t));
+        self.restar();
+        self.drop_local()
+    }
+
+    fn restar(&mut self) {
+        let Some(l) = self.data::<Lib>("lib") else {
+            return;
+        };
+        let ids = |v: Vec<&String>| v.into_iter().cloned().collect::<HashSet<String>>();
+        let songs = ids(l.songs.iter().map(|x| &x.id).collect());
+        let albums = ids(l.albums.iter().map(|x| &x.id).collect());
+        let artists = ids(l.artists.iter().map(|x| &x.id).collect());
+        if let Some(t) = &mut self.catalog {
+            let t = Arc::make_mut(t);
+            t.0.iter_mut()
+                .for_each(|x| x.starred = artists.contains(&x.id));
+            t.1.iter_mut()
+                .for_each(|x| x.starred = albums.contains(&x.id));
+            t.2.iter_mut()
+                .for_each(|x| x.starred = songs.contains(&x.id));
+        }
+    }
+
+    fn drop_local(&mut self) -> Task<Message> {
+        const LOCAL: [&str; 8] = [
+            "liked", "songs", "albums", "artists", "genre:", "artist:", "top:", "appears:",
+        ];
+        let local = |k: &str| LOCAL.iter().any(|p| k.starts_with(p)) || k.starts_with("playlist:");
+        self.cache.retain(|k, _| !local(k));
+        let key = self.key_of(&self.route);
+        let id = key.strip_prefix("artist:").map(String::from);
+        let parts = id.map(|id| ["top", "appears"].map(|k| format!("{k}:{id}")));
+        let keys: Vec<String> = std::iter::once(key)
+            .chain(parts.into_iter().flatten())
+            .collect();
+        Task::batch(keys.iter().map(|k| self.request(k, 0)).collect::<Vec<_>>())
+    }
+
+    pub fn cover_key<'a>(&'a self, id: &'a str) -> &'a str {
+        self.catalog_covers.get(id).map_or(id, String::as_str)
+    }
+
+    fn prefetch(&self) -> Task<Message> {
+        let Some((s, t)) = self.session.clone().zip(self.catalog.clone()) else {
+            return Task::none();
+        };
+        let keys =
+            t.0.iter()
+                .map(|a| &a.cover)
+                .chain(t.1.iter().map(|a| &a.cover));
+        let keys = keys.filter(|c| !c.is_empty()).cloned();
+        let jobs = keys.collect::<Vec<_>>().into_iter().map(move |k| {
+            let s = s.clone();
+            async move {
+                if tokio::fs::try_exists(s.cover_file(&k, 128))
+                    .await
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                static BG: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(6);
+                let _bg = BG.acquire().await.expect("the prefetch semaphore is open");
+                drop(s.cover(&k, 128).await);
+            }
+        });
+        Task::perform(iced::futures::future::join_all(jobs), |_| Message::Noop)
+    }
+
     fn save_data(&self) -> Task<Message> {
         let Some(s) = &self.session else {
             return Task::none();
@@ -1057,7 +1234,7 @@ impl App {
                             .and_then(|x| serde_json::to_value(x).ok())
                     };
                 }
-                let top = k != "home" && k != "lib";
+                let top = !["home", "lib", "lists"].contains(&k.as_str());
                 Some(((top, std::cmp::Reverse(*t)), k.clone(), stored!(k, ser)?))
             })
             .collect();
@@ -1228,7 +1405,7 @@ impl App {
         let files = self
             .session
             .as_ref()
-            .map(|s| SIZES.map(|z| s.cover_file(&song.cover, z)));
+            .map(|s| SIZES.map(|z| s.cover_file(self.cover_key(&song.cover), z)));
         let show = move || {
             let mut n = notify_rust::Notification::new();
             let body = format!("{}{}{}", song.artist, crate::pages::DOT, song.album);
@@ -1362,6 +1539,7 @@ impl App {
         };
         let mut need = Vec::new();
         for (id, size) in ids {
+            let id = self.cover_key(&id).to_string();
             self.covers.tick += 1;
             let (b, hash) = id.split_once('#').unwrap_or((&id, ""));
             let (t, e) = (self.covers.tick, self.covers.map.get_mut(b));
@@ -1381,7 +1559,7 @@ impl App {
         }
         type Batch = Vec<(String, u32, Result<Decoded, String>)>;
         static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
         type Known = Option<(std::path::PathBuf, HashMap<String, Color>)>;
         static KNOWN: Mutex<Known> = Mutex::new(None);
         let dec = |items: Vec<(String, u32, Result<bytes::Bytes, String>)>,
@@ -1459,9 +1637,25 @@ impl App {
         let load = async move {
             let (mut hit, mut miss) = (Vec::new(), Vec::new());
             for (k, sz, seen) in need {
-                match tokio::fs::read(s.cover_file(&k, sz)).await {
-                    Ok(b) if !b.is_empty() => hit.push((k, sz, Ok(b.into()))),
-                    _ => miss.push((k, sz, seen)),
+                let (mut big, mut small) = (None, None);
+                for z in SIZES {
+                    let b = tokio::fs::read(s.cover_file(&k, z)).await.ok();
+                    match b.filter(|b| !b.is_empty()) {
+                        Some(b) if z >= sz => {
+                            big = Some(b);
+                            break;
+                        }
+                        Some(b) => small = Some((z, b)),
+                        None => {}
+                    }
+                }
+                match (big, small) {
+                    (Some(b), _) => hit.push((k, sz, Ok(b.into()))),
+                    (None, Some((z, b))) => {
+                        hit.push((k.clone(), z, Ok(b.into())));
+                        miss.push((k, sz, seen));
+                    }
+                    (None, None) => miss.push((k, sz, seen)),
                 }
             }
             (dec(hit, colors, &s).await, miss)
@@ -1472,30 +1666,17 @@ impl App {
                 a.covers.disk = a.covers.disk.saturating_sub(1);
                 a.covers.wait &= a.covers.disk > 0;
                 let mut tasks: Vec<_> = apply(a, out.clone()).into_iter().collect();
-                for chunk in miss.chunks(4) {
-                    let (chunk, s, own, colors) =
-                        (chunk.to_vec(), s.clone(), s.clone(), a.covers.color.clone());
+                for (k, sz, seen) in miss.clone() {
+                    let (s, own, colors) = (s.clone(), s.clone(), a.covers.color.clone());
                     let net = async move {
-                        let mut dl = Vec::new();
-                        for (k, sz, seen) in chunk {
-                            let s = s.clone();
-                            dl.push(tokio::spawn(async move {
-                                let _net =
-                                    NET.acquire().await.expect("the cover semaphore is open");
-                                let gone =
-                                    seen && !SHOWN.lock().expect("cover set").contains(bare(&k));
-                                let r = match gone {
-                                    true => Err(String::new()),
-                                    false => s.cover(&k, sz).await.map_err(|e| e.to_string()),
-                                };
-                                (k, sz, r)
-                            }));
-                        }
-                        let mut got = Vec::new();
-                        for h in dl {
-                            got.push(h.await.expect("cover task"));
-                        }
-                        dec(got, colors, &s).await
+                        let _net = NET.acquire().await.expect("the cover semaphore is open");
+                        let gone = seen && !SHOWN.lock().expect("cover set").contains(bare(&k));
+                        let r = match gone {
+                            true => Err(String::new()),
+                            false => s.cover(&k, sz).await.map_err(|e| e.to_string()),
+                        };
+                        drop(_net);
+                        dec(vec![(k, sz, r)], colors, &s).await
                     };
                     tasks.push(Task::perform(net, move |res| {
                         ours(&own, task(move |a| Task::batch(apply(a, res.clone()))))
@@ -1600,6 +1781,7 @@ impl App {
         let keep = |k: &String| {
             *k == key
                 || k == "lib"
+                || k == "lists"
                 || parts.contains(k)
                 || [&about, &b, &lyr].iter().any(|x| x.as_ref() == Some(k))
         };
@@ -1635,14 +1817,137 @@ impl App {
         Task::batch(tasks)
     }
 
+    fn local(&self, key: &str) -> Option<AnyData> {
+        use std::cmp::Reverse;
+        use std::hash::BuildHasher;
+        static SEED: LazyLock<std::hash::RandomState> = LazyLock::new(Default::default);
+        if let Some(l) = self.data::<Lib>("lib").filter(|_| key == "liked") {
+            return Some(Arc::new((l.songs.clone(), l.songs.len())));
+        }
+        if let Some(id) = key.strip_prefix("playlist:") {
+            let p = self.playlist(id).filter(|p| p.rules.is_null())?;
+            let ids = &self
+                .data::<Lists>("lists")?
+                .get(id)
+                .filter(|l| !l.0.is_empty() && l.0 == p.changed)?
+                .1;
+            let all = &self.catalog.as_ref()?.2;
+            let by: HashMap<&str, &Song> = all.iter().map(|s| (&*s.id, s)).collect();
+            let v: Option<Vec<Song>> = ids
+                .iter()
+                .map(|i| by.get(&**i).map(|s| (*s).clone()))
+                .collect();
+            return Some(Arc::new((p.clone(), v?)));
+        }
+        let (artists, albums, songs) = &**self.catalog.as_ref()?;
+        let (kind, arg) = key.split_once(':').unwrap_or((key, ""));
+        let low = |s: &str| s.to_lowercase();
+        fn page<T: Send + Sync + 'static>(v: Vec<T>) -> AnyData {
+            let n = v.len();
+            Arc::new((v, n))
+        }
+        Some(match (kind, arg) {
+            ("songs", sort) => {
+                let mut v = songs.clone();
+                match sort {
+                    "" | "name" => v.sort_by_cached_key(|x| low(&x.title)),
+                    "artist" => {
+                        v.sort_by_cached_key(|x| (low(&x.artist), low(&x.album), x.disc, x.track))
+                    }
+                    "album" => v.sort_by_cached_key(|x| (low(&x.album), x.disc, x.track)),
+                    "year" => v.sort_by_cached_key(|x| (x.year, low(&x.album), x.disc, x.track)),
+                    "newest" => v.sort_by_cached_key(|x| Reverse(x.created.clone())),
+                    "random" => v.sort_by_cached_key(|x| SEED.hash_one(&x.id)),
+                    _ => return None,
+                }
+                page(v)
+            }
+            ("albums" | "genre", _) => {
+                let (sort, genre) = [(arg, None), ("", Some(arg))][usize::from(kind == "genre")];
+                let named = |a: &Album, g: &str| {
+                    let mut all = a.genres.iter().map(|x| &x.name).chain([&a.genre]);
+                    all.any(|x| x.eq_ignore_ascii_case(g))
+                };
+                let g = |a: &&Album| genre.is_none_or(|g| named(a, g));
+                let mut v: Vec<Album> = albums.iter().filter(g).cloned().collect();
+                match sort {
+                    "" | "newest" => v.sort_by_cached_key(|x| Reverse(x.created.clone())),
+                    "name" => v.sort_by_cached_key(|x| low(&x.name)),
+                    "artist" => v.sort_by_cached_key(|x| (low(&x.artist), x.year)),
+                    "year" => v.sort_by_cached_key(|x| (x.year, low(&x.name))),
+                    "random" => v.sort_by_cached_key(|x| SEED.hash_one(&x.id)),
+                    _ => return None,
+                }
+                page(v)
+            }
+            ("artists", "") => {
+                let mut v = artists.clone();
+                v.sort_by_cached_key(|x| low(&x.name));
+                page(v)
+            }
+            ("artist" | "top" | "appears", id) => {
+                let on = |s: &&Song| s.artist_id == id || s.artists.iter().any(|a| a.id == id);
+                let own =
+                    |a: &Album| a.artist_id == id || a.album_artists.iter().any(|x| x.id == id);
+                match kind {
+                    "artist" => {
+                        let mut a = artists.iter().find(|a| a.id == id)?.clone();
+                        let mut v: Vec<Album> = albums.iter().filter(|a| own(a)).cloned().collect();
+                        v.sort_by_key(|a| Reverse(a.year));
+                        a.song_count = v.iter().map(|x| x.song_count).sum();
+                        Arc::new((a, v))
+                    }
+                    "top" => {
+                        let mut v: Vec<Song> = songs.iter().filter(on).cloned().collect();
+                        v.sort_by_key(|s| Reverse(s.play_count));
+                        v.truncate(10);
+                        Arc::new(v)
+                    }
+                    _ => {
+                        let ids: HashSet<&str> =
+                            songs.iter().filter(on).map(|s| &*s.album_id).collect();
+                        let mut v: Vec<Album> = albums
+                            .iter()
+                            .filter(|a| ids.contains(&*a.id) && !own(a))
+                            .cloned()
+                            .collect();
+                        v.sort_by_key(|a| Reverse(a.year));
+                        Arc::new(v)
+                    }
+                }
+            }
+            _ => return None,
+        })
+    }
+
     fn seed(&self, key: &str) -> Option<AnyData> {
         let (kind, id) = key.split_once(':')?;
         if self.cache.get(key).is_some_and(|(_, v)| !v.is::<String>()) {
             return None;
         }
+        let (artists, albums, songs) = self
+            .catalog
+            .as_deref()
+            .map_or((&[][..], &[][..], &[][..]), |t| {
+                (&t.0[..], &t.1[..], &t.2[..])
+            });
+        let album = |id: &str| albums.iter().find(|a| a.id == id).cloned();
         Some(match kind {
-            "album" => Arc::new((self.find_album(id)?, Vec::<Song>::new())),
-            "artist" => Arc::new((self.find_artist(id)?.clone(), Vec::<Album>::new())),
+            "album" => {
+                let mut v: Vec<Song> = songs.iter().filter(|s| s.album_id == id).cloned().collect();
+                v.sort_by_key(|s| (s.disc, s.track));
+                Arc::new((self.find_album(id).or_else(|| album(id))?, v))
+            }
+            "artist" => {
+                let by =
+                    |a: &&Album| a.artist_id == id || a.album_artists.iter().any(|x| x.id == id);
+                let mut v: Vec<Album> = albums.iter().filter(by).cloned().collect();
+                v.sort_by_key(|a| std::cmp::Reverse(a.year));
+                let artist = self
+                    .find_artist(id)
+                    .or_else(|| artists.iter().find(|a| a.id == id));
+                Arc::new((artist?.clone(), v))
+            }
             "playlist" => Arc::new((self.playlist(id)?.clone(), Vec::<Song>::new())),
             _ => return None,
         })
@@ -1678,7 +1983,8 @@ impl App {
     fn reset(&mut self) -> Task<Message> {
         let h = self.halt();
         (self.queue, self.shuffle, self.index, self.position) = (Vec::new(), None, 0, 0.0);
-        (self.ctx, self.source, self.qmove) = Default::default();
+        (self.ctx, self.source, self.qmove, self.catalog) = Default::default();
+        (self.catalog_hay, self.catalog_covers, self.catalog_scan) = Default::default();
         (self.starred, self.ratings, self.plays, self.recent) = Default::default();
         (self.cache, self.seeds, self.pending, self.scrolls) = Default::default();
         (self.covers, self.history, self.hi, self.panel) = Default::default();
@@ -1797,7 +2103,7 @@ impl App {
             return t;
         }
         let file = song.zip(s);
-        let file = file.map(|(s, x)| x.cover_file(&s.cover, self.bucket(56.0)));
+        let file = file.map(|(s, x)| x.cover_file(self.cover_key(&s.cover), self.bucket(56.0)));
         let art = file.filter(|f| f.exists());
         if same && art.is_none() {
             return t;
@@ -1873,6 +2179,17 @@ impl App {
                     busy.1 = true;
                     return Task::none();
                 }
+                if let Some((p, songs)) = v.downcast_ref::<(Playlist, Vec<Song>)>()
+                    && let Some(changed) = self.playlist(&p.id).map(|x| x.changed.clone())
+                {
+                    let mut l = self.data::<Lists>("lists").cloned().unwrap_or_default();
+                    l.insert(
+                        p.id.clone(),
+                        (changed, songs.iter().map(|s| s.id.clone()).collect()),
+                    );
+                    self.cache
+                        .insert("lists".into(), (Instant::now(), Arc::new(l)));
+                }
                 let mb = key
                     .strip_prefix("artist:")
                     .and_then(|id| self.find_artist(id))
@@ -1905,7 +2222,16 @@ impl App {
                 let banner = v.downcast_ref::<(Artist, Vec<Album>)>().filter(|_| banner);
                 let banner = banner.map(|(a, _)| a.banner_key());
                 self.cache.insert(key.clone(), (Instant::now(), v));
-                let banner = Task::batch(banner.map(|k| self.request(&k, 0)));
+                let fresh = match key == "lib" {
+                    true => {
+                        self.restar();
+                        let old = self.catalog_at.is_some_and(|t| t.elapsed() > STALE);
+                        let check = Task::batch(old.then(|| self.index_check()));
+                        Task::batch([self.drop_local(), check])
+                    }
+                    false => Task::none(),
+                };
+                let banner = Task::batch([fresh, Task::batch(banner.map(|k| self.request(&k, 0)))]);
                 let setup = shot_key(self.shot.as_deref()).is_some_and(|k| k == key);
                 let setup = Task::batch(setup.then(|| self.apply_shot_setup()));
                 let wait = self.route == "home"
@@ -1947,14 +2273,17 @@ impl App {
             }
             Message::Search(q) => {
                 (self.search_q, self.search_seq) = (q, self.search_seq + 1);
-                let (t, n) = (self.search_q.trim(), self.search_seq);
-                if t.is_empty() || self.cache.contains_key(&format!("search:{t}")) {
-                    return self.update(Message::SearchGo(n));
-                }
-                return later(0.25, Message::SearchGo(n));
+                return self.update(Message::SearchGo(self.search_seq));
             }
             Message::SearchGo(n) if n == self.search_seq => {
                 let q = self.search_q.trim();
+                if let Some((ix, hay)) = self.catalog.as_ref().zip(self.catalog_hay.as_ref())
+                    && !q.is_empty()
+                {
+                    let hits: AnyData = Arc::new(crate::api::find(ix, hay, q, 20));
+                    self.cache
+                        .insert(format!("search:{q}"), (Instant::now(), hits));
+                }
                 let r = format!("search{}{q}", if q.is_empty() { "" } else { ":" });
                 return match (r == self.route, self.route.starts_with("search")) {
                     (true, _) => self.request(&r, 0),
@@ -2332,7 +2661,7 @@ impl App {
                 self.login.busy = false;
                 (self.session, self.cfg.active) = (Some(Session::new(srv)), Some(id));
                 let (t, n) = (self.persist(), self.nav("home".into()));
-                return Task::batch([q, h, t, n, self.restore()]);
+                return Task::batch([q, h, t, n, self.restore(), self.sync_index()]);
             }
             Message::DropServer(id) => {
                 self.cfg.servers.retain(|s| s.id != id);
@@ -2387,7 +2716,22 @@ impl App {
                 self.aim = Some(r.clone());
                 let top = r.strip_prefix("artist:").map(|id| format!("top:{id}"));
                 let keys = std::iter::once(self.key_of(&r)).chain(top);
-                return Task::batch(keys.map(|k| self.request(&k, 0)));
+                let mut tasks: Vec<_> = keys.map(|k| self.request(&k, 0)).collect();
+                let cover = match r.split_once(':') {
+                    Some(("album", id)) => self.find_album(id).map(|a| a.cover),
+                    Some(("playlist", id)) => self.playlist(id).map(|p| p.cover.clone()),
+                    _ => None,
+                };
+                let size = self.bucket(crate::pages::art_px(self));
+                tasks.push(self.want_covers(cover.map(|c| (c, size))));
+                let banner = r
+                    .strip_prefix("artist:")
+                    .filter(|_| self.cfg.settings.banners);
+                let banner = banner.and_then(|_| self.data::<(Artist, Vec<Album>)>(&r));
+                if let Some(b) = banner.map(|(a, _)| a.banner_key()) {
+                    tasks.push(self.request(&b, 0));
+                }
+                return Task::batch(tasks);
             }
             Message::PlayCtx(route, mode) => {
                 self.menu = None;
@@ -2684,7 +3028,7 @@ impl App {
         self.history.clear();
         let to = shot_key(self.shot.as_deref()).unwrap_or_else(|| "home".into());
         let (t, n) = (self.persist(), self.nav(to));
-        Task::batch([h, t, n, self.restore(), kept])
+        Task::batch([h, t, n, self.restore(), self.sync_index(), kept])
     }
 
     fn expired(&mut self, key: String) -> Task<Message> {
@@ -3497,13 +3841,15 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 Arc::new([r.0, a.0, f.0, x.0]) as AnyData
             }
             "lib" => {
-                let (playlists, (artists, albums, songs)) =
+                let (playlists, (artists, albums, mut songs)) =
                     tokio::try_join!(s.playlists(), s.starred())?;
+                songs.sort_by(|a, b| b.starred_at.cmp(&a.starred_at));
                 Arc::new(Lib {
                     playlists,
                     artists,
                     albums,
                     liked: songs.len(),
+                    songs,
                 })
             }
             "album" => Arc::new(s.album(arg).await?),

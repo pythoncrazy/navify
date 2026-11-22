@@ -47,7 +47,7 @@ pub struct Rg {
     pub album_peak: Option<f32>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Genre {
     #[serde(alias = "value")]
@@ -107,7 +107,10 @@ pub struct Album {
     pub compilation: bool,
     pub release_types: Vec<String>,
     pub release_date: String,
+    #[serde(alias = "createdAt")]
+    pub created: String,
     pub genre: String,
+    pub genres: Vec<Genre>,
     pub labels: Vec<String>,
     pub artists: Vec<Artist>,
     pub album_artists: Vec<Artist>,
@@ -161,6 +164,9 @@ pub struct Playlist {
     pub song_count: u32,
     pub duration: f32,
     pub cover: String,
+    #[serde(alias = "updatedAt")]
+    pub changed: String,
+    pub rules: Value,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -257,6 +263,18 @@ fn normalize(v: &mut Value) {
             {
                 m.extend([("title".into(), n), ("cover".into(), "".into())]);
             }
+            let album = m
+                .get("albumId")
+                .and_then(Value::as_str)
+                .is_some_and(|a| !a.is_empty());
+            let nd = m.get("coverArt").and_then(Value::as_str);
+            let nd = nd.is_none_or(|c| c.starts_with("mf-"));
+            if album && nd && m.get("isDir") != Some(&true.into()) {
+                if m.insert("hasCoverArt".into(), false.into()) != Some(false.into()) {
+                    m.remove("imageHash");
+                }
+                m.remove("coverArt");
+            }
             let has = m.get("hasCoverArt") != Some(&false.into());
             let id = m.get(["albumId", "id"][usize::from(has)]).cloned();
             let (id, hash) = (id.filter(Value::is_string), m.remove("imageHash"));
@@ -304,6 +322,83 @@ impl<'de, T: Data> serde::de::Visitor<'de> for Rows<T> {
         }
         Ok(rows)
     }
+}
+
+pub type Hay = [Vec<(String, String)>; 3];
+
+pub fn fold(s: &str) -> String {
+    const FOLD: [(&str, char); 14] = [
+        ("àáâãäåāăą", 'a'),
+        ("çćč", 'c'),
+        ("ď", 'd'),
+        ("èéêëēėęě", 'e'),
+        ("ìíîïīį", 'i'),
+        ("ł", 'l'),
+        ("ñńň", 'n'),
+        ("òóôõöøōő", 'o'),
+        ("ř", 'r'),
+        ("śšş", 's'),
+        ("ť", 't'),
+        ("ùúûüūůűų", 'u'),
+        ("ýÿ", 'y'),
+        ("žźż", 'z'),
+    ];
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars().flat_map(char::to_lowercase) {
+        match FOLD.iter().find(|f| f.0.contains(c)).map_or(c, |f| f.1) {
+            c if c.is_alphanumeric() => out.push(c),
+            c if c.is_whitespace() && !out.is_empty() && !out.ends_with(' ') => out.push(' '),
+            _ => {}
+        }
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
+pub fn hay((artists, albums, songs): &Trio) -> Hay {
+    let pair = |name: &str, more: [&str; 2]| {
+        (fold(name), fold(&format!("{name} {} {}", more[0], more[1])))
+    };
+    [
+        artists.iter().map(|a| pair(&a.name, ["", ""])).collect(),
+        albums
+            .iter()
+            .map(|a| pair(&a.name, [&a.artist, ""]))
+            .collect(),
+        songs
+            .iter()
+            .map(|s| pair(&s.title, [&s.artist, &s.album]))
+            .collect(),
+    ]
+}
+
+pub fn find((artists, albums, songs): &Trio, hay: &Hay, q: &str, n: usize) -> Trio {
+    let q = fold(q);
+    let words: Vec<&str> = q.split(' ').filter(|w| !w.is_empty()).collect();
+    let rank = |(name, all): &(String, String)| {
+        let hit = !words.is_empty() && words.iter().all(|w| all.contains(w));
+        hit.then(|| [*name == q, name.starts_with(&q), name.contains(&q), true])
+            .and_then(|r| r.iter().position(|&b| b))
+    };
+    fn top<T: Clone>(
+        v: &[T],
+        h: &[(String, String)],
+        n: usize,
+        f: impl Fn(&(String, String), &T) -> Option<(usize, u32)>,
+    ) -> Vec<T> {
+        let mut hits: Vec<_> = v
+            .iter()
+            .zip(h)
+            .filter_map(|(x, h)| Some((f(h, x)?, x)))
+            .collect();
+        hits.sort_by_key(|((r, plays), _)| (*r, std::cmp::Reverse(*plays)));
+        hits.into_iter().take(n).map(|h| h.1.clone()).collect()
+    }
+    (
+        top(artists, &hay[0], n, |h, a| Some((rank(h)?, a.album_count))),
+        top(albums, &hay[1], n, |h, a| Some((rank(h)?, a.play_count))),
+        top(songs, &hay[2], n, |h, s| Some((rank(h)?, s.play_count))),
+    )
 }
 
 pub fn parse<T: Data>(mut v: Value) -> Result<T> {
@@ -594,8 +689,6 @@ impl Session {
         {
             return Ok(b.into());
         }
-        static NET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-        let _net = NET.acquire().await.expect("the cover semaphore is open");
         let id = cover_id(id);
         let url = match id.starts_with("https://") {
             true => id.to_string(),
@@ -760,6 +853,37 @@ impl Session {
     pub async fn search(&self, query: &str, n: usize) -> Result<Trio> {
         let q = json!({"query": query, "artistCount": n, "albumCount": n, "songCount": n});
         self.trio("search3", q, "/searchResult3").await
+    }
+
+    pub async fn scanned(&self) -> Result<Option<String>> {
+        let v: Value = self.get("getScanStatus", (), "/scanStatus").await?;
+        Ok((v["scanning"] != true).then(|| v["lastScan"].as_str().unwrap_or_default().into()))
+    }
+
+    pub async fn everything(&self) -> Result<Trio> {
+        let all = async |method: &str, ptr: &str, q: fn(usize) -> Value| {
+            let mut all = Vec::new();
+            loop {
+                let page: Vec<Value> = self.get(method, q(all.len()), ptr).await?;
+                if page.is_empty() {
+                    return Ok::<_, anyhow::Error>(Value::Array(all));
+                }
+                all.extend(page);
+            }
+        };
+        let albums = all(
+            "getAlbumList2",
+            "/albumList2/album",
+            |n| json!({"type": "alphabeticalByName", "size": 500, "offset": n}),
+        );
+        let songs = all(
+            "search3",
+            "/searchResult3/song",
+            |n| json!({"query": "", "songCount": 5000, "songOffset": n, "artistCount": 0, "albumCount": 0}),
+        );
+        let artists = self.index("getArtists", "/artists/index");
+        let (artists, albums, songs) = tokio::try_join!(artists, albums, songs)?;
+        Ok((artists, parse(albums)?, parse(songs)?))
     }
 
     pub async fn starred(&self) -> Result<Trio> {

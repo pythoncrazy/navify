@@ -76,6 +76,10 @@ async fn read_suite(s: &Session) -> Result<()> {
     s.genres().await?;
     s.radios().await?;
     s.lyrics(&songs[0].id).await?;
+    let all = s.everything().await?;
+    assert!(!all.0.is_empty() && all.1.len() >= page.len() && !all.2.is_empty());
+    let found = api::find(&all, &api::hay(&all), &songs[0].title.to_uppercase(), 50).2;
+    assert!(found.iter().any(|x| x.id == songs[0].id));
     s.similar_songs(&songs[0].id, 3).await?;
     let cover = s.cover(&album.id, 128).await?;
     assert!(image::load_from_memory(&cover).is_ok() && s.cover_file(&album.id, 128).exists());
@@ -91,18 +95,20 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
     });
     let subsonic = json!({
         "id": "n1", "title": "T", "albumId": "al1", "track": 3, "discNumber": 2,
-        "starred": "2026-01-01T00:00:00Z", "userRating": 4, "coverArt": "n1", "year": null,
+        "starred": "2026-01-01T00:00:00Z", "userRating": 4, "coverArt": "mf-n1_h", "year": null,
         "artists": [{"id": "ar1", "name": "Ar"}],
         "replayGain": {"trackGain": -7.5, "albumPeak": 1.2}
     });
     for v in [native, subsonic] {
         let s: Song = api::parse(v)?;
         let names = (&*s.id, &*s.cover, &*s.album_id, &*s.artists[0].name);
-        assert_eq!(names, ("n1", "n1", "al1", "Ar"));
+        assert_eq!(names, ("n1", "al1", "al1", "Ar"));
         assert_eq!(s.artists[0].cover, "o:ar1");
         assert_eq!((s.track, s.disc, s.starred, s.user_rating), (3, 2, true, 4));
         assert_eq!((s.rg.track_gain, s.rg.album_peak), (Some(-7.5), Some(1.2)));
     }
+    let other = json!({"id": "s", "albumId": "9", "coverArt": "9"});
+    assert_eq!(api::parse::<Song>(other)?.cover, "9");
     let bare = json!({"id": "s", "albumId": "al1", "hasCoverArt": false, "imageHash": "h"});
     assert_eq!(api::parse::<Song>(bare)?.cover, "al1#h");
     let sub = api::parse::<serde_json::Value>(json!({"id": "s", "coverArt": "al-al1_h"}))?;
@@ -140,6 +146,10 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
         assert_eq!(a.release_date, day);
         assert_eq!(navify::pages::date(&a.release_date, true), text);
     }
+    assert_eq!(
+        api::fold("  Sigur Rós — AC/DC  Beyoncé "),
+        "sigur ros acdc beyonce"
+    );
     Ok(())
 }
 
