@@ -1783,6 +1783,37 @@ impl App {
                 v.sort_by_cached_key(|x| low(&x.name));
                 page(v)
             }
+            ("artist" | "top" | "appears", id) => {
+                let on = |s: &&Song| s.artist_id == id || s.artists.iter().any(|a| a.id == id);
+                let own =
+                    |a: &Album| a.artist_id == id || a.album_artists.iter().any(|x| x.id == id);
+                match kind {
+                    "artist" => {
+                        let mut a = artists.iter().find(|a| a.id == id)?.clone();
+                        let mut v: Vec<Album> = albums.iter().filter(|a| own(a)).cloned().collect();
+                        v.sort_by_key(|a| Reverse(a.year));
+                        a.song_count = v.iter().map(|x| x.song_count).sum();
+                        Arc::new((a, v))
+                    }
+                    "top" => {
+                        let mut v: Vec<Song> = songs.iter().filter(on).cloned().collect();
+                        v.sort_by_key(|s| Reverse(s.play_count));
+                        v.truncate(10);
+                        Arc::new(v)
+                    }
+                    _ => {
+                        let ids: HashSet<&str> =
+                            songs.iter().filter(on).map(|s| &*s.album_id).collect();
+                        let mut v: Vec<Album> = albums
+                            .iter()
+                            .filter(|a| ids.contains(&*a.id) && !own(a))
+                            .cloned()
+                            .collect();
+                        v.sort_by_key(|a| Reverse(a.year));
+                        Arc::new(v)
+                    }
+                }
+            }
             _ => return None,
         })
     }
