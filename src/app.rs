@@ -425,6 +425,7 @@ pub struct App {
     catalog_covers: HashMap<String, String>,
     catalog_scan: String,
     catalog_at: Option<Instant>,
+    asked: HashMap<String, String>,
     heard_stop: Option<iced::task::Handle>,
     warmed: Option<String>,
     warm_at: u64,
@@ -1007,6 +1008,12 @@ impl App {
             self.stale.remove(key);
             self.cache.insert(key.into(), (Instant::now(), d));
             return Task::none();
+        }
+        if let Some(p) = key
+            .strip_prefix("playlist:")
+            .and_then(|id| self.playlist(id))
+        {
+            self.asked.insert(key.into(), p.changed.clone());
         }
         match self.session.clone() {
             Some(s) if self.pending.insert(format!("{key}#{offset}")) => {
@@ -2180,7 +2187,7 @@ impl App {
                     return Task::none();
                 }
                 if let Some((p, songs)) = v.downcast_ref::<(Playlist, Vec<Song>)>()
-                    && let Some(changed) = self.playlist(&p.id).map(|x| x.changed.clone())
+                    && let Some(changed) = self.asked.remove(&key)
                 {
                     let mut l = self.data::<Lists>("lists").cloned().unwrap_or_default();
                     l.insert(
@@ -2723,14 +2730,20 @@ impl App {
                     _ => None,
                 };
                 let size = self.bucket(crate::pages::art_px(self));
-                tasks.push(self.want_covers(cover.map(|c| (c, size))));
                 let banner = r
                     .strip_prefix("artist:")
                     .filter(|_| self.cfg.settings.banners);
                 let banner = banner.and_then(|_| self.data::<(Artist, Vec<Album>)>(&r));
-                if let Some(b) = banner.map(|(a, _)| a.banner_key()) {
-                    tasks.push(self.request(&b, 0));
-                }
+                let banner = banner.map(|(a, _)| a.banner_key());
+                let rest = move |a: &mut App| {
+                    if a.aim.as_ref() != Some(&r) {
+                        return Task::none();
+                    }
+                    let b = banner.as_ref().map(|b| a.request(b, 0));
+                    let c = a.want_covers(cover.clone().map(|c| (c, size)));
+                    Task::batch(b.into_iter().chain([c]))
+                };
+                tasks.push(later(0.25, task(rest)));
                 return Task::batch(tasks);
             }
             Message::PlayCtx(route, mode) => {
