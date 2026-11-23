@@ -1086,7 +1086,11 @@ impl Session {
             Ok::<_, anyhow::Error>((n, at.into()))
         };
         let (a, b, c) = tokio::try_join!(one("song"), one("album"), one("artist"))?;
-        Ok(vec![a, b, c])
+        let day = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_secs()
+            / 86400;
+        Ok(vec![a, b, c, (day as usize, "".into())])
     }
 
     pub async fn genres(&self) -> Result<Vec<Genre>> {

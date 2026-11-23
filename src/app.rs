@@ -2493,6 +2493,7 @@ impl App {
             }
             Message::Rate(id, n) => {
                 let old = self.ratings.insert(id.clone(), n);
+                self.edit::<Lib>("lib", |l| l.seen.clear());
                 self.menu = None;
                 let back = id.clone();
                 let rate = |s: Session| async move { s.rate(&id, n).await };
