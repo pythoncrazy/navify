@@ -60,7 +60,7 @@ pub struct Artist {
     pub id: Arc<str>,
     pub name: Arc<str>,
     #[serde(deserialize_with = "round")]
-    pub cover: String,
+    pub cover: Arc<str>,
     pub album_count: u32,
     pub song_count: u32,
     pub play_count: u32,
@@ -75,12 +75,12 @@ fn tight<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Artist>, D::Error
     Ok(v)
 }
 
-fn round<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+fn round<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<str>, D::Error> {
     let s = String::deserialize(d)?;
     Ok(if s.is_empty() || s.starts_with("o:") {
-        s
+        s.into()
     } else {
-        format!("o:{s}")
+        format!("o:{s}").into()
     })
 }
 
@@ -108,7 +108,7 @@ pub struct Album {
     pub duration: f32,
     pub play_count: u32,
     pub starred: bool,
-    pub cover: String,
+    pub cover: Arc<str>,
     #[serde(alias = "isCompilation")]
     pub compilation: bool,
     pub release_types: Vec<String>,
@@ -151,7 +151,7 @@ pub struct Song {
     pub starred_at: String,
     #[serde(alias = "createdAt")]
     pub created: String,
-    pub cover: String,
+    pub cover: Arc<str>,
     pub is_dir: bool,
     #[serde(deserialize_with = "tight")]
     pub artists: Vec<Artist>,
@@ -172,7 +172,7 @@ pub struct Playlist {
     pub public: bool,
     pub song_count: u32,
     pub duration: f32,
-    pub cover: String,
+    pub cover: Arc<str>,
     #[serde(alias = "updatedAt")]
     pub changed: String,
     pub rules: Value,
@@ -403,18 +403,25 @@ pub fn share(t: &mut Trio) {
             &mut s.artist_id,
             &mut s.genre,
             &mut s.suffix,
+            &mut s.cover,
         ]
         .into_iter()
         .for_each(&mut one);
-        s.artists
-            .iter_mut()
-            .for_each(|a| [&mut a.id, &mut a.name].into_iter().for_each(&mut one));
+        let who = s.artists.iter_mut();
+        who.for_each(|a| {
+            [&mut a.id, &mut a.name, &mut a.cover]
+                .into_iter()
+                .for_each(&mut one)
+        });
     }
+    t.1.iter_mut().for_each(|a| one(&mut a.cover));
     let albums =
         t.1.iter_mut()
             .flat_map(|a| a.artists.iter_mut().chain(&mut a.album_artists));
     for a in albums.chain(&mut t.0) {
-        [&mut a.id, &mut a.name].into_iter().for_each(&mut one);
+        [&mut a.id, &mut a.name, &mut a.cover]
+            .into_iter()
+            .for_each(&mut one);
     }
 }
 

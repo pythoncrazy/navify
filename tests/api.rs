@@ -103,18 +103,18 @@ fn song_and_album_parse_from_native_and_subsonic_json() -> Result<()> {
         let s: Song = api::parse(v)?;
         let names = (&*s.id, &*s.cover, &*s.album_id, &*s.artists[0].name);
         assert_eq!(names, ("n1", "al1", "al1", "Ar"));
-        assert_eq!(s.artists[0].cover, "o:ar1");
+        assert_eq!(&*s.artists[0].cover, "o:ar1");
         assert_eq!((s.track, s.disc, s.starred, s.user_rating), (3, 2, true, 4));
         assert_eq!((s.rg.track_gain, s.rg.album_peak), (Some(-7.5), Some(1.2)));
     }
     let other = json!({"id": "s", "albumId": "9", "coverArt": "9"});
-    assert_eq!(api::parse::<Song>(other)?.cover, "9");
+    assert_eq!(&*api::parse::<Song>(other)?.cover, "9");
     let bare = json!({"id": "s", "albumId": "al1", "hasCoverArt": false, "imageHash": "h"});
-    assert_eq!(api::parse::<Song>(bare)?.cover, "al1#h");
+    assert_eq!(&*api::parse::<Song>(bare)?.cover, "al1#h");
     let sub = api::parse::<serde_json::Value>(json!({"id": "s", "coverArt": "al-al1_h"}))?;
-    assert_eq!(api::parse::<Song>(sub)?.cover, "al1#h");
+    assert_eq!(&*api::parse::<Song>(sub)?.cover, "al1#h");
     let disc = json!({"id": "s", "coverArt": "dc-al1:2"});
-    assert_eq!(api::parse::<Song>(disc)?.cover, "al1");
+    assert_eq!(&*api::parse::<Song>(disc)?.cover, "al1");
     let fm = json!({"id": "r1", "name": "FM", "streamUrl": "http://x/s", "coverArt": ""});
     let fm = api::parse::<Song>(fm)?;
     assert_eq!((&*fm.title, &*fm.url, &*fm.cover), ("FM", "http://x/s", ""));
