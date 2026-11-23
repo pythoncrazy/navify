@@ -676,11 +676,10 @@ impl Session {
             .into_iter()
             .chain(ptr.split('/').skip(1))
             .collect();
-        let mut all = Vec::new();
-        loop {
+        let page = async |off: usize| -> Result<Vec<T>> {
             let res = self
                 .http
-                .get(self.url(method, &q(all.len())))
+                .get(self.url(method, &q(off)))
                 .send()
                 .await
                 .map_err(net_err)?;
@@ -695,10 +694,14 @@ impl Session {
             );
             let page = page.and_then(|p| de.end().map(|()| p));
             failed(&mut Value::Object(meta))?;
-            let page: Vec<T> =
-                page.map_err(|e| anyhow!("The server returned an unexpected response: {e}"))?;
-            let done = page.len() < n;
-            all.extend(page);
+            page.map_err(|e| anyhow!("The server returned an unexpected response: {e}"))
+        };
+        let mut all = Vec::new();
+        loop {
+            let next = (0..4).map(|i| page(all.len() + i * n));
+            let next = iced::futures::future::try_join_all(next).await?;
+            let done = next.iter().any(|p| p.len() < n);
+            all.extend(next.into_iter().flatten());
             if done {
                 all.shrink_to_fit();
                 return Ok(all);
