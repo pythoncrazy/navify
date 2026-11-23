@@ -705,17 +705,18 @@ impl Session {
         &self,
         method: &str,
         ptr: &str,
-        n: usize,
-        q: impl Fn(usize) -> Value,
+        mut n: usize,
+        max: usize,
+        q: impl Fn(usize, usize) -> Value,
     ) -> Result<Vec<T>> {
         let path: Vec<&str> = ["subsonic-response"]
             .into_iter()
             .chain(ptr.split('/').skip(1))
             .collect();
-        let page = async |off: usize| -> Result<Vec<T>> {
+        let page = async |off: usize, n: usize| -> Result<Vec<T>> {
             let res = self
                 .http
-                .get(self.url(method, &q(off)))
+                .get(self.url(method, &q(off, n)))
                 .send()
                 .await
                 .map_err(net_err)?;
@@ -734,7 +735,7 @@ impl Session {
         };
         let mut all = Vec::new();
         loop {
-            let next = (0..4).map(|i| page(all.len() + i * n));
+            let next = (0..4).map(|i| page(all.len() + i * n, n));
             let next = iced::futures::future::try_join_all(next).await?;
             let done = next.iter().any(|p| p.len() < n);
             all.extend(next.into_iter().flatten());
@@ -742,6 +743,7 @@ impl Session {
                 all.shrink_to_fit();
                 return Ok(all);
             }
+            n = max.min(n * 2);
         }
     }
 
@@ -1002,10 +1004,11 @@ impl Session {
             "getAlbumList2",
             "/albumList2/album",
             500,
-            |n| json!({"type": "alphabeticalByName", "size": 500, "offset": n}),
+            500,
+            |o, n| json!({"type": "alphabeticalByName", "size": n, "offset": o}),
         );
-        let songs = self.pages("search3", "/searchResult3/song", 5000, |n| {
-            json!({"query": "", "songCount": 5000, "songOffset": n, "artistCount": 0, "albumCount": 0})
+        let songs = self.pages("search3", "/searchResult3/song", 1250, 5000, |o, n| {
+            json!({"query": "", "songCount": n, "songOffset": o, "artistCount": 0, "albumCount": 0})
         });
         let artists = self.index("getArtists", "/artists/index");
         let mut t = tokio::try_join!(artists, albums, songs)?;
