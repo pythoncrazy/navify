@@ -18,7 +18,6 @@ pub struct Surface {
         Box<dyn compositor::Display>,
         Box<dyn compositor::Window>,
     >,
-    clip_mask: tiny_skia::Mask,
     layer_stack: VecDeque<Vec<Layer>>,
     background_color: Color,
     max_age: u8,
@@ -69,7 +68,6 @@ impl crate::graphics::Compositor for Compositor {
 
         let mut surface = Surface {
             window,
-            clip_mask: tiny_skia::Mask::new(1, 1).expect("Create clip mask"),
             layer_stack: VecDeque::new(),
             background_color: Color::BLACK,
             max_age: 0,
@@ -96,8 +94,6 @@ impl crate::graphics::Compositor for Compositor {
             )
             .expect("Resize surface");
 
-        surface.clip_mask =
-            tiny_skia::Mask::new(width, height).expect("Create clip mask");
         surface.layer_stack.clear();
     }
 
@@ -208,7 +204,8 @@ pub fn present(
 
         renderer.draw(
             &mut pixels,
-            &mut surface.clip_mask,
+            &mut tiny_skia::Mask::new(physical_size.width, physical_size.height)
+                .expect("Create clip mask"),
             viewport,
             &damage,
             background_color,
