@@ -185,7 +185,6 @@ impl Renderer {
                                 Transformation::scale(scale_factor)
                                     * group.transformation(),
                                 pixels,
-                                clip_mask,
                                 layer_bounds,
                             );
                         }

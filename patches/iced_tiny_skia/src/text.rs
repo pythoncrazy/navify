@@ -42,7 +42,7 @@ impl Pipeline {
         position: Point,
         color: Color,
         pixels: &mut tiny_skia::PixmapMut<'_>,
-        clip_mask: Option<&tiny_skia::Mask>,
+        clip_mask: Option<[i32; 4]>,
         transformation: Transformation,
     ) {
         let Some(paragraph) = paragraph.upgrade() else {
@@ -69,7 +69,7 @@ impl Pipeline {
         position: Point,
         color: Color,
         pixels: &mut tiny_skia::PixmapMut<'_>,
-        clip_mask: Option<&tiny_skia::Mask>,
+        clip_mask: Option<[i32; 4]>,
         transformation: Transformation,
     ) {
         let Some(editor) = editor.upgrade() else {
@@ -102,7 +102,7 @@ impl Pipeline {
         align_y: alignment::Vertical,
         shaping: Shaping,
         pixels: &mut tiny_skia::PixmapMut<'_>,
-        clip_mask: Option<&tiny_skia::Mask>,
+        clip_mask: Option<[i32; 4]>,
         transformation: Transformation,
     ) {
         let line_height = f32::from(line_height);
@@ -157,7 +157,7 @@ impl Pipeline {
         position: Point,
         color: Color,
         pixels: &mut tiny_skia::PixmapMut<'_>,
-        clip_mask: Option<&tiny_skia::Mask>,
+        clip_mask: Option<[i32; 4]>,
         transformation: Transformation,
     ) {
         let mut font_system = font_system().write().expect("Write font system");
@@ -187,7 +187,7 @@ fn draw(
     position: Point,
     color: Color,
     pixels: &mut tiny_skia::PixmapMut<'_>,
-    clip_mask: Option<&tiny_skia::Mask>,
+    clip_mask: Option<[i32; 4]>,
     transformation: Transformation,
 ) {
     let position = position * transformation;
@@ -225,22 +225,7 @@ fn draw(
                     + (run.line_y * transformation.scale_factor()).round()
                         as i32;
 
-                if clip_mask.is_none() {
-                    blit(pixels, x, y, pixmap, opacity);
-                    continue;
-                }
-
-                pixels.draw_pixmap(
-                    x,
-                    y,
-                    pixmap,
-                    &tiny_skia::PixmapPaint {
-                        opacity,
-                        ..tiny_skia::PixmapPaint::default()
-                    },
-                    tiny_skia::Transform::identity(),
-                    clip_mask,
-                );
+                blit(pixels, x, y, pixmap, opacity, clip_mask);
             }
         }
     }
@@ -375,11 +360,13 @@ pub(crate) fn blit(
     y: i32,
     glyph: tiny_skia::PixmapRef<'_>,
     opacity: f32,
+    clip: Option<[i32; 4]>,
 ) {
     let (w, h) = (pixels.width() as i32, pixels.height() as i32);
+    let [cx0, cy0, cx1, cy1] = clip.unwrap_or([0, 0, w, h]);
     let (gw, gh) = (glyph.width() as i32, glyph.height() as i32);
-    let (x0, x1) = (x.max(0), (x + gw).min(w));
-    let (y0, y1) = (y.max(0), (y + gh).min(h));
+    let (x0, x1) = (x.max(0).max(cx0), (x + gw).min(w).min(cx1));
+    let (y0, y1) = (y.max(0).max(cy0), (y + gh).min(h).min(cy1));
     if x0 >= x1 || y0 >= y1 {
         return;
     }

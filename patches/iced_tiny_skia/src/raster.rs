@@ -46,7 +46,7 @@ impl Pipeline {
         opacity: f32,
         pixels: &mut tiny_skia::PixmapMut<'_>,
         transform: tiny_skia::Transform,
-        clip_mask: Option<&tiny_skia::Mask>,
+        clip: Option<(&mut tiny_skia::Mask, Rectangle)>,
     ) {
         let mut cache = self.cache.borrow_mut();
 
@@ -75,9 +75,11 @@ impl Pipeline {
         {
             let (x, y) = (x as i32, y as i32);
 
-            if clip_mask.is_none() && opacity >= 1.0 {
-                return crate::text::blit(pixels, x, y, scaled, 1.0);
+            if opacity >= 1.0 {
+                let area = clip.map(|c| crate::engine::area(c.1));
+                return crate::text::blit(pixels, x, y, scaled, 1.0, area);
             }
+            let clip_mask = clip.map(|(m, b)| &*crate::engine::clip(m, b));
 
             return pixels.draw_pixmap(
                 x,
@@ -93,6 +95,7 @@ impl Pipeline {
         }
 
         entry.keep = true;
+        let clip_mask = clip.map(|(m, b)| &*crate::engine::clip(m, b));
 
         let Some(image) = entry.image(handle) else {
             return;

@@ -42,8 +42,7 @@ impl Engine {
             return;
         }
 
-        let clip_mask = (!physical_bounds.is_within(&clip_bounds))
-            .then(|| clip(clip_mask, clip_bounds));
+        let crosses = !physical_bounds.is_within(&clip_bounds);
 
         let transform = into_transform(transformation);
 
@@ -63,6 +62,13 @@ impl Engine {
         }
 
         let path = || rounded_rectangle(quad.bounds, fill_border_radius);
+
+        // A flat quad with one color and no border is cut to the clip bounds,
+        // so it needs no clip mask.
+        let flat = fill_border_radius == [0.0; 4];
+        let solid = matches!(background, Background::Color(_)) && flat;
+        let clip_mask = (crosses && (!solid || border_width > 0.0))
+            .then(|| clip(clip_mask, clip_bounds));
 
         let shadow = quad.shadow;
 
@@ -144,15 +150,15 @@ impl Engine {
             }
         }
 
-        let flat = fill_border_radius == [0.0; 4];
+        let cut = match crosses {
+            true => physical_bounds.intersection(&snap(clip_bounds)),
+            false => Some(physical_bounds),
+        };
         if matches!(background, Background::Color(color) if color.a == 0.0) {
         } else if let (Background::Color(color), true) = (background, flat)
-            && let Some(rect) = tiny_skia::Rect::from_xywh(
-                physical_bounds.x,
-                physical_bounds.y,
-                physical_bounds.width,
-                physical_bounds.height,
-            )
+            && let Some(cut) = cut
+            && let Some(rect) =
+                tiny_skia::Rect::from_xywh(cut.x, cut.y, cut.width, cut.height)
         {
             pixels.fill_rect(
                 rect,
@@ -344,7 +350,6 @@ impl Engine {
         text: &Text,
         transformation: Transformation,
         pixels: &mut tiny_skia::PixmapMut<'_>,
-        clip_mask: &mut tiny_skia::Mask,
         clip_bounds: Rectangle,
     ) {
         match text {
@@ -370,13 +375,8 @@ impl Engine {
                     return;
                 }
 
-                let clip_mask = match physical_bounds.is_within(&clip_bounds) {
-                    true => None,
-                    false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
-                        Some(clip_mask as &_)
-                    }
-                };
+                let clip_mask = (!physical_bounds.is_within(&clip_bounds))
+                    .then(|| area(clip_bounds));
 
                 self.text_pipeline.draw_paragraph(
                     paragraph,
@@ -408,13 +408,8 @@ impl Engine {
                     return;
                 }
 
-                let clip_mask = match physical_bounds.is_within(&clip_bounds) {
-                    true => None,
-                    false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
-                        Some(clip_mask as &_)
-                    }
-                };
+                let clip_mask = (!physical_bounds.is_within(&clip_bounds))
+                    .then(|| area(clip_bounds));
 
                 self.text_pipeline.draw_editor(
                     editor,
@@ -443,13 +438,8 @@ impl Engine {
                     return;
                 }
 
-                let clip_mask = match physical_bounds.is_within(&clip_bounds) {
-                    true => None,
-                    false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
-                        Some(clip_mask as &_)
-                    }
-                };
+                let clip_mask = (!physical_bounds.is_within(&clip_bounds))
+                    .then(|| area(clip_bounds));
 
                 self.text_pipeline.draw_cached(
                     content,
@@ -490,7 +480,7 @@ impl Engine {
                 }
 
                 let clip_mask = (!physical_bounds.is_within(&clip_bounds))
-                    .then(|| clip(clip_mask, clip_bounds));
+                    .then(|| area(clip_bounds));
 
                 self.text_pipeline.draw_raw(
                     &buffer,
@@ -592,7 +582,7 @@ impl Engine {
                 }
 
                 let clip_mask = (!physical_bounds.is_within(&_clip_bounds))
-                    .then(|| clip(_clip_mask, _clip_bounds));
+                    .then_some((_clip_mask, _clip_bounds));
 
                 let center = physical_bounds.center();
                 let radians = f32::from(image.rotation);
@@ -859,7 +849,18 @@ thread_local! {
     pub static MASK: std::cell::Cell<Option<Rectangle>> = const { std::cell::Cell::new(None) };
 }
 
-fn clip(
+// The pixels whose centers are inside the bounds, as the clip mask has them.
+pub(crate) fn snap(bounds: Rectangle) -> Rectangle {
+    let [x0, y0, x1, y1] = area(bounds).map(|v| v as f32);
+    Rectangle::new(crate::core::Point::new(x0, y0), Size::new(x1 - x0, y1 - y0))
+}
+
+pub(crate) fn area(bounds: Rectangle) -> [i32; 4] {
+    let (x1, y1) = (bounds.x + bounds.width, bounds.y + bounds.height);
+    [bounds.x, bounds.y, x1, y1].map(|v| v.round() as i32)
+}
+
+pub(crate) fn clip(
     clip_mask: &mut tiny_skia::Mask,
     bounds: Rectangle,
 ) -> &tiny_skia::Mask {
@@ -867,11 +868,26 @@ fn clip(
     clip_mask
 }
 
+// The mask is new and clear at the start of each frame, so a window at rest
+// keeps no mask. A change of bounds clears only the rows and columns of the
+// last fill, so a frame touches only the pages under its clip bounds.
 pub fn adjust_clip_mask(clip_mask: &mut tiny_skia::Mask, bounds: Rectangle) {
-    if MASK.replace(Some(bounds)) == Some(bounds) {
+    let old = MASK.replace(Some(bounds));
+    if old == Some(bounds) {
         return;
     }
-    clip_mask.clear();
+    if let Some(old) = old {
+        let (w, h) = (clip_mask.width() as usize, clip_mask.height() as usize);
+        let span = |at: f32, size: f32, max: usize| {
+            let from = (at.floor().max(0.0) as usize).min(max);
+            (from, ((at + size).ceil().max(0.0) as usize + 1).min(max))
+        };
+        let ((x0, x1), (y0, y1)) = (span(old.x, old.width, w), span(old.y, old.height, h));
+        let data = clip_mask.data_mut();
+        for y in y0..y1 {
+            data[y * w + x0..y * w + x1].fill(0);
+        }
+    }
 
     let path = {
         let mut builder = tiny_skia::PathBuilder::new();
