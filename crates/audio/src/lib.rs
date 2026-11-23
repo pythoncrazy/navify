@@ -267,7 +267,7 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
             let mut resp = match first.take() {
                 Some(r) => r,
                 None => {
-                    let from = loop {
+                    let (from, to) = loop {
                         {
                             let mut st = net.st();
                             let Some(len) = st.len else { return Ok(()) };
@@ -275,13 +275,13 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                                 (st.start, st.data) = (st.want, Vec::new());
                             }
                             if st.end() < len && st.end() < st.want + st.ahead / 2 {
-                                break st.end();
+                                break (st.end(), len.min(st.want + st.ahead) - 1);
                             }
                         }
                         net.2.notified().await;
                     };
                     let (t, r) = (Instant::now(), http.get(url.clone()));
-                    let r = r.header(RANGE, format!("bytes={from}-")).send().await?;
+                    let r = r.header(RANGE, format!("bytes={from}-{to}")).send().await?;
                     net.st().ttfb = t.elapsed().as_secs_f64();
                     let r = r.error_for_status()?;
                     if range(&r).map(|r| r.0) != Some(from) {
@@ -524,7 +524,8 @@ impl Source {
                     let r = get.send().await.and_then(Response::error_for_status);
                     return Ok::<_, Box<dyn Error>>(r.map_err(w)?);
                 }
-                let (get, tail) = (get.header(RANGE, "bytes=0-"), http.get(url.clone()));
+                let head = format!("bytes=0-{}", net.st().ahead - 1);
+                let (get, tail) = (get.header(RANGE, head), http.get(url.clone()));
                 let tail = tail.header(RANGE, format!("bytes=-{TAIL}"));
                 let (head, tail) = tokio::try_join!(get.send(), tail.send()).map_err(w)?;
                 let (head, tail) = (head.error_for_status(), tail.error_for_status());
