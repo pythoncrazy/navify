@@ -127,11 +127,11 @@ impl Pipeline {
     }
 }
 
-// Entries, copies, and full-size pixels that were not used in the last
-// `AGE` frames are dropped. A partial redraw thus keeps the covers that
-// are on screen but outside the damage area.
+// Entries and copies that were not used in the last `AGE` frames are
+// dropped. A partial redraw thus keeps the covers that are on screen but
+// outside the damage area. Full-size pixels are dropped after each frame,
+// because a window at rest draws no next frame.
 const AGE: u64 = 30;
-const PIXELS: u64 = 1;
 
 #[derive(Debug, Default)]
 struct Cache {
@@ -158,7 +158,6 @@ impl Cache {
                             pixels,
                             scaled: Vec::new(),
                             keep: false,
-                            used: frame,
                             frame,
                         }),
                     ));
@@ -193,7 +192,7 @@ impl Cache {
         for entry in self.entries.values_mut().filter_map(|e| e.1.as_mut()) {
             entry.scaled.retain(|s| s.1 + AGE > frame);
 
-            if !entry.keep && entry.used + PIXELS <= frame {
+            if !entry.keep {
                 entry.pixels = Vec::new();
             }
         }
@@ -232,7 +231,6 @@ struct Entry {
     pixels: Vec<u32>,
     scaled: Vec<(tiny_skia::Pixmap, u64)>,
     keep: bool,
-    used: u64,
     frame: u64,
 }
 
@@ -241,8 +239,6 @@ impl Entry {
         &mut self,
         handle: &raster::Handle,
     ) -> Option<tiny_skia::PixmapRef<'_>> {
-        self.used = self.frame;
-
         if self.pixels.is_empty() {
             let (width, height, pixels) = decode(handle).ok()?;
 

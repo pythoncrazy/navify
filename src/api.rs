@@ -1074,6 +1074,21 @@ impl Session {
         self.trio("getStarred2", ().into(), "/starred2").await
     }
 
+    pub async fn stars(&self) -> Result<Vec<(usize, Box<str>)>> {
+        let q = json!({"starred": true, "_sort": "starred_at", "_order": "DESC", "_start": 0, "_end": 1});
+        let q = &q;
+        let one = |path| async move {
+            let (rows, n) = self.nd::<Value>(path, q.clone()).await?;
+            let at = rows
+                .first()
+                .and_then(|r| r["starredAt"].as_str())
+                .unwrap_or_default();
+            Ok::<_, anyhow::Error>((n, at.into()))
+        };
+        let (a, b, c) = tokio::try_join!(one("song"), one("album"), one("artist"))?;
+        Ok(vec![a, b, c])
+    }
+
     pub async fn genres(&self) -> Result<Vec<Genre>> {
         self.get("getGenres", (), "/genres/genre").await
     }
