@@ -310,6 +310,60 @@ fn normalize(v: &mut Value) {
     }
 }
 
+fn failed(v: &mut Value) -> Result<()> {
+    let e = take(v, "error");
+    let msg = match e["code"].as_u64().unwrap_or_default() {
+        40 => "Wrong username or password.",
+        41 => "The server does not allow token authentication.",
+        50 => "You do not have permission for this action.",
+        _ => e["message"].as_str().unwrap_or("Unknown error."),
+    };
+    ensure!(
+        v["status"] != "failed",
+        "The server reported error {}: {msg}",
+        e["code"]
+    );
+    Ok(())
+}
+
+struct Walk<'a, T>(
+    &'a [&'a str],
+    &'a mut serde_json::Map<String, Value>,
+    PhantomData<T>,
+);
+
+impl<'de, T: Data> serde::de::DeserializeSeed<'de> for Walk<'_, T> {
+    type Value = Vec<T>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<Vec<T>, D::Error> {
+        match self.0.is_empty() {
+            true => d.deserialize_any(Rows(PhantomData)),
+            false => d.deserialize_any(self),
+        }
+    }
+}
+
+impl<'de, T: Data> serde::de::Visitor<'de> for Walk<'_, T> {
+    type Value = Vec<T>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("an object")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Vec<T>, A::Error> {
+        let mut rows = Vec::new();
+        while let Some(k) = map.next_key::<String>()? {
+            match k == self.0[0] {
+                true => {
+                    rows = map.next_value_seed(Walk(&self.0[1..], &mut *self.1, PhantomData))?
+                }
+                false => drop(self.1.insert(k, map.next_value()?)),
+            }
+        }
+        Ok(rows)
+    }
+}
+
 struct Rows<T>(PhantomData<T>);
 
 impl<'de, T: Data> serde::de::Visitor<'de> for Rows<T> {
@@ -607,16 +661,49 @@ impl Session {
         })?;
         let mut v = take(&mut v, "subsonic-response");
         ensure!(v.is_object(), http());
-        let e = take(&mut v, "error");
-        let msg = match e["code"].as_u64().unwrap_or_default() {
-            40 => "Wrong username or password.",
-            41 => "The server does not allow token authentication.",
-            50 => "You do not have permission for this action.",
-            _ => e["message"].as_str().unwrap_or("Unknown error."),
-        };
-        let failed = format!("The server reported error {}: {msg}", e["code"]);
-        ensure!(v["status"] != "failed", failed);
+        failed(&mut v)?;
         parse(v.pointer_mut(ptr).map(Value::take).unwrap_or_default())
+    }
+
+    async fn pages<T: Data>(
+        &self,
+        method: &str,
+        ptr: &str,
+        n: usize,
+        q: impl Fn(usize) -> Value,
+    ) -> Result<Vec<T>> {
+        let path: Vec<&str> = ["subsonic-response"]
+            .into_iter()
+            .chain(ptr.split('/').skip(1))
+            .collect();
+        let mut all = Vec::new();
+        loop {
+            let res = self
+                .http
+                .get(self.url(method, &q(all.len())))
+                .send()
+                .await
+                .map_err(net_err)?;
+            let status = res.status().as_u16();
+            ensure!(status < 300, "The server returned HTTP {status}.");
+            let body = res.bytes().await.map_err(net_err)?;
+            let mut meta = serde_json::Map::new();
+            let mut de = serde_json::Deserializer::from_slice(&body);
+            let page = serde::de::DeserializeSeed::deserialize(
+                Walk(&path, &mut meta, PhantomData),
+                &mut de,
+            );
+            let page = page.and_then(|p| de.end().map(|()| p));
+            failed(&mut Value::Object(meta))?;
+            let page: Vec<T> =
+                page.map_err(|e| anyhow!("The server returned an unexpected response: {e}"))?;
+            let done = page.len() < n;
+            all.extend(page);
+            if done {
+                all.shrink_to_fit();
+                return Ok(all);
+            }
+        }
     }
 
     async fn nd<T: Data>(&self, path: &str, q: impl Into<Value>) -> Result<(Vec<T>, usize)> {
@@ -872,29 +959,17 @@ impl Session {
     }
 
     pub async fn everything(&self) -> Result<Trio> {
-        let all = async |method: &str, ptr: &str, q: fn(usize) -> Value| {
-            let mut all = Vec::new();
-            loop {
-                let page: Vec<Value> = self.get(method, q(all.len()), ptr).await?;
-                if page.is_empty() {
-                    return Ok::<_, anyhow::Error>(Value::Array(all));
-                }
-                all.extend(page);
-            }
-        };
-        let albums = all(
+        let albums = self.pages(
             "getAlbumList2",
             "/albumList2/album",
+            500,
             |n| json!({"type": "alphabeticalByName", "size": 500, "offset": n}),
         );
-        let songs = all(
-            "search3",
-            "/searchResult3/song",
-            |n| json!({"query": "", "songCount": 5000, "songOffset": n, "artistCount": 0, "albumCount": 0}),
-        );
+        let songs = self.pages("search3", "/searchResult3/song", 5000, |n| {
+            json!({"query": "", "songCount": 5000, "songOffset": n, "artistCount": 0, "albumCount": 0})
+        });
         let artists = self.index("getArtists", "/artists/index");
-        let (artists, albums, songs) = tokio::try_join!(artists, albums, songs)?;
-        Ok((artists, parse(albums)?, parse(songs)?))
+        Ok(tokio::try_join!(artists, albums, songs)?)
     }
 
     pub async fn starred(&self) -> Result<Trio> {

@@ -1129,14 +1129,31 @@ impl App {
             else {
                 return Ok(None);
             };
-            let t = s.everything().await?;
-            let mut body =
-                serde_json::json!({"server": s.server.id, "v": 3, "scan": now, "data": t});
+            let t = Arc::new(s.everything().await?);
+            let data = t.clone();
+            let head = serde_json::json!({"server": s.server.id, "v": 3, "scan": now}).to_string();
             let save = move || -> anyhow::Result<()> {
                 use flate2::{Compression, write::DeflateEncoder};
-                prune(&mut body);
+                use std::io::Write;
+                fn list<T: serde::Serialize>(z: &mut impl Write, l: &[T]) -> anyhow::Result<()> {
+                    z.write_all(b"[")?;
+                    for (n, x) in l.iter().enumerate() {
+                        let mut v = serde_json::to_value(x)?;
+                        prune(&mut v);
+                        z.write_all(&b","[..usize::from(n > 0)])?;
+                        serde_json::to_writer(&mut *z, &v)?;
+                    }
+                    Ok(z.write_all(b"]")?)
+                }
                 let mut z = DeflateEncoder::new(Vec::new(), Compression::default());
-                std::io::Write::write_all(&mut z, &serde_json::to_vec(&body)?)?;
+                write!(z, "{},\"data\":[", &head[..head.len() - 1])?;
+                list(&mut z, &data.0)?;
+                z.write_all(b",")?;
+                list(&mut z, &data.1)?;
+                z.write_all(b",")?;
+                list(&mut z, &data.2)?;
+                z.write_all(b"]}")?;
+                drop(data);
                 let file = crate::api::cache_dir("").join("index");
                 std::fs::create_dir_all(file.parent().expect("the cache has a directory"))?;
                 let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
@@ -1149,7 +1166,7 @@ impl App {
                 Ok(())
             };
             tokio::task::spawn_blocking(save).await??;
-            Ok(Some((now, Arc::new(t))))
+            Ok(Some((now, t)))
         };
         let set = |r: Option<(String, Arc<Trio>)>| {
             task(move |a| {
@@ -1217,22 +1234,27 @@ impl App {
             t.0.iter()
                 .map(|a| &a.cover)
                 .chain(t.1.iter().map(|a| &a.cover));
-        let keys = keys.filter(|c| !c.is_empty()).cloned();
-        let jobs = keys.collect::<Vec<_>>().into_iter().map(move |k| {
-            let s = s.clone();
-            async move {
-                if tokio::fs::try_exists(s.cover_file(&k, 128))
-                    .await
-                    .unwrap_or(false)
-                {
-                    return;
-                }
-                static BG: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(6);
-                let _bg = BG.acquire().await.expect("the prefetch semaphore is open");
-                drop(s.cover(&k, 128).await);
+        let keys: Vec<String> = keys.filter(|c| !c.is_empty()).cloned().collect();
+        let run = async move {
+            let s2 = s.clone();
+            let miss = tokio::task::spawn_blocking(move || {
+                let miss = keys.into_iter().filter(|k| !s2.cover_file(k, 128).exists());
+                miss.collect::<Vec<_>>()
+            });
+            let miss = miss.await.expect("the cover check runs");
+            let each = async |k: String| drop(s.cover(&k, 128).await);
+            iced::futures::StreamExt::for_each_concurrent(
+                iced::futures::stream::iter(miss),
+                6,
+                each,
+            )
+            .await;
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            unsafe {
+                libc::malloc_trim(0);
             }
-        });
-        Task::perform(iced::futures::future::join_all(jobs), |_| Message::Noop)
+        };
+        Task::perform(run, |()| Message::Noop)
     }
 
     fn save_data(&self) -> Task<Message> {
