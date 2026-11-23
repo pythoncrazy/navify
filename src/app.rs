@@ -1365,6 +1365,7 @@ impl App {
             transcoded,
             duration: song.duration,
             rate: [song.sampling_rate, 48_000][usize::from(format == Some("opus"))],
+            kbps: [song.bit_rate, 0][usize::from(transcoded)],
         }
     }
 
