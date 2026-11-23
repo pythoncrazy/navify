@@ -1157,11 +1157,12 @@ impl App {
             Some((i.scan, Arc::new(i.data)))
         };
         Task::perform(tokio::task::spawn_blocking(disk), move |r| {
-            let d = r.expect("index load");
+            let d = Mutex::new(r.expect("index load"));
             ours(
                 &me,
                 task(move |a| {
-                    let set = d.clone().map(|(scan, t)| a.set_catalog(scan, t));
+                    let d = d.lock().expect("index lock").take();
+                    let set = d.map(|(scan, t)| a.set_catalog(scan, t));
                     let home = (a.home_wait.take() == Some(true)).then(|| a.request("home", 0));
                     Task::batch(set.into_iter().chain(home).chain([a.index_check()]))
                 }),
@@ -1187,9 +1188,9 @@ impl App {
             Ok(Some((now, t)))
         };
         let set = |r: Option<(String, Arc<Trio>)>| {
+            let r = Mutex::new(r);
             task(move |a| {
-                let set = r
-                    .clone()
+                let set = (r.lock().expect("index lock").take())
                     .map(|(scan, t)| [a.set_catalog(scan, t), a.save_index()]);
                 Task::batch(set.into_iter().flatten().chain([a.prefetch()]))
             })
