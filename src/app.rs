@@ -219,6 +219,7 @@ fn bare(id: &str) -> &str {
 }
 
 static SHOWN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+static SEED: LazyLock<std::hash::RandomState> = LazyLock::new(Default::default);
 
 pub(crate) fn later(secs: f32, m: Message) -> Task<Message> {
     Task::future(tokio::time::sleep(Duration::from_secs_f32(secs))).map(move |()| m.clone())
@@ -426,6 +427,7 @@ pub struct App {
     catalog_covers: HashMap<String, String>,
     catalog_scan: String,
     catalog_at: Option<Instant>,
+    home_wait: Option<bool>,
     asked: HashMap<String, String>,
     made: HashSet<String>,
     told: Option<String>,
@@ -1026,6 +1028,10 @@ impl App {
             self.cache.insert(key.into(), (Instant::now(), d));
             return Task::none();
         }
+        if key == "home" && self.home_wait.is_some() {
+            self.home_wait = Some(true);
+            return Task::none();
+        }
         if let Some(p) = key
             .strip_prefix("playlist:")
             .and_then(|id| self.playlist(id))
@@ -1034,9 +1040,21 @@ impl App {
         }
         match self.session.clone() {
             Some(s) if self.pending.insert(format!("{key}#{offset}")) => {
-                let old = (key == "lib")
-                    .then(|| self.data::<Lib>(key).cloned())
-                    .flatten();
+                let old: Option<AnyData> = match key {
+                    "lib" => self
+                        .data::<Lib>(key)
+                        .map(|l| Arc::new(l.clone()) as AnyData),
+                    "home" => self.catalog.as_ref().map(|t| {
+                        use std::hash::BuildHasher;
+                        let mut new: Vec<&Album> = t.1.iter().collect();
+                        new.sort_by(|a, b| b.created.cmp(&a.created));
+                        let mut any = new.clone();
+                        any.sort_by_cached_key(|a| SEED.hash_one(&a.id));
+                        let top = |v: Vec<&Album>| v.into_iter().take(12).cloned().collect();
+                        Arc::new([vec![], top(new), vec![], top(any)]) as AnyData
+                    }),
+                    _ => None,
+                };
                 fetch(s, key.to_string(), offset, old)
             }
             _ => Task::none(),
@@ -1101,10 +1119,12 @@ impl App {
         blocking("Could not save the settings. ", save)
     }
 
-    fn sync_index(&self) -> Task<Message> {
+    fn sync_index(&mut self) -> Task<Message> {
+        self.home_wait = None;
         let Some(s) = self.session.clone().filter(|s| s.server.native) else {
             return Task::none();
         };
+        self.home_wait = Some(false);
         let (id, me) = (s.server.id.clone(), s.clone());
         let file = crate::api::cache_dir("").join("index");
         let disk = move || -> Option<(String, Arc<Trio>)> {
@@ -1142,7 +1162,8 @@ impl App {
                 &me,
                 task(move |a| {
                     let set = d.clone().map(|(scan, t)| a.set_catalog(scan, t));
-                    Task::batch(set.into_iter().chain([a.index_check()]))
+                    let home = (a.home_wait.take() == Some(true)).then(|| a.request("home", 0));
+                    Task::batch(set.into_iter().chain(home).chain([a.index_check()]))
                 }),
             )
         })
@@ -1903,7 +1924,6 @@ impl App {
     fn local(&self, key: &str) -> Option<AnyData> {
         use std::cmp::Reverse;
         use std::hash::BuildHasher;
-        static SEED: LazyLock<std::hash::RandomState> = LazyLock::new(Default::default);
         if let Some(l) = self.data::<Lib>("lib").filter(|_| key == "liked") {
             return Some(Arc::new((l.songs.clone(), l.songs.len())));
         }
@@ -3947,7 +3967,7 @@ fn decode(
     Ok(d)
 }
 
-fn fetch(s: Session, key: String, offset: usize, old: Option<Lib>) -> Task<Message> {
+fn fetch(s: Session, key: String, offset: usize, old: Option<AnyData>) -> Task<Message> {
     let (k, me) = (key.clone(), s.clone());
     let load = async move {
         let (kind, arg) = k.split_once(':').unwrap_or((&k, ""));
@@ -3955,9 +3975,17 @@ fn fetch(s: Session, key: String, offset: usize, old: Option<Lib>) -> Task<Messa
         Ok::<AnyData, anyhow::Error>(match kind {
             "home" => {
                 let l = |t| s.albums(t, &[], 0, 12);
-                let (r, a, f, x) =
-                    tokio::try_join!(l("recent"), l("newest"), l("frequent"), l("random"))?;
-                Arc::new([r.0, a.0, f.0, x.0]) as AnyData
+                match old.as_ref().and_then(|o| o.downcast_ref::<Home>()) {
+                    Some([_, a, _, x]) => {
+                        let (r, f) = tokio::try_join!(l("recent"), l("frequent"))?;
+                        Arc::new([r.0, a.clone(), f.0, x.clone()]) as AnyData
+                    }
+                    None => {
+                        let (r, a, f, x) =
+                            tokio::try_join!(l("recent"), l("newest"), l("frequent"), l("random"))?;
+                        Arc::new([r.0, a.0, f.0, x.0]) as AnyData
+                    }
+                }
             }
             "lib" => {
                 let seen = async {
@@ -3967,8 +3995,11 @@ fn fetch(s: Session, key: String, offset: usize, old: Option<Lib>) -> Task<Messa
                     })
                 };
                 let (playlists, seen) = tokio::try_join!(s.playlists(), seen)?;
+                let old = old.as_ref().and_then(|o| o.downcast_ref::<Lib>());
                 let (artists, albums, mut songs) = match old {
-                    Some(o) if !seen.is_empty() && o.seen == seen => (o.artists, o.albums, o.songs),
+                    Some(o) if !seen.is_empty() && o.seen == seen => {
+                        (o.artists.clone(), o.albums.clone(), o.songs.clone())
+                    }
                     _ => s.starred().await?,
                 };
                 songs.sort_by(|a, b| b.starred_at.cmp(&a.starred_at));
