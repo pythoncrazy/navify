@@ -1139,14 +1139,17 @@ impl App {
         self.catalog_at = Some(Instant::now());
         let scan = self.catalog_scan.clone();
         let check = move |s: Session| async move {
-            let Some(now) = s
-                .scanned()
-                .await?
-                .filter(|now| scan.is_empty() || *now != scan)
-            else {
+            let (now, t) = match scan.is_empty() {
+                true => tokio::try_join!(s.scanned(), async { Ok(Some(s.everything().await?)) })?,
+                false => (s.scanned().await?, None),
+            };
+            let Some(now) = now.filter(|now| scan.is_empty() || *now != scan) else {
                 return Ok(None);
             };
-            let t = Arc::new(s.everything().await?);
+            let t = Arc::new(match t {
+                Some(t) => t,
+                None => s.everything().await?,
+            });
             let data = t.clone();
             let head = serde_json::json!({"server": s.server.id, "v": 3, "scan": now}).to_string();
             let save = move || -> anyhow::Result<()> {
@@ -1158,7 +1161,7 @@ impl App {
                         let mut v = serde_json::to_value(x)?;
                         prune(&mut v);
                         z.write_all(&b","[..usize::from(n > 0)])?;
-                        serde_json::to_writer(&mut *z, &v)?;
+                        z.write_all(&serde_json::to_vec(&v)?)?;
                     }
                     Ok(z.write_all(b"]")?)
                 }
