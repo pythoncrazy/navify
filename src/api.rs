@@ -57,7 +57,9 @@ pub struct Genre {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Artist {
+    #[serde(deserialize_with = "pooled")]
     pub id: Arc<str>,
+    #[serde(deserialize_with = "pooled")]
     pub name: Arc<str>,
     #[serde(deserialize_with = "round")]
     pub cover: Arc<str>,
@@ -71,6 +73,39 @@ pub struct Artist {
 
 fn tight<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<[Artist]>, D::Error> {
     Vec::deserialize(d).map(Into::into)
+}
+
+thread_local! {
+    static POOL: std::cell::RefCell<Option<std::collections::HashSet<Arc<str>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub fn with_pool<T>(pool: &mut std::collections::HashSet<Arc<str>>, f: impl FnOnce() -> T) -> T {
+    POOL.set(Some(std::mem::take(pool)));
+    let r = f();
+    *pool = POOL.take().expect("string pool");
+    r
+}
+
+fn pooled<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<str>, D::Error> {
+    struct V;
+    impl serde::de::Visitor<'_> for V {
+        type Value = Arc<str>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string")
+        }
+        fn visit_str<E>(self, s: &str) -> Result<Arc<str>, E> {
+            Ok(POOL.with_borrow_mut(|p| match p {
+                Some(p) => p.get(s).cloned().unwrap_or_else(|| {
+                    let a: Arc<str> = s.into();
+                    p.insert(a.clone());
+                    a
+                }),
+                None => s.into(),
+            }))
+        }
+    }
+    d.deserialize_str(V)
 }
 
 fn round<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<str>, D::Error> {
@@ -106,6 +141,7 @@ pub struct Album {
     pub duration: f32,
     pub play_count: u32,
     pub starred: bool,
+    #[serde(deserialize_with = "pooled")]
     pub cover: Arc<str>,
     #[serde(alias = "isCompilation")]
     pub compilation: bool,
@@ -127,10 +163,15 @@ pub struct Album {
 pub struct Song {
     pub id: String,
     pub title: String,
+    #[serde(deserialize_with = "pooled")]
     pub album: Arc<str>,
+    #[serde(deserialize_with = "pooled")]
     pub album_id: Arc<str>,
+    #[serde(deserialize_with = "pooled")]
     pub artist: Arc<str>,
+    #[serde(deserialize_with = "pooled")]
     pub artist_id: Arc<str>,
+    #[serde(deserialize_with = "pooled")]
     pub genre: Arc<str>,
     pub year: u32,
     #[serde(alias = "trackNumber")]
@@ -141,6 +182,7 @@ pub struct Song {
     #[serde(alias = "sampleRate")]
     pub sampling_rate: u32,
     pub bit_rate: u32,
+    #[serde(deserialize_with = "pooled")]
     pub suffix: Arc<str>,
     pub play_count: u32,
     #[serde(alias = "rating")]
@@ -149,6 +191,7 @@ pub struct Song {
     pub starred_at: String,
     #[serde(alias = "createdAt")]
     pub created: String,
+    #[serde(deserialize_with = "pooled")]
     pub cover: Arc<str>,
     pub is_dir: bool,
     #[serde(deserialize_with = "tight")]
@@ -721,6 +764,7 @@ impl Session {
             .into_iter()
             .chain(ptr.split('/').skip(1))
             .collect();
+        let pool = Mutex::new(std::collections::HashSet::new());
         let page = async |off: usize, n: usize| -> Result<Vec<T>> {
             let res = self
                 .http
@@ -733,11 +777,13 @@ impl Session {
             let body = res.bytes().await.map_err(net_err)?;
             let mut meta = serde_json::Map::new();
             let mut de = serde_json::Deserializer::from_slice(&body);
-            let page = serde::de::DeserializeSeed::deserialize(
-                Walk(&path, &mut meta, PhantomData),
-                &mut de,
-            );
-            let page = page.and_then(|p| de.end().map(|()| p));
+            let page = with_pool(&mut pool.lock().expect("string pool"), || {
+                let page = serde::de::DeserializeSeed::deserialize(
+                    Walk(&path, &mut meta, PhantomData),
+                    &mut de,
+                );
+                page.and_then(|p| de.end().map(|()| p))
+            });
             failed(&mut Value::Object(meta))?;
             page.map_err(|e| anyhow!("The server returned an unexpected response: {e}"))
         };
