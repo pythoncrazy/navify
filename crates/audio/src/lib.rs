@@ -229,6 +229,7 @@ struct Net0 {
     start: u64,
     data: Vec<u8>,
     tail: (u64, Vec<u8>),
+    tailing: bool,
     len: Option<u64>,
     want: u64,
     ahead: u64,
@@ -272,6 +273,14 @@ fn range(r: &Response) -> Option<(u64, u64)> {
     Some((span.parse().ok()?, len.split_once('/')?.1.parse().ok()?))
 }
 
+async fn spare(http: Client, url: Url) {
+    if let Ok(r) = http.get(url).header(RANGE, "bytes=0-0").send().await
+        && r.status() == reqwest::StatusCode::PARTIAL_CONTENT
+    {
+        drop(r.bytes().await);
+    }
+}
+
 async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response>) {
     let res = async {
         loop {
@@ -287,7 +296,7 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                             }
                             if st.end() < len && st.end() < st.want + st.ahead / 2 {
                                 let to =
-                                    [st.want + st.ahead, len][usize::from(st.want >= st.end())];
+                                    st.want + [st.ahead, AHEAD][usize::from(st.want >= st.end())];
                                 break (st.end(), len.min(to) - 1);
                             }
                         }
@@ -305,12 +314,20 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                     r
                 }
             };
-            let (t, mut n) = (Instant::now(), 0);
+            let (t, mut n, size) = (Instant::now(), 0, resp.content_length());
             let ahead = || {
                 let st = net.st();
                 st.len.is_none() && !st.jump && st.end() > st.want + AHEAD
             };
-            while let Some(c) = resp.chunk().await? {
+            loop {
+                let c = tokio::select! {
+                    c = resp.chunk() => c?,
+                    () = net.2.notified() => match net.st().jump {
+                        true => break,
+                        false => continue,
+                    },
+                };
+                let Some(c) = c else { break };
                 let stop = {
                     let mut st = net.st();
                     st.data.extend_from_slice(&c);
@@ -332,7 +349,12 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                     net.2.notified().await;
                 }
             }
+            drop(resp);
+            if size.is_some_and(|s| (n as u64) < s) {
+                tokio::spawn(spare(http.clone(), url.clone()));
+            }
             let mut st = net.st();
+            st.rate = 0.0;
             st.eof |= st.len.is_none();
             if st.eof {
                 return Ok::<_, reqwest::Error>(());
@@ -357,11 +379,12 @@ struct Http {
 impl Http {
     fn raw(&self, pos: u64, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut st = self.net.st();
-        let tail = (st.tail.0..st.tail.0 + st.tail.1.len() as u64).contains(&pos);
-        if !tail {
-            st.want = pos;
-        }
         loop {
+            let span = [st.tail.1.len() as u64, TAIL][usize::from(st.tailing)];
+            let tail = (st.tail.0..st.tail.0 + span).contains(&pos);
+            if !tail {
+                st.want = pos;
+            }
             let (at, d) = [(st.start, &st.data), (st.tail.0, &st.tail.1)][usize::from(tail)];
             let d = pos.checked_sub(at).and_then(|i| d.get(i as usize..));
             if let Some(d) = d.filter(|d| !d.is_empty()) {
@@ -382,9 +405,12 @@ impl Http {
             if st.eof || st.len.is_some_and(|l| pos >= l) {
                 return Ok(0);
             }
-            let far = pos.wrapping_sub(st.end()) as f64 > st.rate * st.ttfb + 65536.0;
-            st.jump |= st.len.is_some() && far;
-            self.net.2.notify_one();
+            if !tail {
+                let near = [16384.0, st.rate * st.ttfb + 65536.0][usize::from(st.rate > 0.0)];
+                let far = pos.wrapping_sub(st.end()) as f64 > near;
+                st.jump |= st.len.is_some() && far;
+                self.net.2.notify_one();
+            }
             st = self.net.1.wait(st).expect("net lock");
         }
     }
@@ -418,34 +444,39 @@ impl Http {
         let Some(len) = self.net.st().len else {
             return Ok(None);
         };
-        let Some((pg, ser, seq)) = self.page(p0)? else {
-            return Ok(None);
-        };
-        let n = usize::from(pg[26]);
-        let full = pg[27..27 + n].iter().all(|&s| s == 255) && pg[5] & 1 == 0;
-        let pay = &pg[27 + n..];
-        if ser != serial || !full || !pay.starts_with(b"OpusTags") {
+        let h = self.fill(p0, 27)?;
+        if h.len() < 27 || &h[..4] != b"OggS" {
             return Ok(None);
         }
-        let num = |i: usize| {
-            pay.get(i..i + 4)
-                .map(|b| u32::from_le_bytes(b.try_into().expect("four bytes")) as usize)
+        let (n, u32at) = (u64::from(h[26]), |i: usize| {
+            u32::from_le_bytes(h[i..i + 4].try_into().expect("four bytes"))
+        });
+        let (body, at, seq) = (255 * n, p0 + 27 + n, u32at(18));
+        let full = self.fill(p0 + 27, n)?.iter().filter(|&&s| s == 255).count() as u64 == n;
+        if u32at(14) != serial || !full || h[5] & 1 != 0 || self.fill(at, 8)? != b"OpusTags" {
+            return Ok(None);
+        }
+        let num = |i: u64| match i + 4 <= body {
+            true => self
+                .fill(at + i, 4)
+                .map(|b| b.try_into().ok().map(|b| u32::from_le_bytes(b) as u64)),
+            false => Ok(None),
         };
-        let Some(vl) = num(8) else { return Ok(None) };
-        let Some(count) = num(12 + vl) else {
+        let Some(vl) = num(8)? else { return Ok(None) };
+        let Some(count) = num(12 + vl)? else {
             return Ok(None);
         };
         let mut end = 16 + vl;
         for _ in 0..count {
-            let Some(l) = num(end) else { return Ok(None) };
+            let Some(l) = num(end)? else { return Ok(None) };
             end += 4 + l;
         }
-        let (body, total) = (255 * n as u64, end as u64);
-        let (k, rem) = (total / body, total % body);
-        let real = p0 + k * pg.len() as u64 + 27 + rem / 255 + 1 + rem;
+        let (k, rem) = (end / body, end % body);
+        let real = p0 + k * (27 + n + body) + 27 + rem / 255 + 1 + rem;
         if real < p0 + (128 << 10) || real + 27 > len {
             return Ok(None);
         }
+        let vendor = self.fill(at + 8, 4 + vl)?;
         let next = self.fill(real, 27)?;
         let u32at = |i: usize| {
             next.get(i..i + 4)
@@ -455,7 +486,7 @@ impl Http {
         if !ok || u32at(14) != Some(serial) || u32at(18) != Some(seq + k as u32 + 1) {
             return Ok(None);
         }
-        let pkt = [b"OpusTags", &pay[8..12 + vl], &[0; 4]].concat();
+        let pkt = [b"OpusTags".as_slice(), &vendor, &[0; 4]].concat();
         let segs: Vec<u8> = (0..pkt.len() / 255)
             .map(|_| 255)
             .chain([(pkt.len() % 255) as u8])
@@ -663,6 +694,7 @@ impl Source {
         }
         (|| -> Res<Source> {
             let url: Url = url.parse().map_err(|_| "invalid stream url")?;
+            let mut task = JoinSet::new();
             let head = rt.block_on(async {
                 let (t, get) = (Instant::now(), http.get(url.clone()));
                 let w = reqwest::Error::without_url;
@@ -673,23 +705,34 @@ impl Source {
                 let head = format!("bytes=0-{}", net.st().ahead - 1);
                 let (get, tail) = (get.header(RANGE, head), http.get(url.clone()));
                 let tail = tail.header(RANGE, format!("bytes=-{TAIL}"));
-                let (head, tail) = tokio::try_join!(get.send(), tail.send()).map_err(w)?;
+                let more = async {
+                    task.spawn(spare(http.clone(), url.clone()));
+                    Ok(())
+                };
+                let (head, tail, ()) =
+                    tokio::try_join!(get.send(), tail.send(), more).map_err(w)?;
                 let (head, tail) = (head.error_for_status(), tail.error_for_status());
                 let (head, tail) = (head.map_err(w)?, tail.map_err(w)?);
                 let (ttfb, len) = (t.elapsed().as_secs_f64(), range(&head).map(|r| r.1));
-                let tail = match range(&tail).filter(|_| len.is_some()) {
-                    Some((at, _)) => (at, tail.bytes().await.map_err(w)?.to_vec()),
-                    None => Default::default(),
-                };
                 let mut st = net.st();
-                (st.ttfb, st.tail, st.len) = (ttfb, tail, len);
+                (st.ttfb, st.len) = (ttfb, len);
+                if let Some((at, _)) = range(&tail).filter(|_| len.is_some()) {
+                    (st.tail.0, st.tailing) = (at, true);
+                    let net = net.clone();
+                    task.spawn(async move {
+                        let r = tail.bytes().await;
+                        let mut st = net.st();
+                        st.tail.1 = r.map_or_else(|_| Vec::new(), |b| b.to_vec());
+                        st.tailing = false;
+                        net.1.notify_all();
+                    });
+                }
                 Ok(head)
             })?;
             let raw = !std::mem::replace(&mut track.transcoded, net.st().len.is_none());
             if raw && track.transcoded && offset >= 1.0 {
                 return Ok(Source::open(track, io, rate, offset, net)?);
             }
-            let mut task = JoinSet::new();
             task.spawn_on(fetch(net.clone(), http.clone(), url, Some(head)), rt);
             let (n, pos, _task) = (net.clone(), 0, task);
             let (head, map) = (None, None);
