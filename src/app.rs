@@ -426,6 +426,7 @@ pub struct App {
     catalog_scan: String,
     catalog_at: Option<Instant>,
     asked: HashMap<String, String>,
+    made: HashSet<String>,
     heard_stop: Option<iced::task::Handle>,
     warmed: Option<String>,
     warm_at: u64,
@@ -1005,6 +1006,14 @@ impl App {
             return Task::none();
         }
         if let Some(d) = self.local(key).filter(|_| offset == 0) {
+            let big = |k: &&str| matches!(*k, "songs" | "albums" | "genre");
+            let kind = |k: &str| k.split(':').next().filter(big).map(String::from);
+            let (same, cur) = (kind(key), self.key_of(&self.route));
+            let made = &mut self.made;
+            let keep = |k: &String| k == key || *k == cur || same.is_none() || kind(k) != same;
+            self.cache.retain(|k, _| keep(k) || !made.contains(k));
+            made.retain(|k| keep(k));
+            made.extend(same.map(|_| key.to_string()));
             self.stale.remove(key);
             self.cache.insert(key.into(), (Instant::now(), d));
             return Task::none();
