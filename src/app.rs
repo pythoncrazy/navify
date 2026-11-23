@@ -2793,8 +2793,9 @@ impl App {
             }
             Message::Warm(r) => {
                 self.aim = Some(r.clone());
-                let top = r.strip_prefix("artist:").map(|id| format!("top:{id}"));
-                let keys = std::iter::once(self.key_of(&r)).chain(top);
+                let id = r.strip_prefix("artist:").into_iter();
+                let more = id.flat_map(|id| ["top", "info"].map(|k| format!("{k}:{id}")));
+                let keys = std::iter::once(self.key_of(&r)).chain(more);
                 let mut tasks: Vec<_> = keys.map(|k| self.request(&k, 0)).collect();
                 let cover = match r.split_once(':') {
                     Some(("album", id)) => self.find_album(id).map(|a| a.cover),
@@ -2813,11 +2814,8 @@ impl App {
                         return Task::none();
                     }
                     let b = banner.as_ref().map(|b| a.request(b, 0));
-                    let i = r
-                        .strip_prefix("artist:")
-                        .map(|id| a.request(&format!("info:{id}"), 0));
                     let c = a.want_covers(cover.clone().map(|c| (c, size)));
-                    Task::batch(b.into_iter().chain(i).chain([c]))
+                    Task::batch(b.into_iter().chain([c]))
                 };
                 tasks.push(later(0.15, task(rest)));
                 return Task::batch(tasks);
