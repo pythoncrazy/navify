@@ -274,7 +274,9 @@ fn range(r: &Response) -> Option<(u64, u64)> {
 }
 
 async fn spare(http: Client, url: Url) {
-    if let Ok(r) = http.get(url).header(RANGE, "bytes=0-0").send().await {
+    if let Ok(r) = http.get(url).header(RANGE, "bytes=0-0").send().await
+        && r.status() == reqwest::StatusCode::PARTIAL_CONTENT
+    {
         drop(r.bytes().await);
     }
 }
@@ -377,12 +379,12 @@ struct Http {
 impl Http {
     fn raw(&self, pos: u64, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut st = self.net.st();
-        let span = [st.tail.1.len() as u64, TAIL][usize::from(st.tailing)];
-        let tail = (st.tail.0..st.tail.0 + span).contains(&pos);
-        if !tail {
-            st.want = pos;
-        }
         loop {
+            let span = [st.tail.1.len() as u64, TAIL][usize::from(st.tailing)];
+            let tail = (st.tail.0..st.tail.0 + span).contains(&pos);
+            if !tail {
+                st.want = pos;
+            }
             let (at, d) = [(st.start, &st.data), (st.tail.0, &st.tail.1)][usize::from(tail)];
             let d = pos.checked_sub(at).and_then(|i| d.get(i as usize..));
             if let Some(d) = d.filter(|d| !d.is_empty()) {
@@ -720,10 +722,7 @@ impl Source {
                     task.spawn(async move {
                         let r = tail.bytes().await;
                         let mut st = net.st();
-                        match r {
-                            Ok(b) => st.tail.1 = b.to_vec(),
-                            Err(e) => st.err = Some(e.without_url().to_string()),
-                        }
+                        st.tail.1 = r.map_or_else(|_| Vec::new(), |b| b.to_vec());
                         st.tailing = false;
                         net.1.notify_all();
                     });
