@@ -188,16 +188,16 @@ pub struct Song {
     #[serde(alias = "rating")]
     pub user_rating: u8,
     pub starred: bool,
-    pub starred_at: String,
+    pub starred_at: Box<str>,
     #[serde(alias = "createdAt")]
-    pub created: String,
+    pub created: Box<str>,
     #[serde(deserialize_with = "pooled")]
     pub cover: Arc<str>,
     pub is_dir: bool,
     #[serde(deserialize_with = "tight")]
     pub artists: Arc<[Artist]>,
     #[serde(alias = "streamUrl")]
-    pub url: String,
+    pub url: Box<str>,
     #[serde(flatten)]
     pub rg: Rg,
 }
@@ -861,7 +861,7 @@ impl Session {
 
     pub fn stream_url(&self, song: &Song, format: Option<&str>, br: u32) -> (String, bool) {
         if !song.url.is_empty() {
-            return (song.url.clone(), true);
+            return (song.url.to_string(), true);
         }
         let q = json!({"id": song.id, "format": format, "maxBitRate": (br > 0).then_some(br)});
         let same = format.is_none_or(|f| f == "raw" || f == &*song.suffix);
