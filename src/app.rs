@@ -427,6 +427,7 @@ pub struct App {
     catalog_at: Option<Instant>,
     asked: HashMap<String, String>,
     made: HashSet<String>,
+    told: Option<String>,
     heard_stop: Option<iced::task::Handle>,
     warmed: Option<String>,
     warm_at: u64,
@@ -1038,6 +1039,13 @@ impl App {
         self.toast = Some((n, text.to_string()));
         let clear = act(move |a| a.toast = a.toast.take().filter(|t| t.0 != n));
         later(3.0, clear)
+    }
+
+    fn warn(&mut self, e: String, text: &str) -> Task<Message> {
+        match self.told.replace(e.clone()) == Some(e) {
+            true => Task::none(),
+            false => self.toast(text),
+        }
     }
 
     fn save_later(&mut self) -> Task<Message> {
@@ -1675,7 +1683,7 @@ impl App {
                     }
                 }
             }
-            err.map(|e| a.toast(&format!("Could not load a cover. {e}")))
+            err.map(|e| a.warn(e.clone(), &format!("Could not load a cover. {e}")))
         };
         self.covers.disk += 1;
         let (colors, s2) = (self.covers.color.clone(), s.clone());
@@ -2224,13 +2232,14 @@ impl App {
                 }
                 if self.cache.contains_key(&key) || key != self.key_of(&self.route) {
                     let load = (key == "lib" && self.route == "home").then(|| self.disc_load());
-                    return Task::batch([self.toast(&e)].into_iter().chain(load));
+                    return Task::batch([self.warn(e.clone(), &e)].into_iter().chain(load));
                 }
                 self.seeds.remove(&key);
                 self.cache.insert(key, (Instant::now(), Arc::new(e)));
             }
             Message::Loaded(key, off, Ok(v)) => {
                 self.pending.remove(&format!("{key}#{off}"));
+                self.told = None;
                 self.stale.remove(&key);
                 if let Some(busy) = self.dirty.get_mut(&key).filter(|_| off == 0) {
                     busy.1 = true;
