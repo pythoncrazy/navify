@@ -2789,6 +2789,7 @@ impl App {
                 let cover = match r.split_once(':') {
                     Some(("album", id)) => self.find_album(id).map(|a| a.cover),
                     Some(("playlist", id)) => self.playlist(id).map(|p| p.cover.clone()),
+                    Some(("artist", id)) => self.find_artist(id).map(|a| a.cover.clone()),
                     _ => None,
                 };
                 let size = self.bucket(crate::pages::art_px(self));
@@ -2802,8 +2803,11 @@ impl App {
                         return Task::none();
                     }
                     let b = banner.as_ref().map(|b| a.request(b, 0));
+                    let i = r
+                        .strip_prefix("artist:")
+                        .map(|id| a.request(&format!("info:{id}"), 0));
                     let c = a.want_covers(cover.clone().map(|c| (c, size)));
-                    Task::batch(b.into_iter().chain([c]))
+                    Task::batch(b.into_iter().chain(i).chain([c]))
                 };
                 tasks.push(later(0.15, task(rest)));
                 return Task::batch(tasks);
