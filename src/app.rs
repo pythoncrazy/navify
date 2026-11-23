@@ -1259,11 +1259,11 @@ impl App {
         let run = async move {
             let s2 = s.clone();
             let miss = tokio::task::spawn_blocking(move || {
-                let miss = keys.into_iter().filter(|k| !s2.cover_file(k, 128).exists());
+                let miss = keys.into_iter().filter(|k| !s2.cover_file(k, 192).exists());
                 miss.collect::<Vec<_>>()
             });
             let miss = miss.await.expect("the cover check runs");
-            let each = async |k: String| drop(s.cover(&k, 128).await);
+            let each = async |k: String| drop(s.cover(&k, 192).await);
             iced::futures::StreamExt::for_each_concurrent(
                 iced::futures::stream::iter(miss),
                 6,
