@@ -558,7 +558,8 @@ impl App {
                 "queue" | "panel1" => {
                     (self.queue, self.index) = (songs.iter().take(20).cloned().collect(), 0);
                     let album = songs.first().filter(|_| self.route.starts_with("album:"));
-                    self.source = album.map_or_else(|| "Liked Songs".into(), |s| s.album.clone());
+                    self.source =
+                        album.map_or_else(|| "Liked Songs".into(), |s| s.album.to_string());
                     self.panel = if s == "queue" { 2 } else { 1 };
                     let first = songs.first().map(|s| format!("lyrics:{}", s.id));
                     task = Task::batch(first.map(|k| self.request(&k, 0)));
@@ -734,7 +735,7 @@ impl App {
     pub(crate) fn songs_of(&self, key: &str) -> Option<(&[Song], String)> {
         if let Some(id) = key.strip_prefix("artist:") {
             let top = self.data::<Vec<Song>>(&format!("top:{id}"))?;
-            return Some((top, self.find_artist(id)?.name.clone()));
+            return Some((top, self.find_artist(id)?.name.to_string()));
         }
         let (s, name) = song_list(&self.cache.get(key)?.1)?;
         let s = self.pl_rows(key).map_or(s, |v| &v.0[..]);
@@ -757,12 +758,12 @@ impl App {
         }
         let songs = &self.data::<(Playlist, Vec<Song>)>(&self.route)?.1;
         let hit = |s: &Song| {
-            [&s.title, &s.artist, &s.album]
+            [&*s.title, &s.artist, &s.album]
                 .iter()
                 .any(|f| f.to_lowercase().contains(&q))
         };
         let mut idx: Vec<usize> = (0..songs.len()).filter(|&n| hit(&songs[n])).collect();
-        let low = |s: &String| s.to_lowercase();
+        let low = |s: &str| s.to_lowercase();
         match self.pl_sort & 15 {
             1 => idx.sort_by_cached_key(|&n| low(&songs[n].title)),
             2 => idx.sort_by_cached_key(|&n| low(&songs[n].artist)),
@@ -931,8 +932,8 @@ impl App {
             .flatten()
         });
         all.clone()
-            .find(|a| a.id == id && !a.music_brainz_id.is_empty())
-            .or_else(|| all.find(|a| a.id == id))
+            .find(|a| *a.id == *id && !a.music_brainz_id.is_empty())
+            .or_else(|| all.find(|a| *a.id == *id))
     }
 
     fn found(&self, id: &str) -> Found {
@@ -1113,6 +1114,7 @@ impl App {
                 i.data.0.shrink_to_fit();
                 i.data.1.shrink_to_fit();
                 i.data.2.shrink_to_fit();
+                crate::api::share(&mut i.data);
                 i
             });
             drop((raw, z));
@@ -1222,14 +1224,14 @@ impl App {
         let Some(l) = self.data::<Lib>("lib") else {
             return;
         };
-        let ids = |v: Vec<&String>| v.into_iter().cloned().collect::<HashSet<String>>();
-        let songs = ids(l.songs.iter().map(|x| &x.id).collect());
-        let albums = ids(l.albums.iter().map(|x| &x.id).collect());
-        let artists = ids(l.artists.iter().map(|x| &x.id).collect());
+        let ids = |v: Vec<&str>| v.into_iter().map(String::from).collect::<HashSet<String>>();
+        let songs = ids(l.songs.iter().map(|x| &*x.id).collect());
+        let albums = ids(l.albums.iter().map(|x| &*x.id).collect());
+        let artists = ids(l.artists.iter().map(|x| &*x.id).collect());
         if let Some(t) = &mut self.catalog {
             let t = Arc::make_mut(t);
             t.0.iter_mut()
-                .for_each(|x| x.starred = artists.contains(&x.id));
+                .for_each(|x| x.starred = artists.contains(&*x.id));
             t.1.iter_mut()
                 .for_each(|x| x.starred = albums.contains(&x.id));
             t.2.iter_mut()
@@ -1391,7 +1393,7 @@ impl App {
         let words: Vec<String> = words.map(String::from).collect();
         move |s| {
             words.is_empty() || {
-                let hay = [&s.title, &s.artist, &s.album, &s.genre].map(|f| f.to_lowercase());
+                let hay = [&*s.title, &s.artist, &s.album, &s.genre].map(|f| f.to_lowercase());
                 !words.iter().any(|w| hay.iter().any(|h| h.contains(w)))
             }
         }
@@ -1431,7 +1433,7 @@ impl App {
 
     pub fn lead_artist(&self) -> Option<&str> {
         let s = self.current_song().filter(|s| s.url.is_empty())?;
-        let id = s.artists.first().map_or(&s.artist_id, |a| &a.id);
+        let id = s.artists.first().map_or(&*s.artist_id, |a| &a.id);
         (!id.is_empty()).then_some(id)
     }
 
@@ -1964,12 +1966,12 @@ impl App {
                 page(v)
             }
             ("artist" | "top" | "appears", id) => {
-                let on = |s: &&Song| s.artist_id == id || s.artists.iter().any(|a| a.id == id);
+                let on = |s: &&Song| *s.artist_id == *id || s.artists.iter().any(|a| *a.id == *id);
                 let own =
-                    |a: &Album| a.artist_id == id || a.album_artists.iter().any(|x| x.id == id);
+                    |a: &Album| a.artist_id == id || a.album_artists.iter().any(|x| *x.id == *id);
                 match kind {
                     "artist" => {
-                        let mut a = artists.iter().find(|a| a.id == id)?.clone();
+                        let mut a = artists.iter().find(|a| *a.id == *id)?.clone();
                         let mut v: Vec<Album> = albums.iter().filter(|a| own(a)).cloned().collect();
                         v.sort_by_key(|a| Reverse(a.year));
                         a.song_count = v.iter().map(|x| x.song_count).sum();
@@ -2012,18 +2014,22 @@ impl App {
         let album = |id: &str| albums.iter().find(|a| a.id == id).cloned();
         Some(match kind {
             "album" => {
-                let mut v: Vec<Song> = songs.iter().filter(|s| s.album_id == id).cloned().collect();
+                let mut v: Vec<Song> = songs
+                    .iter()
+                    .filter(|s| *s.album_id == *id)
+                    .cloned()
+                    .collect();
                 v.sort_by_key(|s| (s.disc, s.track));
                 Arc::new((self.find_album(id).or_else(|| album(id))?, v))
             }
             "artist" => {
                 let by =
-                    |a: &&Album| a.artist_id == id || a.album_artists.iter().any(|x| x.id == id);
+                    |a: &&Album| a.artist_id == id || a.album_artists.iter().any(|x| *x.id == *id);
                 let mut v: Vec<Album> = albums.iter().filter(by).cloned().collect();
                 v.sort_by_key(|a| std::cmp::Reverse(a.year));
                 let artist = self
                     .find_artist(id)
-                    .or_else(|| artists.iter().find(|a| a.id == id));
+                    .or_else(|| artists.iter().find(|a| *a.id == *id));
                 Arc::new((artist?.clone(), v))
             }
             "playlist" => Arc::new((self.playlist(id)?.clone(), Vec::<Song>::new())),
@@ -2193,8 +2199,8 @@ impl App {
         if let Some(m) = &mut self.media {
             let _ = m.set_metadata(souvlaki::MediaMetadata {
                 title: song.map(|s| s.title.as_str()),
-                album: song.map(|s| s.album.as_str()),
-                artist: song.map(|s| s.artist.as_str()),
+                album: song.map(|s| &*s.album),
+                artist: song.map(|s| &*s.artist),
                 cover_url: art.as_deref(),
                 duration: song.map(|s| Duration::from_secs_f32(s.duration.max(0.0))),
             });
@@ -3287,7 +3293,7 @@ impl App {
                 "playlist" => s.playlist(id).await.map(|(p, v)| (v, p.name))?,
                 "artist" => {
                     let ((a, _), t) = tokio::try_join!(s.artist(id), s.top_songs(id))?;
-                    (t, a.name)
+                    (t, a.name.to_string())
                 }
                 "liked" => (all("starred").await?.0, "Liked Songs".into()),
                 "songs" => (all(sort).await?.0, "Songs".into()),

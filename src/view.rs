@@ -664,7 +664,7 @@ pub fn artists_line<'a>(artists: &'a [Artist], size: f32, w: f32) -> El<'a> {
             break;
         }
         let name: Cow<'a, str> = match n {
-            0 => (&a.name).into(),
+            0 => (&*a.name).into(),
             _ => format!(", {}", a.name).into(),
         };
         let full = theme::width(&name, size, Normal);
@@ -798,7 +798,7 @@ fn top_bar(app: &App) -> El<'_> {
     bar.padding([0, 8]).height(64).into()
 }
 
-type LibRow<'a> = (&'a String, &'a String, &'static str, &'a str, &'a String);
+type LibRow<'a> = (&'a String, &'a str, &'static str, &'a str, &'a str);
 
 pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
     let f = app.lib_filter;
@@ -812,11 +812,11 @@ pub fn lib_rows(app: &App) -> (Vec<LibRow<'_>>, std::ops::Range<usize>) {
         .into_iter()
         .flat_map(|l| {
             let pls = l.playlists.iter().filter(|_| f < 2);
-            let pls = pls.map(|p| (&p.cover, &p.name, "playlist", p.id.as_str(), &p.owner));
+            let pls = pls.map(|p| (&p.cover, &*p.name, "playlist", &*p.id, &*p.owner));
             let als = l.albums.iter().filter(|_| matches!(f, 0 | 2));
-            let als = als.map(|a| (&a.cover, &a.name, "album", a.id.as_str(), &a.artist));
+            let als = als.map(|a| (&a.cover, &*a.name, "album", &*a.id, &*a.artist));
             let ars = l.artists.iter().filter(|_| matches!(f, 0 | 3));
-            let ars = ars.map(|a| (&a.cover, &a.name, "artist", a.id.as_str(), &a.name));
+            let ars = ars.map(|a| (&a.cover, &*a.name, "artist", &*a.id, &*a.name));
             pls.chain(als).chain(ars)
         });
     let mut rows: Vec<_> = rows.filter(|r| hit(r.1)).collect();

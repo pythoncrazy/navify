@@ -56,7 +56,7 @@ async fn read_suite(s: &Session) -> Result<()> {
     assert!(genre.0.is_empty());
     for a in &page {
         let (album, songs) = s.album(&a.id).await?;
-        assert!(album.id == a.id && songs.iter().all(|x| x.album_id == a.id));
+        assert!(album.id == a.id && songs.iter().all(|x| *x.album_id == *a.id));
         assert!(songs.is_sorted_by_key(|x| (x.disc, x.track)) && !songs.is_empty());
     }
     let (album, songs) = s.album(&page[0].id).await?;
@@ -65,7 +65,7 @@ async fn read_suite(s: &Session) -> Result<()> {
     let id = &album.artist_id;
     let ((artist, discs), top, info) =
         tokio::try_join!(s.artist(id), s.top_songs(id), s.artist_info(id))?;
-    assert!(artist.id == *id && discs.iter().any(|a| a.id == album.id));
+    assert!(*artist.id == **id && discs.iter().any(|a| a.id == album.id));
     assert!(top.is_empty() != s.server.native);
     assert!(info.similar.iter().all(|a| a.album_count > 0));
     let word = album.artist.split(' ').next().unwrap_or_default();
