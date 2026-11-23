@@ -1794,7 +1794,7 @@ fn library<'a>(app: &'a App, kind: &str, arg: &'a str) -> El<'a> {
 fn folders<'a>(app: &'a App) -> El<'a> {
     let (w, rh) = (app.main_w() - 2.0 * PAD - 80.0, app.row_h());
     let dir = |c: char, name: &'a str, url: &'a str, m: Message| -> El<'a> {
-        let on = !url.is_empty() && app.current_song().is_some_and(|s| s.url == url);
+        let on = !url.is_empty() && app.current_song().is_some_and(|s| *s.url == *url);
         let fg = [TEXT, ACCENT][usize::from(on)];
         let ic = container(i(c, 20.0).color(SUB).center()).center(rh - 16.0);
         let row = media(ic.style(fill(ELEVATED, 4.0)).into(), name, url, w, fg);
