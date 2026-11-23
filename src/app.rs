@@ -32,6 +32,7 @@ pub struct Lib {
     pub albums: Vec<Album>,
     pub liked: usize,
     pub songs: Vec<Song>,
+    pub seen: Vec<(usize, Box<str>)>,
 }
 
 type Page<T> = (Vec<T>, usize);
@@ -949,6 +950,7 @@ impl App {
     }
 
     fn star(&mut self, items: &[Found], on: bool) {
+        self.edit::<Lib>("lib", |l| l.seen.clear());
         for (id, song, album, artist) in items.iter().cloned() {
             let was = self.starred.insert(id, on);
             if let Some(mut s) = song {
@@ -1032,7 +1034,10 @@ impl App {
         }
         match self.session.clone() {
             Some(s) if self.pending.insert(format!("{key}#{offset}")) => {
-                fetch(s, key.to_string(), offset)
+                let old = (key == "lib")
+                    .then(|| self.data::<Lib>(key).cloned())
+                    .flatten();
+                fetch(s, key.to_string(), offset, old)
             }
             _ => Task::none(),
         }
@@ -2488,6 +2493,7 @@ impl App {
             }
             Message::Rate(id, n) => {
                 let old = self.ratings.insert(id.clone(), n);
+                self.edit::<Lib>("lib", |l| l.seen.clear());
                 self.menu = None;
                 let back = id.clone();
                 let rate = |s: Session| async move { s.rate(&id, n).await };
@@ -3941,7 +3947,7 @@ fn decode(
     Ok(d)
 }
 
-fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
+fn fetch(s: Session, key: String, offset: usize, old: Option<Lib>) -> Task<Message> {
     let (k, me) = (key.clone(), s.clone());
     let load = async move {
         let (kind, arg) = k.split_once(':').unwrap_or((&k, ""));
@@ -3954,8 +3960,17 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                 Arc::new([r.0, a.0, f.0, x.0]) as AnyData
             }
             "lib" => {
-                let (playlists, (artists, albums, mut songs)) =
-                    tokio::try_join!(s.playlists(), s.starred())?;
+                let seen = async {
+                    Ok(match s.server.native {
+                        true => s.stars().await?,
+                        false => vec![],
+                    })
+                };
+                let (playlists, seen) = tokio::try_join!(s.playlists(), seen)?;
+                let (artists, albums, mut songs) = match old {
+                    Some(o) if !seen.is_empty() && o.seen == seen => (o.artists, o.albums, o.songs),
+                    _ => s.starred().await?,
+                };
                 songs.sort_by(|a, b| b.starred_at.cmp(&a.starred_at));
                 Arc::new(Lib {
                     playlists,
@@ -3963,6 +3978,7 @@ fn fetch(s: Session, key: String, offset: usize) -> Task<Message> {
                     albums,
                     liked: songs.len(),
                     songs,
+                    seen,
                 })
             }
             "album" => Arc::new(s.album(arg).await?),
