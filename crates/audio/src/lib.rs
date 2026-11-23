@@ -58,6 +58,16 @@ pub struct Track {
     pub transcoded: bool,
     pub duration: f32,
     pub rate: u32,
+    pub kbps: u32,
+}
+
+impl Track {
+    fn net(&self) -> Arc<Net> {
+        Net::new(match self.kbps {
+            0 => IDLE,
+            k => (u64::from(k) * 500).clamp(64 << 10, IDLE),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -749,7 +759,7 @@ struct Mixer {
 
 impl Mixer {
     fn early(t: &Track, io: &Io, rate: u32, at: f32, wait: Option<(Arc<Shared>, u64)>) -> Pre {
-        let (io, net, track) = (io.clone(), Net::new(IDLE), t.clone());
+        let (io, net, track) = (io.clone(), t.net(), t.clone());
         let n = net.clone();
         let h = thread::spawn(move || {
             if let Some((sh, turn)) = wait {
@@ -855,7 +865,10 @@ pub fn render(io: Io, tracks: Vec<Track>, rate: u32, at: f32, cf: f32) -> Res<Ve
     mix.rate = rate;
     let first = it.next().ok_or("no tracks")?;
     mix.cur = Some(Source::open(first, &io, rate, at, Net::new(AHEAD))?);
-    let pre = |t| (t, None, Net::new(IDLE), 0.0);
+    let pre = |t: Track| {
+        let n = t.net();
+        (t, None, n, 0.0)
+    };
     mix.pre = it.next().map(pre);
     let (mut out, mut buf) = (Vec::new(), vec![0.0; CHUNK * 2]);
     while mix.cur.is_some() {
@@ -1026,7 +1039,8 @@ fn engine(rx: Receiver<Cmd>, tx: Events, sh: Arc<Shared>, io: Io) {
                 Cmd::Next(t) => match (&mut mix.pre, t) {
                     (Some(p), Some(t)) if p.0.url == t.url => p.0 = t,
                     (_, t) => {
-                        (mix.pre, mix.bad) = (t.map(|t| (t, None, Net::new(IDLE), 0.0)), None)
+                        let n = t.as_ref().map(Track::net);
+                        (mix.pre, mix.bad) = (t.zip(n).map(|(t, n)| (t, None, n, 0.0)), None)
                     }
                 },
                 Cmd::Warm(t, at) => {

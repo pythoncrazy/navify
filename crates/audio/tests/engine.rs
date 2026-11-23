@@ -32,6 +32,7 @@ fn setup(titles: &str, format: Option<&str>) -> ((Handle, reqwest::Client), Vec<
             transcoded,
             duration,
             rate: 0,
+            kbps: 0,
         }
     };
     let rt = RT.get_or_init(|| Runtime::new().expect("runtime"));
