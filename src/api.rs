@@ -54,7 +54,7 @@ pub struct Genre {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Artist {
     pub id: Arc<str>,
@@ -69,10 +69,8 @@ pub struct Artist {
     pub music_brainz_id: String,
 }
 
-fn tight<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Artist>, D::Error> {
-    let mut v = Vec::deserialize(d)?;
-    v.shrink_to_fit();
-    Ok(v)
+fn tight<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<[Artist]>, D::Error> {
+    Vec::deserialize(d).map(Into::into)
 }
 
 fn round<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<str>, D::Error> {
@@ -119,9 +117,9 @@ pub struct Album {
     pub genres: Vec<Genre>,
     pub labels: Vec<String>,
     #[serde(deserialize_with = "tight")]
-    pub artists: Vec<Artist>,
+    pub artists: Arc<[Artist]>,
     #[serde(deserialize_with = "tight")]
-    pub album_artists: Vec<Artist>,
+    pub album_artists: Arc<[Artist]>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -154,7 +152,7 @@ pub struct Song {
     pub cover: Arc<str>,
     pub is_dir: bool,
     #[serde(deserialize_with = "tight")]
-    pub artists: Vec<Artist>,
+    pub artists: Arc<[Artist]>,
     #[serde(alias = "streamUrl")]
     pub url: String,
     #[serde(flatten)]
@@ -407,21 +405,31 @@ pub fn share(t: &mut Trio) {
         ]
         .into_iter()
         .for_each(&mut one);
-        let who = s.artists.iter_mut();
-        who.for_each(|a| {
-            [&mut a.id, &mut a.name, &mut a.cover]
-                .into_iter()
-                .for_each(&mut one)
-        });
     }
     t.1.iter_mut().for_each(|a| one(&mut a.cover));
-    let albums =
-        t.1.iter_mut()
-            .flat_map(|a| a.artists.iter_mut().chain(&mut a.album_artists));
-    for a in albums.chain(&mut t.0) {
+    for a in &mut t.0 {
         [&mut a.id, &mut a.name, &mut a.cover]
             .into_iter()
             .for_each(&mut one);
+    }
+    let mut lists = std::collections::HashSet::<Arc<[Artist]>>::new();
+    let mut list = |l: &mut Arc<[Artist]>| {
+        let mut v = l.to_vec();
+        for a in &mut v {
+            [&mut a.id, &mut a.name, &mut a.cover]
+                .into_iter()
+                .for_each(&mut one);
+        }
+        *l = lists.get(&v[..]).cloned().unwrap_or_else(|| {
+            let v: Arc<[Artist]> = v.into();
+            lists.insert(v.clone());
+            v
+        });
+    };
+    t.2.iter_mut().for_each(|s| list(&mut s.artists));
+    for a in &mut t.1 {
+        list(&mut a.artists);
+        list(&mut a.album_artists);
     }
 }
 
