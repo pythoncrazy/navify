@@ -155,3 +155,5 @@ tiny-skia-path.opt-level = 3
 
 [patch.crates-io]
 iced_tiny_skia = { path = "patches/iced_tiny_skia" }
+symphonia-bundle-flac = { path = "patches/symphonia-bundle-flac" }
+symphonia-format-ogg = { path = "patches/symphonia-format-ogg" }
