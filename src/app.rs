@@ -1150,9 +1150,28 @@ impl App {
                 Some(t) => t,
                 None => s.everything().await?,
             });
-            let data = t.clone();
-            let head = serde_json::json!({"server": s.server.id, "v": 3, "scan": now}).to_string();
-            let save = move || -> anyhow::Result<()> {
+            Ok(Some((now, t)))
+        };
+        let set = |r: Option<(String, Arc<Trio>)>| {
+            task(move |a| {
+                let set = r
+                    .clone()
+                    .map(|(scan, t)| [a.set_catalog(scan, t), a.save_index()]);
+                Task::batch(set.into_iter().flatten().chain([a.prefetch()]))
+            })
+        };
+        self.call(check, "Could not load the library index.", set)
+    }
+
+    fn save_index(&self) -> Task<Message> {
+        let (Some(s), Some(data)) = (&self.session, self.catalog.clone()) else {
+            return Task::none();
+        };
+        let head = serde_json::json!({"server": s.server.id, "v": 3, "scan": self.catalog_scan});
+        let head = head.to_string();
+        blocking(
+            "Could not save the library index. ",
+            move || -> anyhow::Result<()> {
                 use flate2::{Compression, write::DeflateEncoder};
                 use std::io::Write;
                 fn list<T: serde::Serialize>(z: &mut impl Write, l: &[T]) -> anyhow::Result<()> {
@@ -1184,17 +1203,8 @@ impl App {
                     libc::malloc_trim(0);
                 }
                 Ok(())
-            };
-            tokio::task::spawn_blocking(save).await??;
-            Ok(Some((now, t)))
-        };
-        let set = |r: Option<(String, Arc<Trio>)>| {
-            task(move |a| {
-                let set = r.clone().map(|(scan, t)| a.set_catalog(scan, t));
-                Task::batch(set.into_iter().chain([a.prefetch()]))
-            })
-        };
-        self.call(check, "Could not load the library index.", set)
+            },
+        )
     }
 
     fn set_catalog(&mut self, scan: String, t: Arc<Trio>) -> Task<Message> {
