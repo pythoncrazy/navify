@@ -420,7 +420,7 @@ fn track<'a>(app: &'a App, s: &'a Song, n: usize, key: &str, c: Cols) -> El<'a> 
                 .into(),
             _ => {
                 let to = go("album", &s.album_id);
-                let album = theme::ulink(&s.album, c.1, 14.0, Normal, SUB, to);
+                let album = theme::ulink(&*s.album, c.1, 14.0, Normal, SUB, to);
                 container(album).width(c.1).into()
             }
         }
@@ -646,7 +646,7 @@ fn disc_tools<'a>(app: &'a App, a: &'a Artist, id: &str, f: &str) -> El<'a> {
     let on = fg(matches!(kind, Some(MenuKind::View)));
     let order = link_btn(order.align_y(Center), on, menu(MenuKind::View));
     let w = app.main_w() - 2.0 * PAD - 280.0;
-    let name = theme::ulink(&a.name, w, 24.0, Bold, TEXT, go("artist", id));
+    let name = theme::ulink(&*a.name, w, 24.0, Bold, TEXT, go("artist", id));
     let r = row![name, Space::new().width(Fill), filter, order];
     r.spacing(16).align_y(Center).into()
 }
@@ -972,7 +972,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
     let key = app.route.as_str();
     let px = art_px(app);
     if let Some((a, songs)) = app.data::<(Album, Vec<Song>)>(key) {
-        let names = a.artists.iter().map(|x| (x.id.as_str(), x.name.as_str()));
+        let names = a.artists.iter().map(|x| (&*x.id, &*x.name));
         let mut names: Vec<_> = names.collect();
         if names.is_empty() {
             names.push((&a.artist_id, &a.artist));
@@ -1119,9 +1119,9 @@ fn finder<'a>(app: &'a App, p: &'a Playlist, empty: bool) -> El<'a> {
         let art = cover(app, &s.cover, 40.0, false);
         let add = Message::PlAdd(p.id.clone(), vec![s.id.clone()]);
         let add = theme::pill_btn(bold("Add", 14.0), add);
-        let album = container(theme::ell(&s.album, w - 16.0, 14.0, Normal).color(SUB)).width(w);
+        let album = container(theme::ell(&*s.album, w - 16.0, 14.0, Normal).color(SUB)).width(w);
         let r = row![
-            media(art, &s.title, &s.artist, w - 52.0, TEXT),
+            media(art, &s.title, &*s.artist, w - 52.0, TEXT),
             album,
             Space::new().width(Fill),
             add
@@ -1448,7 +1448,10 @@ fn artist(app: &App) -> Option<El<'_>> {
     let body = body.padding(padding::bottom(PAD * 2.0));
     let banner = banner(app, a);
     let follow = if on { "Following" } else { "Follow" };
-    let follow = theme::pill_btn(bold(follow, 14.0), Message::Star(vec![a.id.clone()], !on));
+    let follow = theme::pill_btn(
+        bold(follow, 14.0),
+        Message::Star(vec![a.id.to_string()], !on),
+    );
     let p = Page {
         art: cover(app, &a.cover, art_px(app), true),
         kind: "",
@@ -1579,17 +1582,38 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 let (cid, name, by, id, on, nav) = match k {
                     0 => {
                         let a = &artists_res[i];
-                        (&a.cover, &a.name, "", &a.id, a.starred, go("artist", &a.id))
+                        (
+                            &a.cover,
+                            &a.name[..],
+                            "",
+                            &a.id[..],
+                            a.starred,
+                            go("artist", &a.id),
+                        )
                     }
                     1 => {
                         let a = &albums_res[i];
                         let nav = go("album", &a.id);
-                        (&a.cover, &a.name, &a.artist[..], &a.id, a.starred, nav)
+                        (
+                            &a.cover,
+                            &a.name[..],
+                            &a.artist[..],
+                            &a.id[..],
+                            a.starred,
+                            nav,
+                        )
                     }
                     _ => {
                         let s = &songs_res[i];
                         let nav = go("album", &s.album_id);
-                        (&s.cover, &s.title, &s.artist[..], &s.id, s.starred, nav)
+                        (
+                            &s.cover,
+                            &s.title[..],
+                            &s.artist[..],
+                            &s.id[..],
+                            s.starred,
+                            nav,
+                        )
                     }
                 };
                 let ctx = || format!("{}:{id}", ["artist", "album"][k]);
@@ -1704,7 +1728,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
 
 pub fn search_hits(t: (&[Artist], &[Album], &[Song]), q: &str) -> (Option<Hit>, Vec<Hit>) {
     let names: [Vec<&str>; 3] = [
-        t.0.iter().map(|a| a.name.as_str()).collect(),
+        t.0.iter().map(|a| &*a.name).collect(),
         t.1.iter().map(|a| a.name.as_str()).collect(),
         t.2.iter().map(|s| s.title.as_str()).collect(),
     ];
@@ -2172,7 +2196,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     };
     let starred = app.is_starred(&s.id, s.starred);
     let lead = s.artists.first();
-    let artist = bold(lead.map_or(&s.artist, |a| &a.name), 16.0);
+    let artist = bold(lead.map_or(&*s.artist, |a| &a.name), 16.0);
     let artist = btn(artist, go("artist", lead.map_or(&s.artist_id, |a| &a.id)));
     let radio = !s.url.is_empty();
     let title = theme::ulink(&s.title, w - 40.0, 24.0, Bold, TEXT, album_of(s));
@@ -2234,7 +2258,7 @@ pub fn now_playing<'a>(app: &'a App) -> El<'a> {
     let art = cover(app, &s.cover, w, false);
     let body = column![art, info].push(preview).push(about).push(next);
     let body = body.spacing(16).padding(Padding::new(16.0).top(0));
-    let src = [&app.source, &s.album][usize::from(app.source.is_empty())];
+    let src = [&*app.source, &s.album][usize::from(app.source.is_empty())];
     let head = panel_head(ell(src, app.right_w() - 64.0, 16.0, Bold), 1);
     column![head, scrollable(pane(body)).style(theme::scroll)].into()
 }
@@ -2273,7 +2297,7 @@ fn queue_row<'a>(app: &'a App, s: &'a Song, n: Option<usize>, w: f32) -> El<'a> 
     let del = n.filter(|_| !cur).map(Message::QDel);
     let x = del.clone().filter(|_| hot).map(|m| icon_btn(i::X, 14.0, m));
     let fg = if cur { ACCENT } else { TEXT };
-    let r = media(art, &s.title, &s.artist, w - 100.0, fg).push(x);
+    let r = media(art, &s.title, &*s.artist, w - 100.0, fg).push(x);
     let menu = match s.url.is_empty() {
         true => Message::Menu(Box::new(match del {
             Some(d) => MenuKind::SongIn(vec![s.clone()], "Remove from queue", d),
@@ -2351,7 +2375,7 @@ pub fn add_panel(app: &App) -> El<'_> {
         let add =
             add.on_press_maybe((!on).then(|| Message::PlAdd(p.id.clone(), vec![s.id.clone()])));
         let art = cover(app, &s.cover, 48.0, false);
-        let r = row![media(art, &s.title, &s.artist, w, TEXT), add].spacing(12);
+        let r = row![media(art, &s.title, &*s.artist, w, TEXT), add].spacing(12);
         let r = container(r.align_y(Center)).padding(8);
         let r = hot_row(app, format!("add:{}", s.id), r);
         container(r).padding([0, 8]).into()
@@ -2728,9 +2752,9 @@ pub fn menu<'a>(app: &'a App, m: &'a Menu, level: u8) -> (El<'a>, f32, f32) {
             v
         }
         MenuKind::Artist(a) => {
-            let radio = Message::Radio(a.id.clone());
+            let radio = Message::Radio(a.id.to_string());
             let on = app.is_starred(&a.id, a.starred);
-            let star = Message::Star(vec![a.id.clone()], !on);
+            let star = Message::Star(vec![a.id.to_string()], !on);
             let k = usize::from(on);
             let follow = it([i::USERPLUS, i::X][k], ["Follow", "Unfollow"][k], star);
             let radio = it(i::RADIO, "Go to artist radio", radio);

@@ -57,8 +57,8 @@ pub struct Genre {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Artist {
-    pub id: String,
-    pub name: String,
+    pub id: Arc<str>,
+    pub name: Arc<str>,
     #[serde(deserialize_with = "round")]
     pub cover: String,
     pub album_count: u32,
@@ -129,11 +129,11 @@ pub struct Album {
 pub struct Song {
     pub id: String,
     pub title: String,
-    pub album: String,
-    pub album_id: String,
-    pub artist: String,
-    pub artist_id: String,
-    pub genre: String,
+    pub album: Arc<str>,
+    pub album_id: Arc<str>,
+    pub artist: Arc<str>,
+    pub artist_id: Arc<str>,
+    pub genre: Arc<str>,
     pub year: u32,
     #[serde(alias = "trackNumber")]
     pub track: u32,
@@ -143,7 +143,7 @@ pub struct Song {
     #[serde(alias = "sampleRate")]
     pub sampling_rate: u32,
     pub bit_rate: u32,
-    pub suffix: String,
+    pub suffix: Arc<str>,
     pub play_count: u32,
     #[serde(alias = "rating")]
     pub user_rating: u8,
@@ -388,6 +388,35 @@ impl<'de, T: Data> serde::de::Visitor<'de> for Rows<T> {
 }
 
 pub type Hay = [Vec<Box<str>>; 3];
+
+pub fn share(t: &mut Trio) {
+    let mut pool = std::collections::HashSet::<Arc<str>>::new();
+    let mut one = |f: &mut Arc<str>| match pool.get(&**f) {
+        Some(p) => *f = p.clone(),
+        None => drop(pool.insert(f.clone())),
+    };
+    for s in &mut t.2 {
+        [
+            &mut s.album,
+            &mut s.album_id,
+            &mut s.artist,
+            &mut s.artist_id,
+            &mut s.genre,
+            &mut s.suffix,
+        ]
+        .into_iter()
+        .for_each(&mut one);
+        s.artists
+            .iter_mut()
+            .for_each(|a| [&mut a.id, &mut a.name].into_iter().for_each(&mut one));
+    }
+    let albums =
+        t.1.iter_mut()
+            .flat_map(|a| a.artists.iter_mut().chain(&mut a.album_artists));
+    for a in albums.chain(&mut t.0) {
+        [&mut a.id, &mut a.name].into_iter().for_each(&mut one);
+    }
+}
 
 pub fn fold(s: &str) -> String {
     const FOLD: [(&str, char); 14] = [
@@ -772,7 +801,7 @@ impl Session {
             return (song.url.clone(), true);
         }
         let q = json!({"id": song.id, "format": format, "maxBitRate": (br > 0).then_some(br)});
-        let same = format.is_none_or(|f| f == "raw" || f == song.suffix);
+        let same = format.is_none_or(|f| f == "raw" || f == &*song.suffix);
         let transcoded = !same || (br > 0 && (song.bit_rate == 0 || br < song.bit_rate));
         (self.url("stream", &q), transcoded)
     }
@@ -863,7 +892,7 @@ impl Session {
         }
         let q = json!({"role_artist_id": id, "_sort": "max_year", "_order": "DESC"});
         let (v, _): (Vec<Album>, _) = self.nd("album", q).await?;
-        let own = |a: &Album| a.artist_id == id || a.album_artists.iter().any(|x| x.id == id);
+        let own = |a: &Album| a.artist_id == id || a.album_artists.iter().any(|x| *x.id == *id);
         Ok(v.into_iter().filter(|a| !own(a)).collect())
     }
 
@@ -972,7 +1001,9 @@ impl Session {
             json!({"query": "", "songCount": 5000, "songOffset": n, "artistCount": 0, "albumCount": 0})
         });
         let artists = self.index("getArtists", "/artists/index");
-        Ok(tokio::try_join!(artists, albums, songs)?)
+        let mut t = tokio::try_join!(artists, albums, songs)?;
+        share(&mut t);
+        Ok(t)
     }
 
     pub async fn starred(&self) -> Result<Trio> {
