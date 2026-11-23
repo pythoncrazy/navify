@@ -818,7 +818,11 @@ impl App {
         self.menu = None;
         let p = self.playlist(&pid);
         let done = format!("{verb} {}.", p.map_or("", |p| &p.name));
-        let fresh = self.pl_fresh(pid.clone(), p.map_or(String::new(), |p| p.cover.clone()), 3);
+        let fresh = self.pl_fresh(
+            pid.clone(),
+            p.map_or(String::new(), |p| p.cover.to_string()),
+            3,
+        );
         let (undo, key) = (reload(&pid), format!("playlist:{pid}"));
         let busy = self.dirty.entry(key.clone()).or_default();
         busy.1 |= self.pending.contains(&format!("{key}#0"));
@@ -1213,7 +1217,7 @@ impl App {
         self.catalog_hay = Some(Arc::new(crate::api::hay(&t)));
         self.catalog_covers =
             t.1.iter()
-                .map(|a| (a.id.clone(), a.cover.clone()))
+                .map(|a| (a.id.clone(), a.cover.to_string()))
                 .collect();
         (self.catalog_scan, self.catalog) = (scan, Some(t));
         self.restar();
@@ -1267,7 +1271,10 @@ impl App {
             t.0.iter()
                 .map(|a| &a.cover)
                 .chain(t.1.iter().map(|a| &a.cover));
-        let keys: Vec<String> = keys.filter(|c| !c.is_empty()).cloned().collect();
+        let keys: Vec<String> = keys
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_string())
+            .collect();
         let run = async move {
             let s2 = s.clone();
             let miss = tokio::task::spawn_blocking(move || {
@@ -1438,7 +1445,7 @@ impl App {
     }
 
     pub fn artist_cover<'a>(&'a self, id: &'a str) -> &'a str {
-        let cover = self.find_artist(id).map(|a| a.cover.as_str());
+        let cover = self.find_artist(id).map(|a| &*a.cover);
         cover.filter(|c| !c.is_empty()).unwrap_or(id)
     }
 
@@ -2820,7 +2827,7 @@ impl App {
                         return Task::none();
                     }
                     let b = banner.as_ref().map(|b| a.request(b, 0));
-                    let c = a.want_covers(cover.clone().map(|c| (c, size)));
+                    let c = a.want_covers(cover.clone().map(|c| (c.to_string(), size)));
                     Task::batch(b.into_iter().chain([c]))
                 };
                 tasks.push(later(0.15, task(rest)));
@@ -3011,7 +3018,7 @@ impl App {
                 let Some(p) = self.playlist(&id) else {
                     return self.toast("The playlist is not available.");
                 };
-                let cover = (kind == 1).then(|| (p.cover.clone(), self.bucket(180.0)));
+                let cover = (kind == 1).then(|| (p.cover.to_string(), self.bucket(180.0)));
                 if kind == 1 {
                     (self.new_pl, self.new_pl_desc, self.new_pl_public) = (
                         p.name.clone(),
@@ -3378,15 +3385,19 @@ impl App {
         let tiles = |n: usize| span(n, cw + 52.0, cols, crate::pages::grid_y(self));
         let (key, lib) = (self.route.as_str(), self.data::<Lib>("lib"));
         let pls = lib.map_or(&[][..], |l| &l.playlists[..]);
-        let (mut big, mut small): (Vec<&String>, Vec<&String>) = Default::default();
-        let mut wide: [Vec<&String>; 4] = Default::default();
+        let (mut big, mut small): (Vec<&str>, Vec<&str>) = Default::default();
+        let mut wide: [Vec<&str>; 4] = Default::default();
         let (_, gcols, tw, th) = crate::pages::browse(self);
-        let (mut head, mut banner, mut about): (Vec<&String>, _, _) = Default::default();
+        let (mut head, mut banner, mut about): (Vec<&str>, _, _) = Default::default();
         if let Some((a, _)) = self.data::<(Album, Vec<Song>)>(key) {
             head.push(&a.cover);
-            big.extend(crate::pages::more_by(self, a).into_iter().map(|x| &x.cover));
-            let art = a.artists.first().map(|x| &x.cover);
-            small.push(art.filter(|c| !c.is_empty()).unwrap_or(&a.artist_id));
+            big.extend(
+                crate::pages::more_by(self, a)
+                    .into_iter()
+                    .map(|x| &*x.cover),
+            );
+            let art = a.artists.first().map(|x| &*x.cover);
+            small.push(art.filter(|c| !c.is_empty()).unwrap_or(&a.artist_id[..]));
         } else if let Some((p, s)) = self.data::<(Playlist, Vec<Song>)>(key) {
             let empty = s.is_empty() && p.song_count == 0;
             let empty = empty || (self.panel != 4 && self.pl_more.is_some());
@@ -3395,16 +3406,16 @@ impl App {
             let hits = self.data::<Trio>(&format!("search:{q}"));
             let hits = hits.filter(|_| empty && !q.is_empty());
             let hits = hits.iter().flat_map(|t| t.2.iter().take(10));
-            small.extend(hits.map(|s| &s.cover));
+            small.extend(hits.map(|s| &*s.cover));
             head.push(&p.cover);
-            small.extend(s[rows(s)].iter().map(|s| &s.cover));
+            small.extend(s[rows(s)].iter().map(|s| &*s.cover));
         } else if let Some((s, _)) = self.data::<Page<Song>>(key) {
-            small.extend(s[rows(s)].iter().map(|s| &s.cover));
+            small.extend(s[rows(s)].iter().map(|s| &*s.cover));
         } else if let Some((_, s)) = self.data::<(String, Vec<Song>)>(key) {
             let s = &s[span(s.len(), self.row_h(), 1, DIR_Y)];
-            small.extend(s.iter().filter(|s| !s.is_dir).map(|s| &s.cover));
+            small.extend(s.iter().filter(|s| !s.is_dir).map(|s| &*s.cover));
         } else if key.starts_with("discography:") {
-            big.extend(crate::pages::disc_view(self).iter().map(|a| &a.cover));
+            big.extend(crate::pages::disc_view(self).iter().map(|a| &*a.cover));
         } else if let Some((a, albums)) = self.data::<(Artist, Vec<Album>)>(key) {
             let id = &key["artist:".len()..];
             let top = self.data::<Vec<Song>>(&format!("top:{id}"));
@@ -3420,29 +3431,29 @@ impl App {
             }
             let pop = [5, 10][usize::from(self.popular_all)];
             let top = top.iter().flat_map(|v| v.iter().take(pop));
-            small.extend(top.map(|s| &s.cover));
-            big.extend(shelf.iter().map(|x| &x.cover));
+            small.extend(top.map(|s| &*s.cover));
+            big.extend(shelf.iter().map(|x| &*x.cover));
             let latest = crate::pages::by_date(albums.iter());
-            big.extend(latest.first().map(|x| &x.cover));
+            big.extend(latest.first().map(|x| &*x.cover));
             let similar = info.map_or(&[][..], |i| &i.similar);
-            big.extend(similar.iter().take(cols).map(|x| &x.cover));
+            big.extend(similar.iter().take(cols).map(|x| &*x.cover));
             let appears = appears.map_or(&[][..], |v| &v[..]);
-            big.extend(appears.iter().take(cols).map(|x| &x.cover));
+            big.extend(appears.iter().take(cols).map(|x| &*x.cover));
         } else if let Some((ar, sg)) = self.data::<(Vec<Artist>, Vec<Song>)>(key) {
-            small.extend(sg.iter().map(|s| &s.cover));
-            big.extend(ar.iter().take(cols).map(|a| &a.cover));
-            big.extend(crate::pages::public(self).take(cols).map(|p| &p.cover));
+            small.extend(sg.iter().map(|s| &*s.cover));
+            big.extend(ar.iter().take(cols).map(|a| &*a.cover));
+            big.extend(crate::pages::public(self).take(cols).map(|p| &*p.cover));
         } else if let Some((p, _)) = self.data::<Page<Album>>(key) {
-            big.extend(p[tiles(p.len())].iter().map(|a| &a.cover));
+            big.extend(p[tiles(p.len())].iter().map(|a| &*a.cover));
         } else if let Some((p, _)) = self.data::<Page<Artist>>(key) {
-            big.extend(p[tiles(p.len())].iter().map(|a| &a.cover));
+            big.extend(p[tiles(p.len())].iter().map(|a| &*a.cover));
         } else if let Some((ar, al, sg)) = self.data::<Trio>(key) {
             let q = key.strip_prefix("search:").unwrap_or("");
             let cid = |(k, i): (usize, usize)| {
                 [
-                    &ar.get(i).map(|a| &a.cover),
-                    &al.get(i).map(|a| &a.cover),
-                    &sg.get(i).map(|s| &s.cover),
+                    &ar.get(i).map(|a| &*a.cover),
+                    &al.get(i).map(|a| &*a.cover),
+                    &sg.get(i).map(|s| &*s.cover),
                 ][k]
                     .expect("a search hit")
             };
@@ -3455,10 +3466,10 @@ impl App {
                     wide[0].extend(top.map(cid));
                     wide[1].extend(mix.into_iter().map(cid));
                 }
-                1 => small.extend(sg.iter().map(|s| &s.cover)),
-                2 => big.extend(al[tiles(al.len())].iter().map(|a| &a.cover)),
-                3 => big.extend(ar[tiles(ar.len())].iter().map(|a| &a.cover)),
-                _ => big.extend(pls[tiles(pls.len())].iter().map(|p| &p.cover)),
+                1 => small.extend(sg.iter().map(|s| &*s.cover)),
+                2 => big.extend(al[tiles(al.len())].iter().map(|a| &*a.cover)),
+                3 => big.extend(ar[tiles(ar.len())].iter().map(|a| &*a.cover)),
+                _ => big.extend(pls[tiles(pls.len())].iter().map(|p| &*p.cover)),
             }
         } else if let Some(gs) = self
             .data::<Vec<crate::api::Genre>>("genres")
@@ -3469,15 +3480,15 @@ impl App {
             let art = art.filter_map(|g| crate::pages::genre_cover(self, &g.name));
             wide[2].extend(art);
         } else if let Some(h) = self.data::<Home>(key) {
-            let pins = pls.iter().take(3).map(|p| &p.cover);
-            wide[3].extend(pins.chain(h[0].iter().map(|a| &a.cover)).take(7));
+            let pins = pls.iter().take(3).map(|p| &*p.cover);
+            wide[3].extend(pins.chain(h[0].iter().map(|a| &*a.cover)).take(7));
             let hs = cw + 132.0;
             let (per, _, th, gap) = crate::pages::home_tiles(self);
             let tiles = (1 + pls.len().min(3) + h[0].len()).min(8);
             let y0 = PAD + tiles.div_ceil(per) as f32 * (th + gap) - gap + 40.0;
             let shelves = h.iter();
-            let shelves = shelves.map(|l| l.iter().take(cols).map(|a| &a.cover).collect());
-            let shelves = shelves.chain([pls.iter().take(cols).map(|p| &p.cover).collect()]);
+            let shelves = shelves.map(|l| l.iter().take(cols).map(|a| &*a.cover).collect());
+            let shelves = shelves.chain([pls.iter().take(cols).map(|p| &*p.cover).collect()]);
             let shelves = shelves.filter(|l: &Vec<_>| !l.is_empty()).enumerate();
             for (n, l) in shelves {
                 let y = y0 + n as f32 * hs;
@@ -3485,15 +3496,15 @@ impl App {
                 big.extend(l.into_iter().filter(|_| shown));
             }
         }
-        let now = self.current_song().map(|s| &s.cover);
+        let now = self.current_song().map(|s| &*s.cover);
         small.extend(now);
         let ahead = [0, 1, 100, 0, 0][self.panel as usize];
         let add = crate::pages::add_songs(self).filter(|_| self.panel == 4);
-        small.extend(add.map(|s| &s.cover));
+        small.extend(add.map(|s| &*s.cover));
         let recent = crate::pages::recent(self).filter(|_| self.panel == 2 && self.recent_tab);
-        small.extend(recent.map(|s| &s.cover));
+        small.extend(recent.map(|s| &*s.cover));
         let next = (self.index + 1..self.queue.len()).take(ahead);
-        small.extend(next.map(|n| &self.queue[self.real_at(n)].cover));
+        small.extend(next.map(|n| &*self.queue[self.real_at(n)].cover));
         let (rows, span) = crate::view::lib_rows(self);
         let (view, _, lw, _) = self.lib_layout();
         let lib = Vec::from_iter(rows[span].iter().filter(|_| view > 0).map(|r| r.0));
@@ -3520,11 +3531,11 @@ impl App {
             .filter(|k| !k.is_empty())
             .map(|k| (k, 640))
             .into_iter()
-            .chain(lists.flat_map(|(v, b)| v.into_iter().map(move |c| (c.clone(), b))))
+            .chain(lists.flat_map(|(v, b)| v.into_iter().map(move |c| (c.to_string(), b))))
             .chain(lead)
             .chain(about)
             .chain(self.modal.as_ref().and_then(|(id, k)| match k {
-                1 => Some((self.playlist(id)?.cover.clone(), self.bucket(180.0))),
+                1 => Some((self.playlist(id)?.cover.to_string(), self.bucket(180.0))),
                 6 => Some((format!("b18:{}", self.artist_cover(id)), 640)),
                 _ => None,
             }))

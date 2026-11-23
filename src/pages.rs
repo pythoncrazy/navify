@@ -977,7 +977,7 @@ fn detail_of(app: &App) -> Option<(Page<'_>, &[Song], Cols)> {
         if names.is_empty() {
             names.push((&a.artist_id, &a.artist));
         }
-        let face = a.artists.first().map(|x| x.cover.as_str());
+        let face = a.artists.first().map(|x| &*x.cover);
         let face = face.filter(|c| !c.is_empty()).unwrap_or(&a.artist_id);
         let links = names.iter().enumerate().map(|(n, (id, name))| {
             let x = [0.0, theme::width(", ", 14.0, Bold)][usize::from(n > 0)];
@@ -1479,7 +1479,7 @@ pub fn browse(app: &App) -> (f32, usize, f32, f32) {
     (w, cols, tw, (tw * 0.5625).round())
 }
 
-pub fn genre_cover<'a>(app: &'a App, name: &str) -> Option<&'a String> {
+pub fn genre_cover<'a>(app: &'a App, name: &str) -> Option<&'a str> {
     let home = app.data::<Home>("home").into_iter().flatten();
     let lib = app.data::<Lib>("lib").into_iter().map(|l| &l.albums);
     let all = app.catalog.as_deref().map(|t| &t.1);
@@ -1488,7 +1488,7 @@ pub fn genre_cover<'a>(app: &'a App, name: &str) -> Option<&'a String> {
         .chain(all)
         .flatten()
         .find(hit)
-        .map(|a| &a.cover)
+        .map(|a| &*a.cover)
 }
 
 fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
