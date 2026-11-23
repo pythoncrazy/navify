@@ -1113,7 +1113,9 @@ impl App {
             let (z, mut raw) = (std::fs::read(&file).ok()?, Vec::new());
             let mut d = flate2::read::DeflateDecoder::new(&z[..]);
             std::io::Read::read_to_end(&mut d, &mut raw).ok()?;
-            let i = serde_json::from_slice::<Index>(&raw).ok();
+            let i = crate::api::with_pool(&mut Default::default(), || {
+                serde_json::from_slice::<Index>(&raw).ok()
+            });
             let i = i.filter(|i| i.server == id && i.v == 3).map(|mut i| {
                 i.data.0.shrink_to_fit();
                 i.data.1.shrink_to_fit();
