@@ -1630,29 +1630,28 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                 let b = button(r.align_y(Center)).padding(16).style(style);
                 mouse_area(b.on_press(nav)).on_right_press(menu)
             });
-            let tw = (rw - 28.0 - 120.0 - 32.0) * 6.0 / 7.0 - 126.0;
+            let tw = (rw - 28.0 - 120.0 - 32.0) * 6.0 / 7.0 - 60.0;
             let rows = mix.into_iter().enumerate().map(|(n, h)| -> El<'a> {
                 let (cid, name, artist, id, on, live, nav, play, menu) = pick(h);
                 let hk = format!("{}#m{n}", app.route);
                 let hot = app.hover.as_deref() == Some(hk.as_str());
                 let round = h.0 == 0;
-                let bw = [64.0, 64.0, 114.0][h.0];
-                let bg = app.covers.color(cid).filter(|_| h.0 == 2);
-                let bg = bg.unwrap_or(Color::TRANSPARENT);
-                let thumb = container(cover(app, cid, 64.0, round)).center_x(bw);
-                let thumb = thumb.center_y(64).style(fill(bg, 4.0));
-                let shade = Color { a: 0.5, ..BG };
-                let over = theme::filled(play_icon(app, live), 24.0).center();
-                let over = btn(over, play.clone());
-                let over = container(over.width(64).height(64)).center_x(bw);
-                let over = over.center_y(64);
-                let over = container(over).style(fill(shade, if round { 32.0 } else { 4.0 }));
-                let tw = tw + 114.0 - bw;
-                let by = (!artist.is_empty()).then(|| ell(artist, tw, 14.0, Normal).color(SUB));
-                let text = column![ell(name, tw, 16.0, Normal), by];
+                let thumb = cover(app, cid, 48.0, round);
+                let over = theme::filled(play_icon(app, live), 20.0).center();
+                let over = btn(over, play.clone()).width(48).height(48);
+                let rad = if round { 24.0 } else { 4.0 };
+                let over = container(over).style(fill(Color { a: 0.5, ..BG }, rad));
+                let by = match h.0 {
+                    0 => kinds[0].into(),
+                    k => format!("{}{DOT}{artist}", kinds[k]),
+                };
+                let text = column![
+                    ell(name, tw, 16.0, Normal),
+                    ell(by, tw, 14.0, Normal).color(SUB)
+                ];
                 let thumb: El = match hot {
                     true => stack![thumb, over].into(),
-                    false => thumb.into(),
+                    false => thumb,
                 };
                 let lead = row![thumb, text.spacing(2)].spacing(12);
                 let tag = container(bold(kinds[h.0], 12.0).color(SUB)).padding([0, 4]);
@@ -1667,7 +1666,7 @@ fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {
                     container(tag).width(FillPortion(1)),
                     container(tail).align_right(120)
                 ];
-                let r = r.spacing(16).align_y(Center).height(80);
+                let r = r.spacing(16).align_y(Center).height(64);
                 let r = container(r.padding(Padding::new(8.0).left(12).right(16)));
                 let sel = app.sel.as_ref().is_some_and(|x| x.0 == app.route);
                 let open = match h.0 {
