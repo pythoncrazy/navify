@@ -69,6 +69,12 @@ pub struct Artist {
     pub music_brainz_id: String,
 }
 
+fn tight<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Artist>, D::Error> {
+    let mut v = Vec::deserialize(d)?;
+    v.shrink_to_fit();
+    Ok(v)
+}
+
 fn round<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let s = String::deserialize(d)?;
     Ok(if s.is_empty() || s.starts_with("o:") {
@@ -112,7 +118,9 @@ pub struct Album {
     pub genre: String,
     pub genres: Vec<Genre>,
     pub labels: Vec<String>,
+    #[serde(deserialize_with = "tight")]
     pub artists: Vec<Artist>,
+    #[serde(deserialize_with = "tight")]
     pub album_artists: Vec<Artist>,
 }
 
@@ -145,6 +153,7 @@ pub struct Song {
     pub created: String,
     pub cover: String,
     pub is_dir: bool,
+    #[serde(deserialize_with = "tight")]
     pub artists: Vec<Artist>,
     #[serde(alias = "streamUrl")]
     pub url: String,
@@ -324,7 +333,7 @@ impl<'de, T: Data> serde::de::Visitor<'de> for Rows<T> {
     }
 }
 
-pub type Hay = [Vec<(String, String)>; 3];
+pub type Hay = [Vec<Box<str>>; 3];
 
 pub fn fold(s: &str) -> String {
     const FOLD: [(&str, char); 14] = [
@@ -357,7 +366,8 @@ pub fn fold(s: &str) -> String {
 
 pub fn hay((artists, albums, songs): &Trio) -> Hay {
     let pair = |name: &str, more: [&str; 2]| {
-        (fold(name), fold(&format!("{name} {} {}", more[0], more[1])))
+        let more = fold(&format!("{} {}", more[0], more[1]));
+        format!("{}\n{more}", fold(name)).into_boxed_str()
     };
     [
         artists.iter().map(|a| pair(&a.name, ["", ""])).collect(),
@@ -375,16 +385,17 @@ pub fn hay((artists, albums, songs): &Trio) -> Hay {
 pub fn find((artists, albums, songs): &Trio, hay: &Hay, q: &str, n: usize) -> Trio {
     let q = fold(q);
     let words: Vec<&str> = q.split(' ').filter(|w| !w.is_empty()).collect();
-    let rank = |(name, all): &(String, String)| {
+    let rank = |all: &str| {
+        let name = all.split_once('\n').map_or(all, |p| p.0);
         let hit = !words.is_empty() && words.iter().all(|w| all.contains(w));
-        hit.then(|| [*name == q, name.starts_with(&q), name.contains(&q), true])
+        hit.then(|| [name == q, name.starts_with(&q), name.contains(&q), true])
             .and_then(|r| r.iter().position(|&b| b))
     };
     fn top<T: Clone>(
         v: &[T],
-        h: &[(String, String)],
+        h: &[Box<str>],
         n: usize,
-        f: impl Fn(&(String, String), &T) -> Option<(usize, u32)>,
+        f: impl Fn(&str, &T) -> Option<(usize, u32)>,
     ) -> Vec<T> {
         let mut hits: Vec<_> = v
             .iter()
