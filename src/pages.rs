@@ -1479,8 +1479,13 @@ pub fn browse(app: &App) -> (f32, usize, f32, f32) {
 pub fn genre_cover<'a>(app: &'a App, name: &str) -> Option<&'a String> {
     let home = app.data::<Home>("home").into_iter().flatten();
     let lib = app.data::<Lib>("lib").into_iter().map(|l| &l.albums);
+    let all = app.catalog.as_deref().map(|t| &t.1);
     let hit = |a: &&Album| a.genre.eq_ignore_ascii_case(name);
-    home.chain(lib).flatten().find(hit).map(|a| &a.cover)
+    home.chain(lib)
+        .chain(all)
+        .flatten()
+        .find(hit)
+        .map(|a| &a.cover)
 }
 
 fn search<'a>(app: &'a App, q: &str) -> Option<El<'a>> {

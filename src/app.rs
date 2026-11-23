@@ -420,7 +420,7 @@ pub struct App {
     anchor: usize,
     pub hover: Option<String>,
     aim: Option<String>,
-    catalog: Option<Arc<Trio>>,
+    pub catalog: Option<Arc<Trio>>,
     catalog_hay: Option<Arc<crate::api::Hay>>,
     catalog_covers: HashMap<String, String>,
     catalog_scan: String,
@@ -1208,8 +1208,9 @@ impl App {
     }
 
     fn drop_local(&mut self) -> Task<Message> {
-        const LOCAL: [&str; 8] = [
-            "liked", "songs", "albums", "artists", "genre:", "artist:", "top:", "appears:",
+        const LOCAL: [&str; 9] = [
+            "liked", "songs", "albums", "artists", "genres", "genre:", "artist:", "top:",
+            "appears:",
         ];
         let local = |k: &str| LOCAL.iter().any(|p| k.starts_with(p)) || k.starts_with("playlist:");
         self.cache.retain(|k, _| !local(k));
@@ -1882,6 +1883,18 @@ impl App {
             Arc::new((v, n))
         }
         Some(match (kind, arg) {
+            ("genres", _) => {
+                let all = albums
+                    .iter()
+                    .flat_map(|a| a.genres.iter().map(|g| &g.name).chain([&a.genre]));
+                let mut all: Vec<&String> = all.filter(|g| !g.is_empty()).collect();
+                all.sort_by_cached_key(|g| (low(g), *g));
+                all.dedup();
+                let all = all
+                    .into_iter()
+                    .map(|g| crate::api::Genre { name: g.clone() });
+                Arc::new(all.collect::<Vec<_>>())
+            }
             ("songs", sort) => {
                 let mut v = songs.clone();
                 match sort {
@@ -2771,7 +2784,7 @@ impl App {
                     let c = a.want_covers(cover.clone().map(|c| (c, size)));
                     Task::batch(b.into_iter().chain([c]))
                 };
-                tasks.push(later(0.25, task(rest)));
+                tasks.push(later(0.15, task(rest)));
                 return Task::batch(tasks);
             }
             Message::PlayCtx(route, mode) => {
