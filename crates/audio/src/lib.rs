@@ -20,10 +20,11 @@ use rubato::{
 };
 use rusty_opus::OpusDecoder;
 use symphonia::core::audio::Channels;
+use symphonia::core::checksum::Crc32;
 use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
 use symphonia::core::errors::{Error as SymError, SeekErrorKind};
 use symphonia::core::formats::{FormatReader, SeekMode, SeekTo, TrackType, probe::Hint};
-use symphonia::core::io::{MediaSource, MediaSourceStream};
+use symphonia::core::io::{MediaSource, MediaSourceStream, Monitor};
 use symphonia::core::packet::Packet;
 use symphonia::core::units::{Time, TimeBase};
 use tokio::runtime::Handle;
@@ -285,7 +286,9 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
                                 (st.start, st.data) = (st.want, Vec::new());
                             }
                             if st.end() < len && st.end() < st.want + st.ahead / 2 {
-                                break (st.end(), len.min(st.want + st.ahead) - 1);
+                                let to =
+                                    [st.want + st.ahead, len][usize::from(st.want >= st.end())];
+                                break (st.end(), len.min(to) - 1);
                             }
                         }
                         net.2.notified().await;
@@ -346,12 +349,14 @@ async fn fetch(net: Arc<Net>, http: Client, url: Url, mut first: Option<Response
 struct Http {
     net: Arc<Net>,
     pos: u64,
+    head: Option<Option<(u64, u32)>>,
+    map: Option<(u64, Vec<u8>, u64)>,
     _task: JoinSet<()>,
 }
 
-impl Read for Http {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let (pos, mut st) = (self.pos, self.net.st());
+impl Http {
+    fn raw(&self, pos: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut st = self.net.st();
         let tail = (st.tail.0..st.tail.0 + st.tail.1.len() as u64).contains(&pos);
         if !tail {
             st.want = pos;
@@ -362,7 +367,6 @@ impl Read for Http {
             if let Some(d) = d.filter(|d| !d.is_empty()) {
                 let n = buf.len().min(d.len());
                 buf[..n].copy_from_slice(&d[..n]);
-                self.pos += n as u64;
                 let end = st.end();
                 if !tail && end - pos < st.ahead / 2 && st.len.is_none_or(|l| end < l) {
                     self.net.2.notify_one();
@@ -384,6 +388,134 @@ impl Read for Http {
             st = self.net.1.wait(st).expect("net lock");
         }
     }
+
+    fn fill(&self, at: u64, n: u64) -> std::io::Result<Vec<u8>> {
+        let mut v = vec![0; n as usize];
+        let mut got = 0;
+        while got < v.len() {
+            match self.raw(at + got as u64, &mut v[got..])? {
+                0 => break,
+                k => got += k,
+            }
+        }
+        v.truncate(got);
+        Ok(v)
+    }
+
+    fn page(&self, at: u64) -> std::io::Result<Option<(Vec<u8>, u32, u32)>> {
+        let h = self.fill(at, 27)?;
+        if h.len() < 27 || &h[..4] != b"OggS" {
+            return Ok(None);
+        }
+        let n = u64::from(h[26]);
+        let segs = self.fill(at + 27, n)?;
+        let size = 27 + n + segs.iter().map(|&s| u64::from(s)).sum::<u64>();
+        let u32at = |i: usize| u32::from_le_bytes(h[i..i + 4].try_into().expect("four bytes"));
+        Ok(Some((self.fill(at, size)?, u32at(14), u32at(18))))
+    }
+
+    fn tags(&self, p0: u64, serial: u32) -> std::io::Result<Option<(u64, Vec<u8>, u64)>> {
+        let Some(len) = self.net.st().len else {
+            return Ok(None);
+        };
+        let Some((pg, ser, seq)) = self.page(p0)? else {
+            return Ok(None);
+        };
+        let n = usize::from(pg[26]);
+        let full = pg[27..27 + n].iter().all(|&s| s == 255) && pg[5] & 1 == 0;
+        let pay = &pg[27 + n..];
+        if ser != serial || !full || !pay.starts_with(b"OpusTags") {
+            return Ok(None);
+        }
+        let num = |i: usize| {
+            pay.get(i..i + 4)
+                .map(|b| u32::from_le_bytes(b.try_into().expect("four bytes")) as usize)
+        };
+        let Some(vl) = num(8) else { return Ok(None) };
+        let Some(count) = num(12 + vl) else {
+            return Ok(None);
+        };
+        let mut end = 16 + vl;
+        for _ in 0..count {
+            let Some(l) = num(end) else { return Ok(None) };
+            end += 4 + l;
+        }
+        let (body, total) = (255 * n as u64, end as u64);
+        let (k, rem) = (total / body, total % body);
+        let real = p0 + k * pg.len() as u64 + 27 + rem / 255 + 1 + rem;
+        if real < p0 + (128 << 10) || real + 27 > len {
+            return Ok(None);
+        }
+        let next = self.fill(real, 27)?;
+        let u32at = |i: usize| {
+            next.get(i..i + 4)
+                .map(|b| u32::from_le_bytes(b.try_into().expect("four bytes")))
+        };
+        let ok = next.starts_with(b"OggS") && next[5] & 1 == 0;
+        if !ok || u32at(14) != Some(serial) || u32at(18) != Some(seq + k as u32 + 1) {
+            return Ok(None);
+        }
+        let pkt = [b"OpusTags", &pay[8..12 + vl], &[0; 4]].concat();
+        let segs: Vec<u8> = (0..pkt.len() / 255)
+            .map(|_| 255)
+            .chain([(pkt.len() % 255) as u8])
+            .collect();
+        let mut page = [
+            b"OggS".as_slice(),
+            &[0, 0],
+            &0u64.to_le_bytes(),
+            &serial.to_le_bytes(),
+            &seq.to_le_bytes(),
+            &[0; 4],
+            &[segs.len() as u8],
+            &segs,
+            &pkt,
+        ]
+        .concat();
+        let mut crc = Crc32::new(0);
+        crc.process_buf_bytes(&page);
+        page[22..26].copy_from_slice(&crc.crc().to_le_bytes());
+        Ok(Some((p0, page, real)))
+    }
+}
+
+impl Read for Http {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.head.is_none() {
+            let p = self.page(0)?.filter(|(p, ..)| {
+                p[5] & 2 != 0 && p[27 + usize::from(p[26])..].starts_with(b"OpusHead")
+            });
+            self.head = Some(p.map(|(p, ser, _)| (p.len() as u64, ser)));
+        }
+        if let Some(Some((p0, ser))) = self.head
+            && self.pos == p0
+        {
+            self.map = self.tags(p0, ser)?;
+            self.head = Some(None);
+        }
+        let lim = match self.head {
+            Some(Some((p0, _))) if self.pos < p0 => (p0 - self.pos) as usize,
+            _ => usize::MAX,
+        };
+        let lim = buf.len().min(lim);
+        let buf = &mut buf[..lim];
+        let real = match &self.map {
+            Some((at, page, real)) if self.pos >= *at => {
+                let i = (self.pos - at) as usize;
+                if let Some(d) = page.get(i..).filter(|d| !d.is_empty()) {
+                    let n = buf.len().min(d.len());
+                    buf[..n].copy_from_slice(&d[..n]);
+                    self.pos += n as u64;
+                    return Ok(n);
+                }
+                self.pos - at - page.len() as u64 + real
+            }
+            _ => self.pos,
+        };
+        let n = self.raw(real, buf)?;
+        self.pos += n as u64;
+        Ok(n)
+    }
 }
 
 impl Seek for Http {
@@ -404,7 +536,11 @@ impl MediaSource for Http {
     }
 
     fn byte_len(&self) -> Option<u64> {
-        self.net.st().len
+        let skipped = self
+            .map
+            .as_ref()
+            .map_or(0, |(at, page, real)| real - at - page.len() as u64);
+        self.net.st().len.map(|l| l - skipped)
     }
 }
 
@@ -556,7 +692,14 @@ impl Source {
             let mut task = JoinSet::new();
             task.spawn_on(fetch(net.clone(), http.clone(), url, Some(head)), rt);
             let (n, pos, _task) = (net.clone(), 0, task);
-            let src = Box::new(Http { net: n, pos, _task });
+            let (head, map) = (None, None);
+            let src = Box::new(Http {
+                net: n,
+                pos,
+                head,
+                map,
+                _task,
+            });
             let mss = MediaSourceStream::new(src, Default::default());
             let probe = symphonia::default::get_probe();
             let demux = probe.probe(&Hint::new(), mss, Default::default(), Default::default())?;
